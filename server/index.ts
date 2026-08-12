@@ -16,6 +16,7 @@ import { BUILT_IN_DRIVERS } from "./drivers/builtIn.ts";
 import { EventBus } from "./harness/bus.ts";
 import * as memory from "./organs/memory.ts";
 import * as routines from "./organs/routines.ts";
+import * as delegation from "./organs/delegation.ts";
 import { ProviderRegistry } from "./harness/registry.ts";
 import { Store, type Message } from "./store.ts";
 
@@ -70,6 +71,10 @@ function broadcast(payload: unknown) {
 // and every client view are projections of it.
 const toolMessageByItem = new Map<string, string>(); // itemId -> messageId
 const askMessageByRequest = new Map<string, string>(); // requestId -> messageId
+// delegation organ: [DELEGATE: bot | task] markers seen this turn, executed on
+// turn.completed; hop counter (per orchestrator thread) bounds delegation chains
+const pendingDelegations = new Map<string, delegation.Delegation[]>();
+const delegationHops = new Map<string, number>();
 
 bus.subscribe((event: RuntimeEvent) => {
   broadcast({ kind: "runtime", event });
@@ -93,9 +98,18 @@ bus.subscribe((event: RuntimeEvent) => {
         // AIOS memory organ: pull [REMEMBER: …] markers out of the reply,
         // persist them, and show the user the cleaned text.
         const { stripped, captured } = memory.captureFromText(bot.id, event.text);
-        pushMessage({ role: "bot", kind: "text", text: stripped || event.text });
+        // delegation organ: pull [DELEGATE: bot | task] markers; stash them to
+        // run when the turn completes, and hide them from the shown text.
+        const delegations = delegation.parse(stripped);
+        const display = delegation.strip(stripped);
+        pushMessage({ role: "bot", kind: "text", text: display || stripped || event.text });
         for (const fact of captured) {
           pushMessage({ role: "bot", kind: "activity", tool: { name: `remembered: ${fact.text.slice(0, 60)}`, ok: true } });
+        }
+        if (delegations.length) {
+          const list = pendingDelegations.get(event.threadId) ?? [];
+          list.push(...delegations);
+          pendingDelegations.set(event.threadId, list);
         }
       } else if (event.itemType === "tool" && event.itemId) {
         const messageId = toolMessageByItem.get(event.itemId);
@@ -155,6 +169,13 @@ bus.subscribe((event: RuntimeEvent) => {
       if (frame) pushMessage({ role: "bot", kind: "screen", png: frame.png, mime: frame.mime });
       store.patchBot(bot.id, { busy: false, unread: true });
       broadcast({ kind: "bot", bot: store.bot(bot.id) });
+      // delegation organ: run any [DELEGATE] handoffs this turn queued, then
+      // feed the results back so the orchestrator continues (bounded by hops)
+      const pending = pendingDelegations.get(event.threadId);
+      if (pending?.length) {
+        pendingDelegations.delete(event.threadId);
+        void runDelegations(bot.id, event.threadId, pending);
+      }
       break;
     }
   }
@@ -226,6 +247,50 @@ function readCuaConnection(): { command: string; args: string[]; env: Record<str
   return null;
 }
 
+// The system-prompt block that teaches a bot to delegate to its teammates.
+function delegationBlock(selfId: string): string {
+  const others = store.bots.filter((b) => b.id !== selfId && !b.hidden).map((b) => b.name);
+  if (!others.length) return "";
+  return (
+    ` You work alongside other bots you can hand tasks to: ${others.join(", ")}.` +
+    ` To delegate, write [DELEGATE: <bot name> | <the task, with enough context to act>] in your reply.` +
+    ` Their result is fed back to you so you can combine it and answer the user. Delegate only when a teammate is better suited; otherwise just do it yourself.`
+  );
+}
+
+// ── delegation organ: run queued handoffs, feed results back ────────────
+async function runDelegations(orchestratorId: string, threadId: string, delegations: delegation.Delegation[]) {
+  const post = (m: Parameters<typeof store.appendMessage>[1]) => {
+    const message = store.appendMessage(threadId, m);
+    broadcast({ kind: "message", threadId, message });
+  };
+  const hops = delegationHops.get(threadId) ?? 0;
+  if (hops >= delegation.MAX_HOPS) {
+    post({ role: "bot", kind: "activity", tool: { name: "delegation limit reached — stopping", ok: false } });
+    return;
+  }
+
+  const results: string[] = [];
+  for (const d of delegations) {
+    const target = store.bots.find((b) => b.name.toLowerCase() === d.to.toLowerCase() && b.id !== orchestratorId);
+    if (!target) {
+      results.push(`(no bot named "${d.to}" — skipped)`);
+      continue;
+    }
+    post({ role: "bot", kind: "activity", tool: { name: `delegated to ${target.name}: ${d.task.slice(0, 60)}` } });
+    try {
+      const answer = await delegation.collectTurn(bus, startTurn, target.id, target.threadId, d.task);
+      results.push(`Result from ${target.name}:\n${answer}`);
+    } catch (e) {
+      results.push(`${target.name} could not complete it: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
+  delegationHops.set(threadId, hops + 1);
+  // hand the results back to the orchestrator as its next input so it continues
+  await startTurn(orchestratorId, `[delegation results]\n\n${results.join("\n\n")}`).catch(() => {});
+}
+
 // ── turn dispatch (upstream ProviderCommandReactor, miniature) ──────────
 async function startTurn(botId: string, text: string) {
   const bot = store.bot(botId);
@@ -261,6 +326,7 @@ async function startTurn(botId: string, text: string) {
     " When you learn a durable fact about the user or their work that would help future conversations" +
     " (a preference, a name, an ongoing goal, a constraint), record it by writing [REMEMBER: the fact]" +
     " anywhere in your reply. Do not re-remember things already listed below." +
+    delegationBlock(bot.id) +
     memory.memoryBlock(bot.id);
 
   // busy flips immediately so the composer locks; the dispatch itself runs
@@ -497,6 +563,9 @@ const server = createServer(async (req, res) => {
       const body = await readBody(req);
       const text = String(body.text ?? "").trim();
       if (!text) return json(res, 400, { error: "text required" });
+      // a fresh human message resets the delegation hop budget for this thread
+      const turnBot = store.bot(m[1]);
+      if (turnBot) delegationHops.delete(turnBot.threadId);
       await startTurn(m[1], text);
       return json(res, 202, { ok: true });
     }
