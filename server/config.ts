@@ -1,4 +1,4 @@
-// Config + data dirs. One file, ~/.openmausbot/config.json, env fallbacks:
+// Config + data dirs. One file, ~/.magicbot/config.json, env fallbacks:
 //   { "xai": {"key":"xai-…"}, "composio": {"key":"ck_…"}, "box": {"token":"…"},
 //     "instances": { "<instanceId>": {"driver":"grok", …} } }
 import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync } from "node:fs";
@@ -17,7 +17,7 @@ export interface AppConfig {
   instances?: InstanceConfigMap;
 }
 
-export const DATA_DIR = join(homedir(), ".openmausbot");
+export const DATA_DIR = join(homedir(), ".magicbot");
 const LEGACY_DATA_DIR = join(homedir(), ".opengrokbot");
 export const EVENTS_DIR = join(DATA_DIR, "events");
 export const NATIVE_DIR = join(DATA_DIR, "native");
@@ -48,7 +48,7 @@ export function loadConfig(): AppConfig {
   return cfg;
 }
 
-/** Merge a partial config into ~/.openmausbot/config.json (secrets never
+/** Merge a partial config into ~/.magicbot/config.json (secrets never
  * echoed back — callers report configured-or-not booleans only). */
 export function saveConfig(patch: Partial<AppConfig>): void {
   const p = join(DATA_DIR, "config.json");

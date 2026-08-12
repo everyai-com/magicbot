@@ -88,7 +88,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
         {step === 0 && (
           <div className="flex flex-col items-center">
             <MausAvatar color="green" expression="friendly" size={72} />
-            <h1 className="mt-4 text-[20px] font-semibold text-ink">Welcome to OpenMausBot</h1>
+            <h1 className="mt-4 text-[20px] font-semibold text-ink">Welcome to MagicBot</h1>
             <p className="mt-1.5 text-center text-[14px] leading-relaxed text-ink-secondary">
               Bots that do real work on their own computer. Drop your email and
               we&rsquo;ll let you know when big things ship.
@@ -244,7 +244,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
               </div>
             </div>
             <button onClick={finish} className="mt-5 w-full rounded-lg bg-accent py-2.5 text-[15px] font-medium text-white">
-              Start using OpenMausBot
+              Start using MagicBot
             </button>
             <button onClick={finish} className="mt-3 text-[12px] text-ink-secondary hover:text-ink">
               Skip for now

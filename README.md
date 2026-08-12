@@ -1,6 +1,8 @@
 <div align="center">
 
-# OpenMausBot
+# MagicBot
+
+<sub>A fork of <a href="https://github.com/milind-soni/OpenMausBot">OpenMausBot</a> by Milind Soni, under the MIT license.</sub>
 
 **Your own team of AI bots, in a chat app.**
 
@@ -16,16 +18,16 @@ Talk to them like contacts. Watch them work. Approve what matters.
 
 <br>
 
-<a href="https://github.com/milind-soni/openmausbot-releases/releases/latest">
-  <img src="https://img.shields.io/badge/%E2%AC%87%EF%B8%8F%20%20Download%20for%20macOS-.dmg-1084fe?style=for-the-badge&labelColor=070707" alt="Download OpenMausBot for macOS" height="40">
+<a href="https://github.com/everyai-com/magicbot-releases/releases/latest">
+  <img src="https://img.shields.io/badge/%E2%AC%87%EF%B8%8F%20%20Download%20for%20macOS-.dmg-1084fe?style=for-the-badge&labelColor=070707" alt="Download MagicBot for macOS" height="40">
 </a>
 
-<sub>Apple silicon · signed & notarized · [all releases](https://github.com/milind-soni/openmausbot-releases/releases)</sub>
+<sub>Apple silicon · signed & notarized · [all releases](https://github.com/everyai-com/magicbot-releases/releases)</sub>
 
 <br>
 <br>
 
-<img src="docs/screenshots/hero.png" alt="OpenMausBot — a Telegram-style chat app where every chat is a real AI agent" width="900">
+<img src="docs/screenshots/hero.png" alt="MagicBot — a Telegram-style chat app where every chat is a real AI agent" width="900">
 
 </div>
 
@@ -33,14 +35,14 @@ Talk to them like contacts. Watch them work. Approve what matters.
 
 ## Why
 
-One assistant in one box is the wrong shape for agents. OpenMausBot treats AI as a *messaging app*: a roster
+One assistant in one box is the wrong shape for agents. MagicBot treats AI as a *messaging app*: a roster
 of bots you chat with — each with its own personality, memory of its thread, model, computer, and apps — built
 on the agents you already have:
 
 - **Bring your own agents.** Bots run on the `claude` and `codex` CLIs installed on your Mac — your existing
   logins and subscriptions, no new accounts, no proxy in the middle.
 - **Local first.** One small harness server on `127.0.0.1` owns every agent process. Transcripts, keys, and
-  events live in `~/.openmausbot`, not a cloud.
+  events live in `~/.magicbot`, not a cloud.
 - **Agents with hands.** Each bot can get a real computer — a cloud Linux desktop it drives while you watch
   live, or your own Mac — plus 500+ apps through Composio Connect.
 
@@ -156,13 +158,13 @@ flowchart LR
 
 ## Quick start
 
-**Easiest:** [download the latest .dmg](https://github.com/milind-soni/openmausbot-releases/releases/latest),
+**Easiest:** [download the latest .dmg](https://github.com/everyai-com/magicbot-releases/releases/latest),
 drag it to Applications, open it. The harness server is embedded — no setup.
 
 **From source:**
 
 ```sh
-git clone https://github.com/milind-soni/OpenMausBot && cd OpenMausBot
+git clone https://github.com/everyai-com/magicbot && cd MagicBot
 pnpm install
 
 pnpm dev:server    # harness server → 127.0.0.1:8799
