@@ -19,13 +19,28 @@ chat is a real agent) and its clean **TS driver/event core**, but rebuilds the
    system prompt every turn; the bot writes with `[REMEMBER: …]` markers the
    harness extracts + strips. Mirrors AIOS `AIOS_REMEMBER → store → injected block`.
    Driver-agnostic (`server/organs/memory.ts`).
-2. **Cost receipt** — surface the `cost` already on `turn.completed` as a per-run
+2. **Routines** ✅ — per-bot recurring scheduled tasks (`server/organs/routines.ts`).
+   An in-harness scheduler tick fires due routines through `startTurn` (the same
+   dispatch as a user message); REST CRUD + a UI section in ComputerPanel. Fills
+   OpenMausBot's placeholder. Hosted: the tick becomes a Durable Object alarm,
+   record shape unchanged.
+3. **Cost receipt** — surface the `cost` already on `turn.completed` as a per-run
    receipt (outcome-per-credit), per AIOS token-economics direction.
-3. **Governance gate** — a PreToolUse decision layer over the existing permission
+4. **Governance gate** — a PreToolUse decision layer over the existing permission
    broker: sensitive actions require approval on unattended runs + an audit trail.
-4. **Local-first connector data** — sync the few things users ask about (inbox,
+5. **Local-first connector data** — sync the few things users ask about (inbox,
    calendar) into local snapshots the agent reads instantly; actions stay live.
-5. **Modules** — the AIOS module/skill format so starter kits install into a bot.
+6. **Modules** — the AIOS module/skill format so starter kits install into a bot.
+
+## Cloud computer (Cloudflare) — `cf-computer/`
+
+The hosted replacement for `box.ascii.dev`: a Worker + one Sandbox container per
+bot (keyed by botId, disk persists across sleeps). Tier 1 (shell/code/files/
+port-expose) is scaffolded and deployable in the user's own CF account; Tier 2
+(the noVNC visual desktop) is documented, off by default — the only genuinely
+custom infra, and it needs a wildcard-DNS custom domain for preview URLs. Wires
+into the existing `integrations.computer` seam via a future `server/cfcomputer.ts`
+sibling to `box.ts`; driver contract + UI unchanged.
 
 ## Target
 
