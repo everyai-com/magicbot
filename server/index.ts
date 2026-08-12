@@ -13,6 +13,7 @@ import type { RuntimeEvent } from "./contracts.ts";
 
 import { BUILT_IN_DRIVERS } from "./drivers/builtIn.ts";
 import { EventBus } from "./harness/bus.ts";
+import * as memory from "./organs/memory.ts";
 import { ProviderRegistry } from "./harness/registry.ts";
 import { Store, type Message } from "./store.ts";
 
@@ -87,7 +88,13 @@ bus.subscribe((event: RuntimeEvent) => {
       break;
     case "item.completed":
       if (event.itemType === "assistant_text") {
-        pushMessage({ role: "bot", kind: "text", text: event.text });
+        // AIOS memory organ: pull [REMEMBER: …] markers out of the reply,
+        // persist them, and show the user the cleaned text.
+        const { stripped, captured } = memory.captureFromText(bot.id, event.text);
+        pushMessage({ role: "bot", kind: "text", text: stripped || event.text });
+        for (const fact of captured) {
+          pushMessage({ role: "bot", kind: "activity", tool: { name: `remembered: ${fact.text.slice(0, 60)}`, ok: true } });
+        }
       } else if (event.itemType === "tool" && event.itemId) {
         const messageId = toolMessageByItem.get(event.itemId);
         if (messageId) {
@@ -241,13 +248,18 @@ async function startTurn(botId: string, text: string) {
     .slice(-40)
     .map((m) => ({ role: m.role === "user" ? ("user" as const) : ("assistant" as const), text: m.text! }));
 
-  const persona = [
-    `You are ${bot.name}, a personal bot in MagicBot.`,
-    bot.title && `Role: ${bot.title}.`,
-    bot.description && `About: ${bot.description}`,
-  ]
-    .filter(Boolean)
-    .join(" ");
+  const persona =
+    [
+      `You are ${bot.name}, a personal bot in MagicBot.`,
+      bot.title && `Role: ${bot.title}.`,
+      bot.description && `About: ${bot.description}`,
+    ]
+      .filter(Boolean)
+      .join(" ") +
+    " When you learn a durable fact about the user or their work that would help future conversations" +
+    " (a preference, a name, an ongoing goal, a constraint), record it by writing [REMEMBER: the fact]" +
+    " anywhere in your reply. Do not re-remember things already listed below." +
+    memory.memoryBlock(bot.id);
 
   // busy flips immediately so the composer locks; the dispatch itself runs
   // in the background — box provisioning can take ~90s and must never
