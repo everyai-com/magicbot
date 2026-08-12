@@ -40,8 +40,8 @@ const PERM_PROXY_PATH = proxyPath("permission-proxy");
 // in the packaged app process.execPath is the Electron binary — this env
 // makes it behave as plain node for the spawned MCP proxies (harmless in dev)
 const NODE_ENV_FLAG = { ELECTRON_RUN_AS_NODE: "1" };
-const DENY_TIMEOUT_NOTE = "OpenMausBot: nobody answered this permission request in time. Skip this action and finish what you can without it.";
-const QUESTION_TIMEOUT_NOTE = "OpenMausBot: nobody answered in time. Use your best judgment and continue.";
+const DENY_TIMEOUT_NOTE = "MagicBot: nobody answered this permission request in time. Skip this action and finish what you can without it.";
+const QUESTION_TIMEOUT_NOTE = "MagicBot: nobody answered in time. Use your best judgment and continue.";
 /** One human-readable line for an ask — what the card subtitle shows. */
 function askSummary(ask) {
     const input = ask.input ?? {};
@@ -121,9 +121,9 @@ function createPermissionBroker(opts) {
         close() {
             for (const p of [...pending.values()]) {
                 if (p.ask.kind === "question")
-                    p.finish("answer", "OpenMausBot: the turn is ending — wrap up.", "shutdown");
+                    p.finish("answer", "MagicBot: the turn is ending — wrap up.", "shutdown");
                 else
-                    p.finish("deny", "OpenMausBot: the turn ended", "shutdown");
+                    p.finish("deny", "MagicBot: the turn ended", "shutdown");
             }
             try {
                 server.close();

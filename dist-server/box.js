@@ -22,7 +22,7 @@ async function boxNameFor(botId) {
         .map((b) => b.toString(16).padStart(2, "0"))
         .join("")
         .slice(0, 6);
-    return `ogb-${botId.slice(0, 8).toLowerCase().replace(/[^a-z0-9]/g, "")}-${hash}`;
+    return `mgb-${botId.slice(0, 8).toLowerCase().replace(/[^a-z0-9]/g, "")}-${hash}`;
 }
 export async function runCommand(cfg, boxId, command, { timeoutMs = 120_000 } = {}) {
     const res = await boxFetch(cfg, `/boxes/${boxId}/commands`, {
@@ -98,7 +98,7 @@ export async function boxStatus(cfg, botId) {
  */
 export async function provisionBox(cfg, botId, botName) {
     if (!boxConfigured(cfg)) {
-        throw new Error('box provider not enabled — add {"box":{"token":"…"}} to ~/.openmausbot/config.json');
+        throw new Error('box provider not enabled — add {"box":{"token":"…"}} to ~/.magicbot/config.json');
     }
     const vmName = await boxNameFor(botId);
     let box = await findBox(cfg, botId);
@@ -140,12 +140,12 @@ export async function provisionBox(cfg, botId, botName) {
     ].join("; ");
     const bootstrap = [
         "command -v xdotool >/dev/null || sudo apt-get install -y -qq xdotool scrot imagemagick >/dev/null 2>&1 || true",
-        `[ -f /opt/ogb/cua-ready ] || [ -f /tmp/ogb-cua-installing ] || { touch /tmp/ogb-cua-installing; nohup bash -c '${cuaInstall.replace(/'/g, "'\\''")}; rm -f /tmp/ogb-cua-installing' > /tmp/ogb-cua-install.log 2>&1 & }`,
+        `[ -f /opt/ogb/cua-ready ] || [ -f /tmp/mgb-cua-installing ] || { touch /tmp/mgb-cua-installing; nohup bash -c '${cuaInstall.replace(/'/g, "'\\''")}; rm -f /tmp/mgb-cua-installing' > /tmp/mgb-cua-install.log 2>&1 & }`,
         // start CUA computer-server (loopback only) once installed; pidfile-free
         // guard on the module name is safe here — the pattern cannot match this
         // bootstrap's own shell (agentcal's pgrep self-match trap)
-        'if [ -f /opt/ogb/cua-ready ] && ! pgrep -f "computer_server" >/dev/null 2>&1; then DISPLAY=${DISPLAY:-:0} nohup /opt/ogb/venv/bin/python -m computer_server --host 127.0.0.1 --port 8000 --width 1280 --height 800 > /tmp/ogb-cua-server.log 2>&1 & fi',
-        `tmux has-session -t work 2>/dev/null || tmux new-session -d -s work 'echo; echo "  ▦ ${botName.replace(/["'\\\\]/g, "")}'"'"'s computer — OpenMausBot"; echo; exec bash -i'`,
+        'if [ -f /opt/ogb/cua-ready ] && ! pgrep -f "computer_server" >/dev/null 2>&1; then DISPLAY=${DISPLAY:-:0} nohup /opt/ogb/venv/bin/python -m computer_server --host 127.0.0.1 --port 8000 --width 1280 --height 800 > /tmp/mgb-cua-server.log 2>&1 & fi',
+        `tmux has-session -t work 2>/dev/null || tmux new-session -d -s work 'echo; echo "  ▦ ${botName.replace(/["'\\\\]/g, "")}'"'"'s computer — MagicBot"; echo; exec bash -i'`,
         "echo bootstrapped",
     ].join("\n");
     let boot;
@@ -195,7 +195,7 @@ export async function execOnBox(cfg, botId, command) {
 // ship binary through the commands endpoint.
 const SHOT_CMD = [
     "export DISPLAY=${DISPLAY:-:0}",
-    "f=/tmp/ogb-panel.png",
+    "f=/tmp/mgb-panel.png",
     'scrot -o "$f" 2>/dev/null || import -window root "$f" 2>/dev/null || ffmpeg -y -f x11grab -i "$DISPLAY" -frames:v 1 "$f" >/dev/null 2>&1',
     'command -v convert >/dev/null && convert "$f" -resize 1024x "$f" 2>/dev/null || true',
     'test -s "$f" && echo captured',
@@ -210,7 +210,7 @@ export async function screenshotBox(cfg, botId) {
     if (!/captured/.test(out.stdout)) {
         throw new Error(out.stderr.slice(0, 200) || "screen capture failed on the box");
     }
-    const { ok, body } = await boxJson(cfg, `/boxes/${box.id}/files?path=/tmp/ogb-panel.png&encoding=base64`);
+    const { ok, body } = await boxJson(cfg, `/boxes/${box.id}/files?path=/tmp/mgb-panel.png&encoding=base64`);
     const png = body?.content;
     if (!ok || typeof png !== "string" || !png)
         throw new Error("could not read the frame back from the box");

@@ -2,6 +2,14 @@
   "name": "magicbot",
   "private": true,
   "version": "0.1.3",
+  "description": "Your own team of AI bots, in a chat app — each a real agent (Claude, Codex, or Pi) with its own model, computer, and connected apps.",
+  "author": "everyai-com",
+  "license": "MIT",
+  "homepage": "https://github.com/everyai-com/magicbot",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/everyai-com/magicbot.git"
+  },
   "type": "module",
   "main": "electron/main.mjs",
   "scripts": {

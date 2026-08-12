@@ -18,11 +18,11 @@ Talk to them like contacts. Watch them work. Approve what matters.
 
 <br>
 
-<a href="https://github.com/everyai-com/magicbot-releases/releases/latest">
+<a href="https://github.com/everyai-com/magicbot/releases/latest">
   <img src="https://img.shields.io/badge/%E2%AC%87%EF%B8%8F%20%20Download%20for%20macOS-.dmg-1084fe?style=for-the-badge&labelColor=070707" alt="Download MagicBot for macOS" height="40">
 </a>
 
-<sub>Apple silicon · signed & notarized · [all releases](https://github.com/everyai-com/magicbot-releases/releases)</sub>
+<sub>Apple silicon · signed & notarized · [all releases](https://github.com/everyai-com/magicbot/releases)</sub>
 
 <br>
 <br>
@@ -158,7 +158,7 @@ flowchart LR
 
 ## Quick start
 
-**Easiest:** [download the latest .dmg](https://github.com/everyai-com/magicbot-releases/releases/latest),
+**Easiest:** [download the latest .dmg](https://github.com/everyai-com/magicbot/releases/latest),
 drag it to Applications, open it. The harness server is embedded — no setup.
 
 **From source:**
