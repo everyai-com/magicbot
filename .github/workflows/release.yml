@@ -25,7 +25,7 @@ jobs:
           node-version: 24
           cache: pnpm
 
-      - run: pnpm install --frozen-lockfile
+      - run: pnpm install --frozen-lockfile --config.minimumReleaseAge=0
 
       - name: Build UI + server + Swift helpers
         run: |
