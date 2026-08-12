@@ -14,6 +14,7 @@ import type { RuntimeEvent } from "./contracts.ts";
 import { BUILT_IN_DRIVERS } from "./drivers/builtIn.ts";
 import { EventBus } from "./harness/bus.ts";
 import * as memory from "./organs/memory.ts";
+import * as routines from "./organs/routines.ts";
 import { ProviderRegistry } from "./harness/registry.ts";
 import { Store, type Message } from "./store.ts";
 
@@ -429,6 +430,34 @@ const server = createServer(async (req, res) => {
       return json(res, 200, { ok: true });
     }
 
+    // routines — recurring scheduled tasks per bot (AIOS organ)
+    m = path.match(/^\/api\/bots\/([\w-]+)\/routines$/);
+    if (m && method === "GET") return json(res, 200, { routines: routines.forBot(m[1]) });
+    if (m && method === "POST") {
+      if (!store.bot(m[1])) return json(res, 404, { error: "no such bot" });
+      const body = await readBody(req);
+      const prompt = typeof body.prompt === "string" ? body.prompt : "";
+      if (!prompt.trim()) return json(res, 400, { error: "prompt required" });
+      const everyMinutes = Number(body.everyMinutes) || 1440;
+      const routine = routines.create(m[1], prompt, everyMinutes);
+      broadcast({ kind: "routines", botId: m[1], routines: routines.forBot(m[1]) });
+      return json(res, 200, { routine });
+    }
+    m = path.match(/^\/api\/routines\/([\w-]+)$/);
+    if (m && method === "PATCH") {
+      const body = await readBody(req);
+      const routine = routines.patch(m[1], body as Record<string, never>);
+      if (!routine) return json(res, 404, { error: "no such routine" });
+      broadcast({ kind: "routines", botId: routine.botId, routines: routines.forBot(routine.botId) });
+      return json(res, 200, { routine });
+    }
+    if (m && method === "DELETE") {
+      const existing = routines.get(m[1]);
+      if (!routines.remove(m[1])) return json(res, 404, { error: "no such routine" });
+      if (existing) broadcast({ kind: "routines", botId: existing.botId, routines: routines.forBot(existing.botId) });
+      return json(res, 200, { ok: true });
+    }
+
     // onboarding/ask cards persist their answered/dismissed state
     m = path.match(/^\/api\/bots\/([\w-]+)\/cards\/([\w-]+)$/);
     if (m && method === "PATCH") {
@@ -579,6 +608,11 @@ const server = createServer(async (req, res) => {
 server.listen(PORT, "127.0.0.1", () => {
   console.log(`magicbot server on http://127.0.0.1:${PORT}`);
 });
+
+// AIOS routines organ: run due scheduled tasks by firing them as turns.
+// startTurn throws when the bot is busy/unavailable → routines.runDue leaves
+// the routine to retry on the next tick.
+routines.startScheduler((botId, prompt) => startTurn(botId, prompt));
 
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.on(signal, () => {

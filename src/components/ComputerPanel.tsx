@@ -301,23 +301,121 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
         </div>
 
         {/* Routines */}
-        <div className="mt-4 rounded-xl bg-card p-4">
-          <div className="flex items-center gap-2 text-[15px] font-medium text-ink">
-            <CalendarClock size={16} className="text-ink-secondary" />
-            Routines
-          </div>
-          <div className="mt-0.5 text-[13px] text-ink-secondary">
-            Routines are recurring tasks this agent runs on a schedule.
-          </div>
-          <button
-            disabled
-            className="mt-3 w-full cursor-not-allowed rounded-lg bg-raised py-2 text-[13px] text-ink-secondary opacity-60"
-            title="Coming soon"
-          >
-            Create Routine
-          </button>
-        </div>
+        <RoutinesSection bot={bot} />
       </div>
     </aside>
+  );
+}
+
+interface Routine {
+  id: string;
+  botId: string;
+  prompt: string;
+  everyMinutes: number;
+  enabled: boolean;
+  nextRunAt: number;
+  lastRunAt?: number;
+}
+
+const INTERVALS: { label: string; minutes: number }[] = [
+  { label: "Hourly", minutes: 60 },
+  { label: "Every 6 hours", minutes: 360 },
+  { label: "Daily", minutes: 1440 },
+  { label: "Weekly", minutes: 10080 },
+];
+
+function RoutinesSection({ bot }: { bot: Bot }) {
+  const [list, setList] = useState<Routine[]>([]);
+  const [prompt, setPrompt] = useState("");
+  const [minutes, setMinutes] = useState(1440);
+  const [busy, setBusy] = useState(false);
+
+  const load = () => api(`/api/bots/${bot.id}/routines`).then((b) => setList(b.routines ?? [])).catch(() => {});
+  useEffect(() => {
+    void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bot.id]);
+
+  const create = async () => {
+    if (!prompt.trim() || busy) return;
+    setBusy(true);
+    try {
+      await api(`/api/bots/${bot.id}/routines`, {
+        method: "POST",
+        body: JSON.stringify({ prompt, everyMinutes: minutes }),
+      });
+      setPrompt("");
+      await load();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const toggle = async (r: Routine) => {
+    await api(`/api/routines/${r.id}`, { method: "PATCH", body: JSON.stringify({ enabled: !r.enabled }) }).catch(() => {});
+    await load();
+  };
+  const remove = async (r: Routine) => {
+    await api(`/api/routines/${r.id}`, { method: "DELETE" }).catch(() => {});
+    await load();
+  };
+
+  const every = (m: number) => INTERVALS.find((i) => i.minutes === m)?.label ?? `Every ${m} min`;
+
+  return (
+    <div className="mt-4 rounded-xl bg-card p-4">
+      <div className="flex items-center gap-2 text-[15px] font-medium text-ink">
+        <CalendarClock size={16} className="text-ink-secondary" />
+        Routines
+      </div>
+      <div className="mt-0.5 text-[13px] text-ink-secondary">
+        Recurring tasks {bot.name} runs on a schedule.
+      </div>
+
+      {list.length > 0 && (
+        <div className="mt-3 flex flex-col gap-2">
+          {list.map((r) => (
+            <div key={r.id} className="flex items-start gap-2 rounded-lg bg-raised p-2.5">
+              <div className="min-w-0 flex-1">
+                <div className={cn("truncate text-[13px] text-ink", !r.enabled && "opacity-50")}>{r.prompt}</div>
+                <div className="text-[11px] text-ink-secondary">{every(r.everyMinutes)}</div>
+              </div>
+              <button onClick={() => toggle(r)} className="rounded px-1.5 py-0.5 text-[11px] text-ink-secondary hover:text-ink" title={r.enabled ? "Pause" : "Resume"}>
+                {r.enabled ? "Pause" : "Resume"}
+              </button>
+              <button onClick={() => remove(r)} className="rounded p-0.5 text-ink-secondary hover:text-ink" title="Delete">
+                <X size={14} />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <textarea
+        value={prompt}
+        onChange={(e) => setPrompt(e.target.value)}
+        placeholder="e.g. summarise my unread email"
+        rows={2}
+        className="mt-3 w-full resize-none rounded-lg bg-raised px-3 py-2 text-[13px] text-ink placeholder:text-ink-secondary focus:outline-none"
+      />
+      <div className="mt-2 flex items-center gap-2">
+        <select
+          value={minutes}
+          onChange={(e) => setMinutes(Number(e.target.value))}
+          className="rounded-lg bg-raised px-2 py-2 text-[13px] text-ink focus:outline-none"
+        >
+          {INTERVALS.map((i) => (
+            <option key={i.minutes} value={i.minutes}>{i.label}</option>
+          ))}
+        </select>
+        <button
+          onClick={create}
+          disabled={!prompt.trim() || busy}
+          className="flex-1 rounded-lg bg-accent py-2 text-[13px] font-medium text-white disabled:opacity-50"
+        >
+          {busy ? "Creating…" : "Create Routine"}
+        </button>
+      </div>
+    </div>
   );
 }
