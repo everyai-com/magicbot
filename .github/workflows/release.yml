@@ -42,8 +42,18 @@ jobs:
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
-          npx electron-builder --mac --publish never \
-            -c.mac.notarize.teamId="$APPLE_TEAM_ID"
+          # Notarize only when Apple-ID credentials are present; otherwise
+          # ship a signed-but-unnotarized build (still installs, shows the
+          # Gatekeeper prompt). Add APPLE_ID + APPLE_APP_SPECIFIC_PASSWORD
+          # secrets to auto-upgrade to notarized on the next tag.
+          if [ -n "$APPLE_ID" ] && [ -n "$APPLE_APP_SPECIFIC_PASSWORD" ]; then
+            echo "Apple ID present — building notarized."
+            npx electron-builder --mac --publish never \
+              -c.mac.notarize.teamId="$APPLE_TEAM_ID"
+          else
+            echo "No Apple ID secrets — building signed only (not notarized)."
+            npx electron-builder --mac --publish never
+          fi
 
       - name: Publish release
         env:
