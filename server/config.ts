@@ -14,6 +14,10 @@ export interface AppConfig {
    * catalog with official logos in the plugins marketplace. */
   composio?: { key?: string; apiKey?: string; url?: string };
   box?: { token?: string };
+  /** MagicBot cloud computer on the user's own Cloudflare account (the hosted
+   * Box replacement — see cf-computer/). url = deployed Worker origin,
+   * token = the MAGICBOT_COMPUTER_TOKEN secret set on it. */
+  cfComputer?: { url?: string; token?: string };
   instances?: InstanceConfigMap;
 }
 
@@ -45,6 +49,7 @@ export function loadConfig(): AppConfig {
   cfg.xai = { key: process.env.XAI_API_KEY, ...cfg.xai };
   cfg.composio = { key: process.env.COMPOSIO_KEY, ...cfg.composio };
   cfg.box = { token: process.env.BOX_TOKEN, ...cfg.box };
+  cfg.cfComputer = { url: process.env.MAGICBOT_COMPUTER_URL, token: process.env.MAGICBOT_COMPUTER_TOKEN, ...cfg.cfComputer };
   return cfg;
 }
 

@@ -11,11 +11,11 @@
 //   cd cf-computer && npm install
 //   wrangler secret put MAGICBOT_COMPUTER_TOKEN
 //   wrangler deploy
-import { getSandbox } from "@cloudflare/sandbox";
-export { Sandbox } from "@cloudflare/sandbox"; // required re-export
+import { getSandbox, Sandbox } from "@cloudflare/sandbox";
+export { Sandbox }; // required re-export for the container class
 
 interface Env {
-  Sandbox: DurableObjectNamespace;
+  Sandbox: DurableObjectNamespace<Sandbox>;
   MAGICBOT_COMPUTER_TOKEN: string;
 }
 
@@ -68,7 +68,9 @@ export default {
         case "expose": {
           const { port } = body as { port?: number };
           if (!port) return json({ ok: false, error: "port required" }, 400);
-          const { url: previewUrl } = await sandbox.exposePort(port);
+          // preview URLs are served under the Worker's own hostname; needs a
+          // custom domain with wildcard DNS for real subdomains (not .workers.dev)
+          const { url: previewUrl } = await sandbox.exposePort(port, { hostname: url.hostname });
           return json({ ok: true, url: previewUrl });
         }
         case "destroy": {

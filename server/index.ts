@@ -7,6 +7,7 @@ import { homedir } from "node:os";
 import { extname, join } from "node:path";
 
 import * as box from "./box.ts";
+import * as cfcomputer from "./cfcomputer.ts";
 import * as composio from "./composio.ts";
 import { ensureDirs, instanceConfigs, loadConfig, saveConfig, EVENTS_DIR, NATIVE_DIR } from "./config.ts";
 import type { RuntimeEvent } from "./contracts.ts";
@@ -456,6 +457,21 @@ const server = createServer(async (req, res) => {
       if (!routines.remove(m[1])) return json(res, 404, { error: "no such routine" });
       if (existing) broadcast({ kind: "routines", botId: existing.botId, routines: routines.forBot(existing.botId) });
       return json(res, 200, { ok: true });
+    }
+
+    // cloud computer (Cloudflare) — status + a one-shot connectivity test so
+    // the user can confirm a deployed cf-computer/ Worker before relying on it
+    if (method === "GET" && path === "/api/cfcomputer") {
+      return json(res, 200, { configured: cfcomputer.cfConfigured(cfg) });
+    }
+    if (method === "POST" && path === "/api/cfcomputer/test") {
+      if (!cfcomputer.cfConfigured(cfg)) return json(res, 400, { error: "set the cloud computer URL + token first" });
+      try {
+        const r = await cfcomputer.exec(cfg, "connectivity-test", "echo magicbot-ok");
+        return json(res, 200, { ok: r.ok, stdout: r.stdout.trim() });
+      } catch (e) {
+        return json(res, 502, { error: e instanceof Error ? e.message : String(e) });
+      }
     }
 
     // onboarding/ask cards persist their answered/dismissed state
