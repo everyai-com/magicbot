@@ -3,11 +3,14 @@
 # Tier 1 (this file, ready now): a headless Linux computer per bot — shell,
 # code execution, files, and HTTP service exposure. The base image already
 # ships Python 3.11 + Node 20 + common tools.
-FROM docker.io/cloudflare/sandbox:0.7.0
+# -python variant enables the code interpreter (runCode); base has Node too.
+FROM docker.io/cloudflare/sandbox:0.7.0-python
 
-# Chrome (headless) for browser tasks + a couple of utilities agents reach for.
+# A couple of utilities agents reach for. (Browser/Chromium lives in Tier 2
+# with the desktop stack — the base image is Debian-slim without a chromium
+# package, and headless code tasks don't need it.)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      chromium curl git ca-certificates \
+      curl git ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 # Tier 2 (visual desktop — the "watch it work / take over" experience).
