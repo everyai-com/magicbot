@@ -1,3 +1,4 @@
+minimumReleaseAge: 0
 allowBuilds:
   core-js: false
   electron-winstaller: false
