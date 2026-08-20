@@ -100,6 +100,9 @@ export interface SendTurnInput {
     composio?: { url?: string; key: string };
     /** The bot's cloud computer (box.ascii.dev) for desktop/browser use. */
     computer?: { boxId: string; token: string };
+    /** The bot's Cloudflare cloud computer (cf-computer/ Worker) — headless
+     * shell/code/files/expose tools; selected when Box isn't available. */
+    cfComputer?: { url: string; token: string; botId: string };
     /** Local computer use via the Electron-hosted cua-driver daemon —
      * spawn config comes verbatim from cua-connection.json (the daemon
      * MUST be spawned by Electron main; the harness only points the agent

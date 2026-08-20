@@ -55,6 +55,7 @@ const proxyPath = (basename: string) => {
   return existsSync(ts) ? ts : ts.replace(/\.ts$/, ".js");
 };
 const PROXY_PATH = proxyPath("computer-proxy");
+const CF_PROXY_PATH = proxyPath("cfcomputer-proxy");
 const PERM_PROXY_PATH = proxyPath("permission-proxy");
 // in the packaged app process.execPath is the Electron binary — this env
 // makes it behave as plain node for the spawned MCP proxies (harmless in dev)
@@ -257,6 +258,20 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
             ...NODE_ENV_FLAG,
             OGB_BOX_ID: turn.integrations.computer.boxId,
             OGB_BOX_TOKEN: turn.integrations.computer.token,
+          },
+        };
+        allowed.push("mcp__computer");
+      } else if (turn.integrations?.cfComputer) {
+        // Cloudflare cloud computer — headless sibling of the Box proxy
+        // (same "computer" MCP name, the agent just sees a computer)
+        mcpServers.computer = {
+          command: process.execPath,
+          args: [CF_PROXY_PATH],
+          env: {
+            ...NODE_ENV_FLAG,
+            MGB_CF_URL: turn.integrations.cfComputer.url,
+            MGB_CF_TOKEN: turn.integrations.cfComputer.token,
+            MGB_CF_BOT: turn.integrations.cfComputer.botId,
           },
         };
         allowed.push("mcp__computer");

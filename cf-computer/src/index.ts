@@ -51,7 +51,8 @@ export default {
           const { code, language = "python" } = body as { code?: string; language?: string };
           if (!code) return json({ ok: false, error: "code required" }, 400);
           const r = await sandbox.runCode(code, { language: language as "python" | "javascript" | "typescript" });
-          return json({ ok: true, results: r.results });
+          // logs carry print()/console output — results alone lose them
+          return json({ ok: true, results: r.results, logs: r.logs, error: r.error ?? null });
         }
         case "writeFile": {
           const { path, content } = body as { path?: string; content?: string };
