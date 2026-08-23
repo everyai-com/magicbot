@@ -6,7 +6,7 @@ import { useEffect, useRef, useState } from "react";
 import { Coins, KeyRound, Monitor, Smartphone, Terminal, User, X } from "lucide-react";
 import { useStore, type AppSettingsSection } from "@/state/store";
 import { analyticsEnabled, setAnalyticsEnabled } from "@/lib/analytics";
-import { ApiKeyRow, VpsConnection } from "./ApiKeys";
+import { ApiKeyRow, CloudflareConnection, VpsConnection } from "./ApiKeys";
 import { useUpdaterState } from "@/lib/updater";
 import { EnginesSettings } from "./EnginesSettings";
 import { LocalComputerSection } from "./LocalComputerSection";
@@ -310,6 +310,7 @@ export function SettingsModal() {
                   ) : null}
                   <TranscriptionSettings />
                   <ApiKeyRow section="box" />
+                  <CloudflareConnection />
                   <VpsConnection />
                   <ApiKeyRow section="opencodeGo" />
                   <details className="rounded-lg border border-hairline/40 bg-inset px-3 py-2">

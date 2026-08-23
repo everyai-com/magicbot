@@ -295,3 +295,82 @@ export function VpsConnection() {
     </div>
   );
 }
+
+/** Headless Cloudflare Sandbox connection. The URL is safe to read back;
+ * the bearer token remains write-only like every other credential. */
+export function CloudflareConnection() {
+  const { state, dispatch } = useStore();
+  const [url, setUrl] = useState("");
+  const [token, setToken] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const configured = Boolean(state.config?.cfComputer?.configured);
+
+  useEffect(() => {
+    setUrl(state.config?.cfComputer?.url ?? "");
+  }, [state.config?.cfComputer?.url]);
+
+  const save = (clear = false) => {
+    if (saving) return;
+    setSaving(true);
+    setError(null);
+    const connection: { url: string; token?: string } = { url: url.trim() };
+    if (token.trim()) connection.token = token.trim();
+    api("/api/config", {
+      method: "PUT",
+      body: JSON.stringify({
+        cfComputer: clear ? { url: "", token: "" } : connection,
+      }),
+    })
+      .then((status: ConfigStatus) => {
+        dispatch({ type: "configStatus", config: status });
+        setUrl(status.cfComputer.url);
+        setToken("");
+      })
+      .catch((e) => setError(e.message))
+      .finally(() => setSaving(false));
+  };
+
+  return (
+    <div>
+      <div className="mb-1.5 flex items-center gap-2 text-[13px] text-ink-secondary">
+        <span className={cn("size-1.5 rounded-full", configured ? "bg-success" : "bg-raised-hover")} />
+        <span>Cloudflare Sandbox computer</span>
+        <span className="rounded bg-control px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-ink-secondary">Optional</span>
+        {configured && <span className="text-[11px] text-success">Connected</span>}
+      </div>
+      <div className="mb-2 text-[12px] leading-relaxed text-ink-secondary">
+        Persistent headless Linux per bot through your deployed Cloudflare Worker. Shell, code, and file tools are supported; visual desktop control is not.
+      </div>
+      <div className="flex flex-col gap-2">
+        <input
+          type="url"
+          value={url}
+          onChange={(e) => setUrl(e.target.value)}
+          placeholder="https://your-worker.workers.dev"
+          aria-label="Cloudflare Worker URL"
+          className="w-full rounded-lg border border-hairline/40 bg-inset px-3 py-2 text-[13px] text-ink placeholder:text-ink-secondary focus:border-hairline focus:outline-none"
+        />
+        <div className="flex gap-2">
+          <input
+            type="password"
+            value={token}
+            onChange={(e) => setToken(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && save()}
+            placeholder={configured ? "••••••••  (paste to replace)" : "Worker bearer token"}
+            aria-label="Cloudflare Worker bearer token"
+            autoComplete="off"
+            className="w-full rounded-lg border border-hairline/40 bg-inset px-3 py-2 text-[13px] text-ink placeholder:text-ink-secondary focus:border-hairline focus:outline-none"
+          />
+          {configured && (
+            <button onClick={() => save(true)} disabled={saving} className="rounded-lg bg-control px-3 py-2 text-[13px] text-danger hover:bg-raised-hover disabled:opacity-50">Clear</button>
+          )}
+          <button onClick={() => save()} disabled={saving || !url.trim() || (!configured && !token.trim())} className="flex w-[72px] shrink-0 items-center justify-center gap-1.5 rounded-lg bg-control py-2 text-[13px] text-ink hover:bg-raised-hover disabled:opacity-50">
+            {saving ? <Loader2 size={13} className="animate-spin" /> : <><Check size={13} />Save</>}
+          </button>
+        </div>
+      </div>
+      {error && <div className="mt-1 text-[12px] text-danger">{error}</div>}
+    </div>
+  );
+}

@@ -456,7 +456,7 @@ export class Store {
       if (b.busy || (b.activity !== undefined && b.activity !== "idle")) botsMigrated = true;
       b.busy = false;
       b.activity = "idle";
-      if (b.cloudBackend !== undefined && b.cloudBackend !== "box" && b.cloudBackend !== "vps") {
+      if (b.cloudBackend !== undefined && b.cloudBackend !== "box" && b.cloudBackend !== "vps" && b.cloudBackend !== "cloudflare") {
         delete b.cloudBackend;
         botsMigrated = true;
       }

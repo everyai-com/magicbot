@@ -24,6 +24,7 @@ import { parseBotProfilePatch } from "./bot-profile.ts";
 import { groupTurnCwd } from "./room-cwd.ts";
 import { RoomTurnStallRegistry, roomTurnTimeoutMessage, scheduleRoomTurnTimeout } from "./room-turn-timeout.ts";
 import * as box from "./box.ts";
+import * as cfComputer from "./cfcomputer.ts";
 import { cloudBackendChangeError, vpsAliasChangeError } from "./cloud-backend.ts";
 import * as composio from "./composio.ts";
 import { chiefOfStaffSystemPrompt } from "./chief-of-staff.ts";
@@ -1462,12 +1463,12 @@ async function startTurn(
       const wants = opts?.runOn === "cloud" ? "cloud" : bot.computer; // cloud routine overrides the MAUS default
       // Cloud routines always use Box/BoxAgent. The per-bot backend applies
       // only to ordinary turns that mount a computer into the local agent.
-      const cloudBackend = opts?.runOn === "cloud" || bot.cloudBackend !== "vps" ? "box" : "vps";
+      const cloudBackend = opts?.runOn === "cloud" ? "box" : (bot.cloudBackend ?? "box");
       const mountsComputerMcp = instance.adapter.capabilities.computerMcp === true;
       const mountsCloudComputer = mountsComputerMcp || instance.driverKind === "boxAgent";
       const mountsLocalComputer = instance.adapter.capabilities.localComputerMcp === true;
       let previewCapture: (() => Promise<{ png: string; format: string }>) | null = null;
-      let computerKind: "box" | "vps" | "vm" | "local" | null = null;
+      let computerKind: "box" | "vps" | "cloudflare" | "vm" | "local" | null = null;
 
       // Explicit destinations are strict. In particular, Local VM must never
       // fall through to host CUA and accidentally click on the user's Mac.
@@ -1542,6 +1543,21 @@ async function startTurn(
         }
       }
 
+      // Cloudflare Sandbox is a persistent, headless Linux computer mounted
+      // through the direct MCP channel. It deliberately has no screen poller.
+      if ((wants === "cloud" || wants === undefined) && cloudBackend === "cloudflare") {
+        if (!mountsComputerMcp || instance.driverKind === "boxAgent") {
+          if (wants === "cloud") {
+            throw new Error("this model engine cannot mount a Cloudflare computer — choose Claude or an ACP engine");
+          }
+        } else if (cfComputer.cfConfigured(cfg)) {
+          integrations.localComputer = cfComputer.cfComputerMcp(cfg, bot.id);
+          computerKind = "cloudflare";
+        } else if (wants === "cloud") {
+          throw new Error("Cloudflare computer is not configured — add its Worker URL and token in App Settings → Connections");
+        }
+      }
+
       // Cloud is also strict when explicitly selected. Auto (unset) reuses an
       // existing cloud box, then falls back to host CUA without provisioning.
       if ((wants === "cloud" || wants === undefined) && cloudBackend === "box" && box.boxConfigured(cfg)) {
@@ -1582,6 +1598,9 @@ async function startTurn(
       }
       if (wants === "cloud" && cloudBackend === "box" && !integrations.computer) {
         throw new Error("the cloud computer could not be created or reached");
+      }
+      if (wants === "cloud" && cloudBackend === "cloudflare" && !integrations.localComputer) {
+        throw new Error("the Cloudflare computer could not be mounted");
       }
 
       // Auto-only host fallback. Electron owns cua-driver/TCC attribution;
@@ -1654,6 +1673,8 @@ async function startTurn(
             ? " You have your own cloud computer. In Chrome, prefer browser_snapshot with browser_click/browser_fill for semantic, trusted actions; use screenshot/click/type_text for visual or non-browser UI, open_url for navigation, and computer_exec for Linux tasks. Every action already returns the resulting screen, so don't follow it with screenshot; batch predictable pixel actions with computer_batch."
             : computerKind === "vps"
               ? " You have your own self-hosted remote Linux computer through the official Cua tools. Its filesystem is disposable: everything on it is wiped whenever its container is recreated, so keep long-lived work somewhere durable — push it to a remote, or hand the results back in chat — instead of leaving it only on that computer. Inspect the desktop state before acting, prefer accessibility targets over raw coordinates, and act carefully."
+              : computerKind === "cloudflare"
+              ? " You have your own persistent headless Linux computer in Cloudflare Sandbox. Use its shell, code, and file tools for remote work. There is no graphical desktop, so prefer CLI programs and do not attempt visual mouse or keyboard actions."
               : computerKind === "local"
               ? " You can act on the user's computer through the computer tools — take a screenshot or read the desktop state first, prefer accessibility actions over raw coordinates, and act carefully."
               : "") +
@@ -2301,6 +2322,7 @@ function configStatus() {
       mode: composio.connectionMode(cfg),
     },
     box: { configured: Boolean(cfg.box?.token) },
+    cfComputer: { configured: cfComputer.cfConfigured(cfg), url: cfg.cfComputer?.url ?? "" },
     vps: { configured: Boolean(vpsSshAlias(cfg)), sshAlias: vpsSshAlias(cfg) ?? "" },
     opencodeGo: { configured: Boolean(cfg.opencodeGo?.apiKey) },
     // the chosen voice is a setting, not a secret; the key is reported the
@@ -3545,8 +3567,8 @@ const server = createServer(async (req, res) => {
       ) {
         return json(res, 400, { error: "computer must be cloud, vm, local, or off" });
       }
-      if (body.cloudBackend !== undefined && !["box", "vps"].includes(String(body.cloudBackend))) {
-        return json(res, 400, { error: "cloudBackend must be box or vps" });
+      if (body.cloudBackend !== undefined && !["box", "vps", "cloudflare"].includes(String(body.cloudBackend))) {
+        return json(res, 400, { error: "cloudBackend must be box, vps, or cloudflare" });
       }
       if (body.chiefOfStaff !== undefined && typeof body.chiefOfStaff !== "boolean") {
         return json(res, 400, { error: "chiefOfStaff must be true or false" });
@@ -4403,6 +4425,8 @@ const server = createServer(async (req, res) => {
       if (!bot) return json(res, 404, { error: "no such bot" });
       return bot.cloudBackend === "vps"
         ? json(res, 200, { backend: "vps", ...(await vps.vpsComputerStatus(cfg, bot.id)) })
+        : bot.cloudBackend === "cloudflare"
+          ? json(res, 200, { backend: "cloudflare", ...cfComputer.status(cfg) })
         : json(res, 200, { backend: "box", ...(await box.boxStatus(cfg, bot.id)) });
     }
     // Who is driving this bot's computer. GET is the panel's initial read;
@@ -4454,6 +4478,21 @@ const server = createServer(async (req, res) => {
         if (m[2] === "screenshot") return json(res, 200, await vps.vpsComputerScreenshot(cfg, botId));
         const action = m[2] === "provision" ? "provision" : m[2] === "remove" ? "remove" : "stop";
         return json(res, 200, await vps.vpsComputerAction(action, cfg, botId));
+      }
+      if (bot.cloudBackend === "cloudflare") {
+        if (!cfComputer.cfConfigured(cfg)) return json(res, 409, { error: "Cloudflare computer is not configured" });
+        if (m[2] === "join" || m[2] === "screenshot") {
+          return json(res, 409, { error: "Cloudflare computer is headless; interactive desktop access is not supported" });
+        }
+        if (m[2] === "exec") {
+          const body = await readBody(req);
+          return json(res, 200, await cfComputer.exec(cfg, botId, String(body.command ?? "")));
+        }
+        if (m[2] === "sleep" || m[2] === "remove") {
+          await cfComputer.destroy(cfg, botId);
+          return json(res, 200, { ...cfComputer.status(cfg), container: null, ready: false });
+        }
+        return json(res, 200, cfComputer.status(cfg));
       }
       if (m[2] === "remove") {
         // Boxes sleep and wake; only the VPS backend has a container to remove.

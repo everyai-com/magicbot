@@ -162,6 +162,8 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
   const cloudBackend = bot.cloudBackend ?? "box";
   const cloudSupported = cloudBackend === "vps"
     ? vpsSupported
+    : cloudBackend === "cloudflare"
+      ? vpsSupported
     : computerToolSupported || selectedInstance?.driverKind === "boxAgent";
   const botRoutines = state.routines
     .filter((routine) => routine.botId === bot.id)
@@ -175,7 +177,7 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
   );
   const computerDestination =
     bot.computer === "cloud"
-      ? cloudBackend === "vps" ? "this self-hosted VPS" : "this cloud box"
+      ? cloudBackend === "vps" ? "this self-hosted VPS" : cloudBackend === "cloudflare" ? "this Cloudflare computer" : "this cloud box"
       : bot.computer === "vm"
         ? "the Local VM"
       : bot.computer === "local"
@@ -183,7 +185,7 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
         : bot.computer === "off"
           ? null
           : phase === "ready"
-            ? cloudBackend === "vps" ? "the self-hosted VPS selected by Auto" : "the cloud box selected by Auto"
+            ? cloudBackend === "vps" ? "the self-hosted VPS selected by Auto" : cloudBackend === "cloudflare" ? "the Cloudflare computer selected by Auto" : "the cloud box selected by Auto"
             : "this computer selected by Auto";
 
   // resolve the mode on open; box endpoints are only ever hit on the
@@ -267,6 +269,36 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
       return;
     }
     if (bot.computer !== "cloud" && !capabilitiesReady) return;
+    if (cloudBackend === "cloudflare") {
+      const autoLocal = !isLinux && bot.computer !== "cloud" && capabilitiesReady && localSelectable;
+      if (!vpsSupported) {
+        if (autoLocal) setPhase("local");
+        else {
+          setError("This model engine cannot use a Cloudflare computer. Choose Claude or an ACP engine, or switch the cloud backend to Box.");
+          setPhase("error");
+        }
+        return;
+      }
+      api(`/api/bots/${bot.id}/computer`)
+        .then((status) => {
+          if (!alive) return;
+          if (status.configured) {
+            setBoxState("cloudflare");
+            setPhase("ready");
+          } else if (autoLocal) {
+            setPhase("local");
+          } else {
+            setError("Add the Cloudflare Worker URL and token in App Settings → Connections.");
+            setPhase("unconfigured");
+          }
+        })
+        .catch((e) => {
+          if (!alive) return;
+          setError(e.message);
+          setPhase("error");
+        });
+      return () => { alive = false; };
+    }
     if (cloudBackend === "vps") {
       const autoLocal =
         !isLinux && bot.computer !== "cloud" && capabilitiesReady && localSelectable;
@@ -369,6 +401,7 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
     cloudSupported,
     vpsSupported,
     state.config?.vps?.sshAlias,
+    state.config?.cfComputer?.configured,
   ]);
 
   // cloud preview: SSE frames win while the bot works; otherwise poll
@@ -376,7 +409,7 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
   const sseFlowing = Boolean(bot.busy && live);
   const inFlight = useRef(false);
   useEffect(() => {
-    if (phase !== "ready" || sseFlowing || viewerOpen) return;
+    if (phase !== "ready" || cloudBackend === "cloudflare" || sseFlowing || viewerOpen) return;
     let alive = true;
     const shoot = async () => {
       if (inFlight.current) return;
@@ -396,7 +429,7 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
       alive = false;
       clearInterval(timer);
     };
-  }, [phase, sseFlowing, bot.id, viewerOpen]);
+  }, [phase, cloudBackend, sseFlowing, bot.id, viewerOpen]);
 
   // Local VM preview comes directly from Cua Driver through the harness. It
   // does not use the password-protected noVNC viewer or cloud endpoints.
@@ -696,6 +729,7 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
             {phase === "local" && <span className="text-[11px]">this computer</span>}
             {phase === "vm" && <span className="text-[11px]">Local VM</span>}
             {cloudBackend === "vps" && (phase === "ready" || phase === "starting") && <span className="text-[11px]">self-hosted VPS</span>}
+            {cloudBackend === "cloudflare" && phase === "ready" && <span className="text-[11px]">Cloudflare · headless</span>}
         </div>
         <div className="flex aspect-[16/10] w-full items-center justify-center overflow-hidden rounded-xl bg-card">
           {frameSrc ? (
@@ -716,7 +750,9 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
               )}
               <span className="text-[12px]">
                 {phase === "ready"
-                  ? "Waiting for the first frame…"
+                  ? cloudBackend === "cloudflare"
+                    ? "Ready for shell, code, and file tasks. This cloud computer has no visual desktop."
+                    : "Waiting for the first frame…"
                   : phase === "vm"
                     ? "Capturing the Local VM screen…"
                   : phase === "local"
@@ -886,7 +922,7 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
           </button>
         )}
         {/* Cloud-only actions */}
-        {phase === "ready" && (
+        {phase === "ready" && cloudBackend !== "cloudflare" && (
           <div className="mt-3 flex gap-2">
             {!control.held && !control.helpReason && (
               <button

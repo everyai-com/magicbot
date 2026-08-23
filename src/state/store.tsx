@@ -235,6 +235,7 @@ export interface ConfigStatus {
   xai?: { configured: boolean };
   composio: { configured: boolean; mode?: "managed" | "self-hosted" | "unavailable" };
   box: { configured: boolean };
+  cfComputer: { configured: boolean; url: string };
   vps: { configured: boolean; sshAlias: string };
   rooms: { turnTimeoutMinutes: number };
   localVm: { mode: "shared" | "per-bot"; maxInstances: number };
@@ -251,7 +252,7 @@ export interface ConfigStatus {
 
 export type ConfigStatusFrame = Pick<
   ConfigStatus,
-  "xai" | "composio" | "box" | "vps" | "rooms" | "localVm" | "opencodeGo" | "tts" | "imageGen" | "profile"
+  "xai" | "composio" | "box" | "cfComputer" | "vps" | "rooms" | "localVm" | "opencodeGo" | "tts" | "imageGen" | "profile"
 >;
 
 export function configStatusFromFrame(frame: ConfigStatusFrame): ConfigStatus {
@@ -259,6 +260,7 @@ export function configStatusFromFrame(frame: ConfigStatusFrame): ConfigStatus {
     xai: frame.xai,
     composio: frame.composio,
     box: frame.box,
+    cfComputer: frame.cfComputer,
     vps: frame.vps,
     rooms: frame.rooms,
     localVm: frame.localVm,

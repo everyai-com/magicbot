@@ -9,7 +9,7 @@ export type DriverKind = string;
 export type InstanceId = string;
 export type ThreadId = string;
 export type TurnId = string;
-export type CloudBackend = "box" | "vps";
+export type CloudBackend = "box" | "vps" | "cloudflare";
 
 export type ProviderErrorCode =
   | "missing_cli"

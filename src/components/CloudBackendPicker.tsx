@@ -20,16 +20,18 @@ export function CloudBackendPicker({
       <div className="mt-0.5 text-[11.5px] text-ink-secondary">
         {value === "vps"
           ? "Auto only attaches to a VPS container that is already running — a stopped or missing one is never provisioned or started, and the bot quietly works as if no cloud computer existed. Choose Cloud to provision or start it. No interactive desktop tunnel is exposed."
-          : "Box is the default hosted computer. Choose Self-hosted VPS to use your SSH-configured Linux Docker host."}
+          : value === "cloudflare"
+            ? "Cloudflare gives this bot a persistent headless Linux Sandbox. It supports shell, code, and files, but not a visual desktop."
+            : "Box is the default hosted computer. Choose Self-hosted VPS or Cloudflare for another cloud backend."}
       </div>
       <div className="mt-2 flex overflow-hidden rounded-lg border border-hairline/40">
-        {(["box", "vps"] as const).map((backend, i) => {
-          const disabled = backend === "vps" && !vpsSupported;
+        {(["box", "vps", "cloudflare"] as const).map((backend, i) => {
+          const disabled = backend !== "box" && !vpsSupported;
           return (
             <button
               key={backend}
               disabled={disabled}
-              title={disabled ? "Self-hosted VPS requires Claude or an ACP engine" : undefined}
+              title={disabled ? "This backend requires Claude or an ACP engine" : undefined}
               onClick={() => onChange(backend)}
               className={cn(
                 "flex-1 py-1.5 text-[12px]",
@@ -38,7 +40,7 @@ export function CloudBackendPicker({
                 value === backend ? "bg-raised text-ink" : "text-ink-secondary hover:bg-raised/60 hover:text-ink",
               )}
             >
-              {backend === "vps" ? "Self-hosted VPS" : "Box"}
+              {backend === "vps" ? "Self-hosted VPS" : backend === "cloudflare" ? "Cloudflare" : "Box"}
             </button>
           );
         })}

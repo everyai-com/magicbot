@@ -76,6 +76,7 @@ const appConfigSchema = z.object({
    * are non-secret local identifiers used to reuse one Composio Session. */
   composio: z.object({ apiKey: optionalText, userId: optionalText, sessionId: optionalText }).optional(),
   box: z.object({ token: optionalText }).optional(),
+  cfComputer: z.object({ url: optionalText, token: optionalText }).optional(),
   vps: vpsConfigSchema.optional(),
   /** OpenCode Go key; persisted write-only and passed only to its child. */
   opencodeGo: z.object({ apiKey: optionalText }).optional(),
@@ -97,6 +98,8 @@ export interface AppConfig {
   openaiCompat?: { key?: string; url?: string };
   composio?: { apiKey?: string; userId?: string; sessionId?: string };
   box?: { token?: string };
+  /** Headless per-bot Cloudflare Sandbox computer. */
+  cfComputer?: { url?: string; token?: string };
   /** A named host from the user's SSH config. Authentication stays with SSH. */
   vps?: { sshAlias?: string };
   opencodeGo?: { apiKey?: string };
@@ -180,6 +183,23 @@ export function loadConfig(): AppConfig {
   if (process.env.COMPOSIO_API_KEY !== undefined) cfg.composio.apiKey = process.env.COMPOSIO_API_KEY;
   cfg.box = { ...cfg.box };
   if (process.env.BOX_TOKEN !== undefined) cfg.box.token = process.env.BOX_TOKEN;
+  cfg.cfComputer = { ...cfg.cfComputer };
+  if (process.env.OMB_CF_COMPUTER_URL !== undefined) cfg.cfComputer.url = process.env.OMB_CF_COMPUTER_URL;
+  if (process.env.OMB_CF_COMPUTER_TOKEN !== undefined) cfg.cfComputer.token = process.env.OMB_CF_COMPUTER_TOKEN;
+  // This fork previously stored its Cloudflare connection under ~/.magicbot.
+  // Read only that section as a compatibility fallback so the upstream data
+  // migration does not make an already-configured cloud computer disappear.
+  if (!process.env.OMB_DATA_DIR && (!cfg.cfComputer.url || !cfg.cfComputer.token)) {
+    try {
+      const legacy = parseJson(readFileSync(join(homedir(), ".magicbot", "config.json"), "utf8"));
+      if (legacy && typeof legacy === "object" && !Array.isArray(legacy)) {
+        const parsed = z.object({ cfComputer: z.object({ url: optionalText, token: optionalText }).optional() }).safeParse(legacy);
+        if (parsed.success) cfg.cfComputer = { ...parsed.data.cfComputer, ...cfg.cfComputer };
+      }
+    } catch {
+      /* no legacy Cloudflare connection */
+    }
+  }
   cfg.opencodeGo = { ...cfg.opencodeGo };
   if (process.env.OPENCODE_API_KEY !== undefined) cfg.opencodeGo.apiKey = process.env.OPENCODE_API_KEY;
   cfg.tts = { ...cfg.tts };
@@ -201,6 +221,7 @@ export function syncCredentialEnv(patch: Partial<AppConfig>): void {
     [patch.xai?.key, "XAI_API_KEY"],
     [patch.composio?.apiKey, "COMPOSIO_API_KEY"],
     [patch.box?.token, "BOX_TOKEN"],
+    [patch.cfComputer?.token, "OMB_CF_COMPUTER_TOKEN"],
     [patch.opencodeGo?.apiKey, "OPENCODE_API_KEY"],
     [patch.tts?.key, "OMB_TTS_KEY"],
     [patch.imageGen?.key, "OMB_OPENAI_IMAGE_KEY"],
@@ -220,6 +241,7 @@ export function syncCredentialEnv(patch: Partial<AppConfig>): void {
 export const WORKSPACE_CREDENTIAL_ENV = [
   "XAI_API_KEY",
   "BOX_TOKEN",
+  "OMB_CF_COMPUTER_TOKEN",
   "OPENCODE_API_KEY",
   "OMB_TTS_KEY",
   "OMB_OPENAI_IMAGE_KEY",
@@ -263,7 +285,7 @@ export function saveConfig(patch: Partial<AppConfig>): void {
     /* first write */
   }
   const checkedPatch = appConfigSchema.partial().parse(patch);
-  for (const key of ["xai", "composio", "box", "opencodeGo", "tts", "imageGen", "profile", "rooms", "localVm"] as const) {
+  for (const key of ["xai", "composio", "box", "cfComputer", "opencodeGo", "tts", "imageGen", "profile", "rooms", "localVm"] as const) {
     const section = checkedPatch[key];
     if (!section) continue;
     const current = jsonObjectSchema.safeParse(disk[key]);

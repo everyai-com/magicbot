@@ -6,9 +6,9 @@
 // desktop) stays on Box until the noVNC image + wildcard domain land.
 //
 // stdout is the MCP channel — never console.log here.
-const base = (process.env.MGB_CF_URL ?? "").replace(/\/+$/, "");
-const token = process.env.MGB_CF_TOKEN ?? "";
-const botId = process.env.MGB_CF_BOT ?? "";
+const base = (process.env.OMB_CF_COMPUTER_URL ?? "").replace(/\/+$/, "");
+const token = process.env.OMB_CF_COMPUTER_TOKEN ?? "";
+const botId = process.env.OMB_CF_COMPUTER_BOT ?? "";
 
 async function callWorker(action: string, body: unknown, timeoutMs = 120_000): Promise<any> {
   const res = await fetch(`${base}/computer/${botId}/${action}`, {
