@@ -52,6 +52,7 @@ export function BotProfileAvatarCard({
   const cropRef = useRef(crop);
   cropRef.current = crop;
   const imageConfigured = state.config?.imageGen?.configured === true;
+  const cloudImage = state.config?.imageGen?.provider === "cloudflare";
 
   const upload = async (file: File | undefined) => {
     if (!file) return;
@@ -251,10 +252,12 @@ export function BotProfileAvatarCard({
 
         <div className="mt-5 border-t border-hairline/40 pt-4">
           <div className="flex items-center gap-2 text-[13px] font-medium text-ink">
-            <Sparkles size={14} className="text-accent" /> Generate with GPT Image 2
+            <Sparkles size={14} className="text-accent" /> Generate with {cloudImage ? "Cloudflare AI" : "GPT Image 2"}
           </div>
           <div className="mt-1 text-[11.5px] leading-relaxed text-ink-secondary">
-            Uses a low-quality square draft to keep cost down. OpenAI bills your API account.
+            {cloudImage
+              ? "Creates a square avatar with the hosted Cloudflare image model. No separate image API key is needed."
+              : "Uses a low-quality square draft to keep cost down. OpenAI bills your API account."}
           </div>
 
           {!imageConfigured ? (

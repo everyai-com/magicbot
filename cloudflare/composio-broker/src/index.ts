@@ -1,4 +1,15 @@
 import { z } from "zod";
+import { WorkerEntrypoint } from "cloudflare:workers";
+
+interface Env {
+  DB: D1Database;
+  REGISTRATION_LIMITER: RateLimit;
+  SESSION_LIMITER: RateLimit;
+  COMPOSIO_API_BASE: string;
+  COMPOSIO_TOOLKIT_BASE: string;
+  REGISTRATION_MODE: string;
+  COMPOSIO_API_KEY?: string;
+}
 
 interface InstallationRow {
   id: string;
@@ -173,7 +184,7 @@ async function upstreamError(response: Response, fallback: string) {
 function composioRequest(env: Env, path: string, init?: RequestInit) {
   const headers = new Headers(init?.headers);
   headers.set("accept", "application/json");
-  headers.set("x-api-key", env.COMPOSIO_API_KEY);
+  headers.set("x-api-key", env.COMPOSIO_API_KEY ?? "");
   if (init?.body) headers.set("content-type", "application/json");
   return fetch(`${env.COMPOSIO_API_BASE}${path}`, {
     ...init,
@@ -271,7 +282,7 @@ async function proxyMcp(request: Request, installation: InstallationRow, env: En
   if (body.byteLength > MAX_MCP_BODY) return json({ error: "MCP request is too large" }, 413);
   const session = await ensureSession(installation, env, ctx);
   const upstreamHeaders = new Headers(session.headers);
-  upstreamHeaders.set("x-api-key", env.COMPOSIO_API_KEY);
+  upstreamHeaders.set("x-api-key", env.COMPOSIO_API_KEY ?? "");
   upstreamHeaders.set("content-type", request.headers.get("content-type") ?? "application/json");
   upstreamHeaders.set("accept", "application/json, text/event-stream");
   const incomingMcpSession = request.headers.get("mcp-session-id");
@@ -293,7 +304,7 @@ async function proxyMcp(request: Request, installation: InstallationRow, env: En
 
 async function catalog(env: Env) {
   const response = await fetch(`${env.COMPOSIO_TOOLKIT_BASE}/toolkits?limit=500&sort_by=usage`, {
-    headers: { accept: "application/json", "x-api-key": env.COMPOSIO_API_KEY },
+    headers: { accept: "application/json", "x-api-key": env.COMPOSIO_API_KEY ?? "" },
     signal: AbortSignal.timeout(20_000),
   });
   if (!response.ok) return json({ error: await upstreamError(response, "Catalog unavailable") }, 502);
@@ -582,6 +593,68 @@ async function route(request: Request, env: Env, ctx: ExecutionContext) {
   if (match?.[2] && request.method === "POST") return authorize(match[1], await requestAlias(request), installation, env, ctx);
   if (match && !match[2] && request.method === "DELETE") return disconnect(match[1], installation, env, ctx);
   return json({ error: "not found" }, 404);
+}
+
+async function webInstallation(userId: string, env: Env): Promise<InstallationRow> {
+  const digest = await sha256(`magicbot-web:${userId}`);
+  const id = `web_${digest.slice(0, 32)}`;
+  const existing = await env.DB.prepare(
+    "SELECT id, composio_user_id, session_id, disabled_at FROM installations WHERE id = ?",
+  ).bind(id).first<InstallationRow>();
+  if (existing) return existing;
+  const now = Date.now();
+  const composioUserId = `omb_web_${digest}`;
+  await env.DB.prepare(
+    "INSERT INTO installations (id, token_hash, composio_user_id, created_at, last_seen_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING",
+  ).bind(id, await sha256(`service:${digest}`), composioUserId, now, now).run();
+  const created = await env.DB.prepare(
+    "SELECT id, composio_user_id, session_id, disabled_at FROM installations WHERE id = ?",
+  ).bind(id).first<InstallationRow>();
+  if (!created) throw new Error("Could not create the connected-app workspace");
+  return created;
+}
+
+/** Private RPC surface used by the hosted web Worker. Each request supplies
+ * the current user's write-only project key; it never reaches the browser
+ * after it has been stored by the web Worker. */
+export class WebConnectors extends WorkerEntrypoint<Env> {
+  async request(userId: string, apiKey: string, path: string, method = "GET", body = "", mcpSession = "") {
+    if (!userId || userId.length > 100 || !apiKey.trim() || apiKey.length > 500) {
+      return { status: 400, body: JSON.stringify({ error: "Connected-app credentials are invalid" }) };
+    }
+    const scopedEnv = { ...this.env, COMPOSIO_API_KEY: apiKey.trim() } as Env;
+    try {
+      const installation = await webInstallation(userId, scopedEnv);
+      const url = new URL(path, "https://connectors.internal");
+      let response: Response;
+      if (method === "GET" && url.pathname === "/v1/catalog") response = await catalog(scopedEnv);
+      else if (method === "GET" && url.pathname === "/v1/connectors/connected") response = await connectedServices(installation, scopedEnv, this.ctx);
+      else if (method === "GET" && url.pathname === "/v1/connectors") response = await connectionStatus(url, installation, scopedEnv, this.ctx);
+      else if (method === "POST" && url.pathname === "/v1/mcp") {
+        const headers: Record<string, string> = { "content-type": "application/json" };
+        if (mcpSession) headers["mcp-session-id"] = mcpSession;
+        response = await proxyMcp(new Request(url, { method, headers, body }), installation, scopedEnv, this.ctx);
+      } else {
+        const account = url.pathname.match(/^\/v1\/connectors\/([a-z0-9][a-z0-9_-]{0,80})\/accounts\/([A-Za-z0-9][A-Za-z0-9_-]{0,127})$/);
+        const connector = url.pathname.match(/^\/v1\/connectors\/([a-z0-9][a-z0-9_-]{0,80})(?:\/(authorize))?$/);
+        if (account && method === "DELETE") response = await disconnectAccount(account[1], account[2], installation, scopedEnv, this.ctx);
+        else if (connector?.[2] && method === "POST") {
+          let alias: string | undefined;
+          if (body) alias = normalizeAccountAlias((JSON.parse(body) as { alias?: string }).alias);
+          response = await authorize(connector[1], alias, installation, scopedEnv, this.ctx);
+        } else if (connector && method === "DELETE") response = await disconnect(connector[1], installation, scopedEnv, this.ctx);
+        else response = json({ error: "not found" }, 404);
+      }
+      return {
+        status: response.status, body: await response.text(),
+        contentType: response.headers.get("content-type") ?? "application/json",
+        mcpSession: response.headers.get("mcp-session-id") ?? "",
+      };
+    } catch (error) {
+      if (error instanceof Response) return { status: error.status, body: await error.text(), contentType: "application/json" };
+      return { status: 503, body: JSON.stringify({ error: error instanceof Error ? error.message : String(error) }), contentType: "application/json" };
+    }
+  }
 }
 
 export default {

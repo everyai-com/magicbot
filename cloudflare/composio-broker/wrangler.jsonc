@@ -10,12 +10,11 @@
     "COMPOSIO_TOOLKIT_BASE": "https://backend.composio.dev/api/v3",
     "REGISTRATION_MODE": "open"
   },
-  "secrets": { "required": ["COMPOSIO_API_KEY"] },
   "d1_databases": [
     {
       "binding": "DB",
       "database_name": "openmausbot-composio",
-      "database_id": "435bcde1-c017-416f-b041-7ffc508e9d88",
+      "database_id": "3aac4ec3-1a7a-4d56-80dc-0a2388ca23fc",
       "migrations_dir": "migrations"
     }
   ],

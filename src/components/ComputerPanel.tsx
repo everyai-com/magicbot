@@ -152,6 +152,7 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
     vmReadinessAttempts.current = 0;
   }, [bot.id, bot.computer]);
   const vmSupported = Boolean(
+    !state.config?.hosted &&
     selectedInstance?.snapshot.state === "available" &&
       selectedInstance.capabilities?.computerMcp &&
       selectedInstance.driverKind !== "boxAgent",

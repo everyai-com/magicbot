@@ -29,6 +29,7 @@ export function VoiceSettings({
   const [loadingVoices, setLoadingVoices] = useState(false);
 
   const configured = Boolean(tts?.configured);
+  const cloudVoice = tts?.provider === "cloudflare";
 
   useEffect(() => {
     if (!configured) {
@@ -76,11 +77,12 @@ export function VoiceSettings({
     <div className="rounded-xl bg-card p-4">
       <div className="text-[15px] font-medium text-ink">Voice</div>
       <div className="mt-0.5 text-[13px] text-ink-secondary">
-        Give this agent a voice for calls and spoken replies. The ElevenLabs key is shared by the workspace;
-        the voice choice belongs to this agent.
+        {cloudVoice
+          ? "Give this agent a Cloudflare Aura voice for calls and spoken replies. No separate API key is needed."
+          : "Give this agent a voice for calls and spoken replies. The ElevenLabs key is shared by the workspace; the voice choice belongs to this agent."}
       </div>
 
-      <div className="mt-4">
+      {!cloudVoice && <div className="mt-4">
         <div className="mb-1.5 flex items-center gap-2 text-[13px] text-ink-secondary">
           <span className={cn("size-1.5 rounded-full", configured ? "bg-success" : "bg-raised-hover")} />
           <span>ElevenLabs key</span>
@@ -115,7 +117,7 @@ export function VoiceSettings({
             Get a key from ElevenLabs
           </a>
         )}
-      </div>
+      </div>}
 
       {configured && (
         <div className="mt-4">

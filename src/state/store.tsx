@@ -232,6 +232,7 @@ export function messageVersions(bot: Bot, message: Message): Message[] {
 
 /** GET /api/config — configured flags only; secrets are never echoed. */
 export interface ConfigStatus {
+  hosted?: boolean;
   xai?: { configured: boolean };
   composio: { configured: boolean; mode?: "managed" | "self-hosted" | "unavailable" };
   cfComputer: { configured: boolean; url: string };
@@ -242,20 +243,21 @@ export interface ConfigStatus {
   /** Voice (ElevenLabs). `configured` = a key is saved; `ready` = a key AND
    * a voice, which is what it takes to actually speak. The key itself is
    * never echoed back. */
-  tts?: { configured: boolean; ready: boolean; voice: string };
+  tts?: { configured: boolean; ready: boolean; voice: string; provider?: "elevenlabs" | "cloudflare" };
   /** Shared write-only credential for on-demand GPT Image avatars. */
-  imageGen?: { configured: boolean };
+  imageGen?: { configured: boolean; provider?: "openai" | "cloudflare" };
   /** who's using the app — collected in onboarding, shown in the sidebar */
   profile?: { name: string; email: string };
 }
 
 export type ConfigStatusFrame = Pick<
   ConfigStatus,
-  "xai" | "composio" | "cfComputer" | "vps" | "rooms" | "localVm" | "opencodeGo" | "tts" | "imageGen" | "profile"
+  "hosted" | "xai" | "composio" | "cfComputer" | "vps" | "rooms" | "localVm" | "opencodeGo" | "tts" | "imageGen" | "profile"
 >;
 
 export function configStatusFromFrame(frame: ConfigStatusFrame): ConfigStatus {
   return {
+    hosted: frame.hosted,
     xai: frame.xai,
     composio: frame.composio,
     cfComputer: frame.cfComputer,
@@ -1215,7 +1217,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           api(`/api/bots/${action.botId}/messages/${action.messageId}/edit`, {
             method: "POST",
             body: JSON.stringify({ text: action.text }),
-          }).catch(showError);
+          })
+            .then((body) => {
+              if (Array.isArray(body?.messages) && typeof body?.threadId === "string") {
+                for (const message of body.messages) rawDispatch({ type: "messageAdded", threadId: body.threadId, message });
+              }
+            })
+            .catch(showError);
           break;
         case "switchBranch":
           api(`/api/bots/${action.botId}/active-branch`, {

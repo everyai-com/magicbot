@@ -3,7 +3,10 @@ interface Env {
   AI: Ai;
   ASSETS: Fetcher;
   FILES: R2Bucket;
-  CONNECTORS?: Fetcher;
+  CREDENTIAL_KEY: string;
+  CONNECTORS: {
+    request(userId: string, apiKey: string, path: string, method?: string, body?: string, mcpSession?: string): Promise<{ status: number; body: string; contentType?: string; mcpSession?: string }>;
+  };
   COMPUTER: {
     exec(botId: string, command: string): Promise<{ ok: boolean; stdout: string; stderr: string; exitCode: number }>;
     run(botId: string, code: string, language?: "python" | "javascript" | "typescript"): Promise<unknown>;
@@ -122,6 +125,8 @@ interface Bot {
 const SESSION_COOKIE = "magicbot_session";
 const SESSION_AGE = 60 * 60 * 24 * 30;
 const MODEL = "@cf/zai-org/glm-5.2";
+const IMAGE_MODEL = "@cf/black-forest-labs/flux-1-schnell";
+const VOICE_MODEL = "@cf/deepgram/aura-2-en";
 const encoder = new TextEncoder();
 
 function json(value: unknown, status = 200, headers: HeadersInit = {}): Response {
@@ -171,6 +176,51 @@ async function passwordHash(password: string, salt: string): Promise<string> {
     256,
   );
   return Array.from(new Uint8Array(bits), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function base64Bytes(bytes: Uint8Array): string {
+  return btoa(String.fromCharCode(...bytes)).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
+}
+
+function bytesFromBase64(value: string): Uint8Array {
+  const standard = value.replaceAll("-", "+").replaceAll("_", "/");
+  const binary = atob(standard.padEnd(Math.ceil(standard.length / 4) * 4, "="));
+  return Uint8Array.from(binary, (character) => character.charCodeAt(0));
+}
+
+async function credentialCryptoKey(env: Env): Promise<CryptoKey> {
+  if (!env.CREDENTIAL_KEY) throw new Error("Credential encryption is not configured");
+  const raw = await crypto.subtle.digest("SHA-256", encoder.encode(env.CREDENTIAL_KEY));
+  return crypto.subtle.importKey("raw", raw, "AES-GCM", false, ["encrypt", "decrypt"]);
+}
+
+async function saveCredential(env: Env, userId: string, kind: string, value: string): Promise<void> {
+  if (!value) {
+    await env.DB.prepare("DELETE FROM user_credentials WHERE user_id = ? AND kind = ?").bind(userId, kind).run();
+    return;
+  }
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const encrypted = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, await credentialCryptoKey(env), encoder.encode(value));
+  const now = Date.now();
+  await env.DB.prepare(
+    `INSERT INTO user_credentials (user_id, kind, encrypted, iv, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)
+     ON CONFLICT(user_id, kind) DO UPDATE SET encrypted = excluded.encrypted, iv = excluded.iv, updated_at = excluded.updated_at`,
+  ).bind(userId, kind, base64Bytes(new Uint8Array(encrypted)), base64Bytes(iv), now, now).run();
+}
+
+async function credentialValue(env: Env, userId: string, kind: string): Promise<string | null> {
+  const row = await env.DB.prepare("SELECT encrypted, iv FROM user_credentials WHERE user_id = ? AND kind = ?")
+    .bind(userId, kind).first<{ encrypted: string; iv: string }>();
+  if (!row) return null;
+  const decrypted = await crypto.subtle.decrypt(
+    { name: "AES-GCM", iv: bytesFromBase64(row.iv) }, await credentialCryptoKey(env), bytesFromBase64(row.encrypted),
+  );
+  return new TextDecoder().decode(decrypted);
+}
+
+async function credentialConfigured(env: Env, userId: string, kind: string): Promise<boolean> {
+  return Boolean(await env.DB.prepare("SELECT 1 AS present FROM user_credentials WHERE user_id = ? AND kind = ?")
+    .bind(userId, kind).first());
 }
 
 function constantTimeEqual(a: string, b: string): boolean {
@@ -329,7 +379,55 @@ async function listBots(env: Env, userId: string): Promise<Bot[]> {
   return rows.results.map((row) => JSON.parse(row.data) as Bot);
 }
 
-async function aiReply(env: Env, bot: Bot, text: string): Promise<string> {
+async function generatedImage(env: Env, userId: string, prompt: string, name = "generated-avatar.jpg"): Promise<string> {
+  const result = await env.AI.run(IMAGE_MODEL as keyof AiModels, {
+    prompt: prompt.slice(0, 2_000),
+  } as never) as { image?: string };
+  if (!result.image) throw new Error("Image generation returned no image");
+  const bytes = bytesFromBase64(result.image);
+  const id = crypto.randomUUID();
+  const objectKey = `${userId}/${id}`;
+  await env.FILES.put(objectKey, bytes, { httpMetadata: { contentType: "image/jpeg" }, customMetadata: { name } });
+  await env.DB.prepare("INSERT INTO attachments (id, user_id, object_key, name, mime, bytes, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
+    .bind(id, userId, objectKey, name, "image/jpeg", bytes.byteLength, Date.now()).run();
+  return `/api/attachments/${id}`;
+}
+
+function parseMcpPayload(text: string): Record<string, unknown> {
+  const trimmed = text.trim();
+  if (!trimmed) return {};
+  if (trimmed.startsWith("{")) return JSON.parse(trimmed) as Record<string, unknown>;
+  const data = trimmed.split(/\r?\n/).filter((line) => line.startsWith("data:")).map((line) => line.slice(5).trim()).join("");
+  return data ? JSON.parse(data) as Record<string, unknown> : {};
+}
+
+async function mcpRequest(
+  env: Env, userId: string, session: string, method: string, params: Record<string, unknown> = {}, id = crypto.randomUUID(),
+): Promise<{ payload: Record<string, unknown>; session: string }> {
+  const response = await connectorRequest(env, userId, "/v1/mcp", {
+    method: "POST", headers: session ? { "mcp-session-id": session } : {},
+    body: JSON.stringify({ jsonrpc: "2.0", id, method, params }),
+  });
+  const text = await response.text();
+  if (!response.ok) throw new Error((parseMcpPayload(text).error as { message?: string } | undefined)?.message ?? `Connected-app tools returned ${response.status}`);
+  return { payload: parseMcpPayload(text), session: response.headers.get("mcp-session-id") ?? session };
+}
+
+async function connectorTools(env: Env, userId: string): Promise<{ tools: Array<Record<string, unknown>>; session: string }> {
+  if (!await credentialConfigured(env, userId, "composio")) return { tools: [], session: "" };
+  const initialized = await mcpRequest(env, userId, "", "initialize", {
+    protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "magicbot-web", version: "1.0" },
+  });
+  const listed = await mcpRequest(env, userId, initialized.session, "tools/list");
+  const result = (listed.payload.result ?? {}) as { tools?: Array<{ name?: string; description?: string; inputSchema?: Record<string, unknown> }> };
+  const tools = (result.tools ?? []).filter((tool) => tool.name).slice(0, 30).map((tool) => ({
+    name: tool.name!, description: tool.description ?? `Use connected-app tool ${tool.name}`,
+    parameters: tool.inputSchema ?? { type: "object", properties: {} },
+  }));
+  return { tools, session: listed.session };
+}
+
+async function aiReply(env: Env, userId: string, bot: Bot, text: string): Promise<string> {
   const history = bot.messages.filter((message) => message.kind === "text").slice(-24).map((message) => ({
     role: message.role === "bot" ? "assistant" : "user",
     content: message.text,
@@ -339,13 +437,31 @@ async function aiReply(env: Env, bot: Bot, text: string): Promise<string> {
       ...history,
       { role: "user", content: text },
   ];
-  const tools = [{
+  const tools: Array<Record<string, unknown>> = [{
     name: "computer_exec",
     description: "Run a shell command in this bot's private persistent Cloudflare Linux computer. Use it for coding, calculations, files, and command-line tasks.",
     parameters: {
       type: "object", properties: { command: { type: "string", description: "The shell command to run" } }, required: ["command"],
     },
+  }, {
+    name: "generate_image",
+    description: "Generate an image and save it to the user's MagicBot files. Use when the user asks you to create an image, illustration, concept, or avatar.",
+    parameters: {
+      type: "object", properties: { prompt: { type: "string", description: "A detailed description of the image to generate" } }, required: ["prompt"],
+    },
   }];
+  let connectorSession = "";
+  const connectorToolNames = new Set<string>();
+  if (bot.composio !== false) {
+    try {
+      const connected = await connectorTools(env, userId);
+      connectorSession = connected.session;
+      for (const tool of connected.tools) {
+        tools.push(tool);
+        if (typeof tool.name === "string") connectorToolNames.add(tool.name);
+      }
+    } catch { /* a connector outage must not take ordinary chat down */ }
+  }
   for (let step = 0; step < 5; step += 1) {
     const result = await env.AI.run(MODEL as keyof AiModels, { messages, tools, max_tokens: 2048 } as never) as {
       response?: string;
@@ -364,9 +480,18 @@ async function aiReply(env: Env, bot: Bot, text: string): Promise<string> {
       let args: Record<string, unknown> = {};
       try { args = typeof call.arguments === "string" ? JSON.parse(call.arguments) : (call.arguments ?? {}); } catch { args = {}; }
       const command = typeof args.command === "string" ? args.command.slice(0, 20_000) : "";
-      const toolResult = call.name === "computer_exec" && command
-        ? await env.COMPUTER.exec(bot.id, command).catch((error) => ({ ok: false, error: error instanceof Error ? error.message : String(error) }))
-        : { ok: false, error: "Invalid tool call" };
+      const prompt = typeof args.prompt === "string" ? args.prompt.slice(0, 2_000) : "";
+      let toolResult: unknown;
+      if (call.name === "computer_exec" && command) {
+        toolResult = await env.COMPUTER.exec(bot.id, command).catch((error) => ({ ok: false, error: error instanceof Error ? error.message : String(error) }));
+      } else if (call.name === "generate_image" && prompt) {
+        toolResult = await generatedImage(env, userId, prompt).then((url) => ({ ok: true, url, instruction: `Embed this image in the reply with Markdown: ![generated image](${url})` }))
+          .catch((error) => ({ ok: false, error: error instanceof Error ? error.message : String(error) }));
+      } else if (call.name && connectorToolNames.has(call.name)) {
+        toolResult = await mcpRequest(env, userId, connectorSession, "tools/call", { name: call.name, arguments: args })
+          .then((result) => { connectorSession = result.session; return result.payload.result ?? result.payload; })
+          .catch((error) => ({ isError: true, error: error instanceof Error ? error.message : String(error) }));
+      } else toolResult = { ok: false, error: "Invalid tool call" };
       messages.push({ role: "assistant", content: JSON.stringify(call) });
       messages.push({ role: "tool", content: JSON.stringify(toolResult).slice(0, 24_000) });
     }
@@ -425,7 +550,7 @@ async function executeRoutine(
     bot.threadId = taskId;
     bot.messages = [];
     bot.activeLeafId = null;
-    const output = await aiReply(env, bot, prompt);
+    const output = await aiReply(env, userId, bot, prompt);
     appendTurn(bot, prompt, output);
     await saveBot(env, userId, bot);
     run.threadId = taskId;
@@ -554,32 +679,44 @@ const CURATED_CONNECTORS = [
   ["stripe", "Stripe", "Payments and customers", "stripe.com"],
 ] as const;
 
-async function connectorToken(env: Env, userId: string): Promise<string> {
-  if (!env.CONNECTORS) throw new Error("Connected apps need a Composio API key");
-  const existing = await env.DB.prepare("SELECT token FROM connector_installations WHERE user_id = ?")
-    .bind(userId).first<{ token: string }>();
-  if (existing?.token) return existing.token;
-  const response = await env.CONNECTORS.fetch("https://connectors.internal/v1/installations", {
-    method: "POST", headers: { "user-agent": "magicbot-web-service" },
-  });
-  const body = await response.json<{ installationId?: string; token?: string; error?: string }>();
-  if (!response.ok || !body.token || !body.installationId) throw new Error(body.error ?? "Connected-app setup failed");
-  const now = Date.now();
-  await env.DB.prepare(
-    "INSERT INTO connector_installations (user_id, installation_id, token, created_at, updated_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(user_id) DO NOTHING",
-  ).bind(userId, body.installationId, body.token, now, now).run();
-  const winner = await env.DB.prepare("SELECT token FROM connector_installations WHERE user_id = ?")
-    .bind(userId).first<{ token: string }>();
-  return winner?.token ?? body.token;
+const TEAM_LIBRARY_REPOSITORY = "https://github.com/milind-soni/openmausbot-teams";
+const TEAM_LIBRARY_RAW = "https://raw.githubusercontent.com/milind-soni/openmausbot-teams/main";
+
+async function fetchJsonLimited(url: string, maxBytes = 1_000_000): Promise<unknown> {
+  const response = await fetch(url, { headers: { accept: "application/json" }, redirect: "manual", signal: AbortSignal.timeout(12_000) });
+  if (response.status >= 300 && response.status < 400) throw new Error("GitHub returned an unexpected redirect");
+  if (!response.ok) throw new Error(`GitHub returned HTTP ${response.status}`);
+  const announced = Number(response.headers.get("content-length") ?? 0);
+  if (announced > maxBytes) throw new Error("The remote file is too large");
+  const text = await response.text();
+  if (encoder.encode(text).byteLength > maxBytes) throw new Error("The remote file is too large");
+  return JSON.parse(text);
+}
+
+function githubTeamUrls(input: string): string[] {
+  const url = new URL(input.trim());
+  if (url.protocol !== "https:" || url.username || url.password || url.port) throw new Error("Only public HTTPS GitHub links are supported");
+  const parts = url.pathname.split("/").filter(Boolean).map(decodeURIComponent);
+  if (!parts.every((part) => /^[A-Za-z0-9._-]+$/.test(part) && part !== "." && part !== "..")) throw new Error("That GitHub path is not supported");
+  if ((url.hostname === "github.com" || url.hostname === "www.github.com") && parts.length === 2) {
+    return [`https://raw.githubusercontent.com/${parts[0]}/${parts[1]}/main/team.mausteam.json`, `https://raw.githubusercontent.com/${parts[0]}/${parts[1]}/master/team.mausteam.json`];
+  }
+  if ((url.hostname === "github.com" || url.hostname === "www.github.com") && parts.length >= 5 && ["blob", "raw"].includes(parts[2])) {
+    return [`https://raw.githubusercontent.com/${parts[0]}/${parts[1]}/${parts[3]}/${parts.slice(4).join("/")}`];
+  }
+  if (url.hostname === "raw.githubusercontent.com" && parts.length >= 4) return [`https://raw.githubusercontent.com/${parts.join("/")}`];
+  throw new Error("Paste a GitHub repository or JSON team-file link");
 }
 
 async function connectorRequest(env: Env, userId: string, path: string, init: RequestInit = {}): Promise<Response> {
-  if (!env.CONNECTORS) throw new Error("Connected apps need a Composio API key");
-  const token = await connectorToken(env, userId);
-  const headers = new Headers(init.headers);
-  headers.set("authorization", `Bearer ${token}`);
-  if (init.body && !headers.has("content-type")) headers.set("content-type", "application/json");
-  return env.CONNECTORS.fetch(`https://connectors.internal${path}`, { ...init, headers });
+  const key = await credentialValue(env, userId, "composio");
+  if (!key) throw new Error("Add a Composio project key in App Settings → Connections");
+  const method = init.method ?? "GET";
+  const body = typeof init.body === "string" ? init.body : "";
+  const result = await env.CONNECTORS.request(userId, key, path, method, body, new Headers(init.headers).get("mcp-session-id") ?? "");
+  const headers = new Headers({ "content-type": result.contentType ?? "application/json" });
+  if (result.mcpSession) headers.set("mcp-session-id", result.mcpSession);
+  return new Response(result.body, { status: result.status, headers });
 }
 
 async function connectorJson(response: Response): Promise<Response> {
@@ -595,12 +732,12 @@ async function api(request: Request, env: Env, user: User, path: string): Promis
     instanceId: "cloudflare-ai", driverKind: "cloudflareAi", displayName: "Cloudflare AI",
     snapshot: { state: "available", authenticated: true, billing: "metered" },
     models: { default: MODEL, options: [{ id: MODEL, label: "GLM 5.2" }] },
-    capabilities: { computerMcp: true, agentsMcp: false, composioMcp: false, images: false, queueing: false },
+    capabilities: { computerMcp: true, agentsMcp: false, composioMcp: await credentialConfigured(env, user.id, "composio"), images: true, queueing: false },
     access: "custom",
   }] });
   if (path === "/api/config") {
     if (request.method === "PUT") {
-      const body = await request.json<{ profile?: { name?: string; email?: string } }>();
+      const body = await request.json<{ profile?: { name?: string; email?: string }; composio?: { apiKey?: string } }>();
       const name = body.profile?.name?.trim().slice(0, 80) || user.name;
       const email = body.profile?.email?.trim().toLowerCase() || user.email;
       if (!/^\S+@\S+\.\S+$/.test(email)) return json({ error: "Use a valid email address" }, 400);
@@ -610,13 +747,20 @@ async function api(request: Request, env: Env, user: User, path: string): Promis
         return json({ error: "That email address is already in use" }, 409);
       }
       user = { ...user, name, email };
+      if (body.composio?.apiKey !== undefined) {
+        const key = body.composio.apiKey.trim();
+        if (key.length > 500) return json({ error: "Composio key is too long" }, 400);
+        await saveCredential(env, user.id, "composio", key);
+      }
     }
+    const composioConfigured = await credentialConfigured(env, user.id, "composio");
     return json({
-      xai: { configured: false }, composio: { configured: Boolean(env.CONNECTORS), mode: env.CONNECTORS ? "managed" : "unavailable" },
+      hosted: true,
+      xai: { configured: false }, composio: { configured: composioConfigured, mode: composioConfigured ? "managed" : "unavailable" },
       cfComputer: { configured: true, url: "https://magicbot-cf-computer.everyai-com.workers.dev" },
       vps: { configured: false, sshAlias: "" }, rooms: { turnTimeoutMinutes: 5 },
-      localVm: { mode: "shared", maxInstances: 0 }, tts: { configured: false, ready: false, voice: "" },
-      imageGen: { configured: false }, profile: { name: user.name, email: user.email },
+      localVm: { mode: "shared", maxInstances: 0 }, tts: { configured: true, ready: true, voice: "luna", provider: "cloudflare" },
+      imageGen: { configured: true, provider: "cloudflare" }, profile: { name: user.name, email: user.email },
     });
   }
   if (path === "/api/connectors/catalog" && request.method === "GET") {
@@ -640,31 +784,29 @@ async function api(request: Request, env: Env, user: User, path: string): Promis
       }
     } catch { /* fall back to the curated catalog */ }
     const cards = CURATED_CONNECTORS.map(([slug, label, blurb, domain]) => ({ slug, label, blurb, logo: null, domain }));
-    return json({ configured: Boolean(env.CONNECTORS), mode: env.CONNECTORS ? "managed" : "unavailable", source: "curated", cards });
+    const configured = await credentialConfigured(env, user.id, "composio");
+    return json({ configured, mode: configured ? "managed" : "unavailable", source: "curated", cards });
   }
   if (path === "/api/connectors/connected" && request.method === "GET") {
-    if (!env.CONNECTORS) return json({ configured: false, services: {} });
+    if (!await credentialConfigured(env, user.id, "composio")) return json({ configured: false, services: {} });
     return connectorJson(await connectorRequest(env, user.id, "/v1/connectors/connected"));
   }
   if (path === "/api/connectors" && request.method === "GET") {
-    if (!env.CONNECTORS) return json({ configured: false, services: {} });
+    if (!await credentialConfigured(env, user.id, "composio")) return json({ configured: false, services: {} });
     const services = new URL(request.url).searchParams.get("services") ?? "";
     return connectorJson(await connectorRequest(env, user.id, `/v1/connectors?services=${encodeURIComponent(services)}`));
   }
   let connectorMatch = path.match(/^\/api\/connectors\/([a-z0-9][a-z0-9_-]{0,80})\/authorize$/);
   if (connectorMatch && request.method === "POST") {
-    if (!env.CONNECTORS) return json({ error: "Connected apps need a Composio API key" }, 503);
     const body = await request.text();
     return connectorJson(await connectorRequest(env, user.id, `/v1/connectors/${connectorMatch[1]}/authorize`, { method: "POST", body: body || "{}" }));
   }
   connectorMatch = path.match(/^\/api\/connectors\/([a-z0-9][a-z0-9_-]{0,80})\/accounts\/([A-Za-z0-9][A-Za-z0-9_-]{0,127})$/);
   if (connectorMatch && request.method === "DELETE") {
-    if (!env.CONNECTORS) return json({ error: "Connected apps need a Composio API key" }, 503);
     return connectorJson(await connectorRequest(env, user.id, `/v1/connectors/${connectorMatch[1]}/accounts/${connectorMatch[2]}`, { method: "DELETE" }));
   }
   connectorMatch = path.match(/^\/api\/connectors\/([a-z0-9][a-z0-9_-]{0,80})$/);
   if (connectorMatch && request.method === "DELETE") {
-    if (!env.CONNECTORS) return json({ error: "Connected apps need a Composio API key" }, 503);
     return connectorJson(await connectorRequest(env, user.id, `/v1/connectors/${connectorMatch[1]}`, { method: "DELETE" }));
   }
   if (path === "/api/routines" && request.method === "GET") {
@@ -786,6 +928,31 @@ async function api(request: Request, env: Env, user: User, path: string): Promis
       headers: { "content-type": "text/event-stream", "cache-control": "no-store", connection: "keep-alive" },
     });
   }
+  if (path === "/api/tts/voices" && request.method === "GET") {
+    const ids = ["luna", "apollo", "athena", "atlas", "aurora", "cora", "hermes", "iris", "juno", "mars", "orpheus", "thalia"];
+    return json({ voices: ids.map((id) => ({ id, label: id[0].toUpperCase() + id.slice(1), description: "Cloudflare Aura 2" })) });
+  }
+  if (path === "/api/tts/prepare" && request.method === "POST") {
+    const body = await request.json<{ text?: string }>();
+    const text = body.text?.trim().slice(0, 10_000) ?? "";
+    if (!text) return json({ ready: true, utterances: [] });
+    const sentences = text.match(/[^.!?\n]+(?:[.!?]+|$)/g)?.map((part) => part.trim()).filter(Boolean) ?? [text];
+    const utterances: string[] = [];
+    for (const sentence of sentences) {
+      if (sentence.length <= 450) utterances.push(sentence);
+      else for (let start = 0; start < sentence.length; start += 450) utterances.push(sentence.slice(start, start + 450));
+    }
+    return json({ ready: true, utterances: utterances.slice(0, 40) });
+  }
+  if (path === "/api/tts/speak" && request.method === "POST") {
+    const body = await request.json<{ text?: string; voiceId?: string }>();
+    const text = body.text?.trim() ?? "";
+    if (!text || text.length > 500) return json({ error: "Voice utterances must be between 1 and 500 characters" }, 400);
+    const allowed = new Set(["amalthea", "andromeda", "apollo", "arcas", "aries", "asteria", "athena", "atlas", "aurora", "callista", "cora", "cordelia", "delia", "draco", "electra", "harmonia", "helena", "hera", "hermes", "hyperion", "iris", "janus", "juno", "jupiter", "luna", "mars", "minerva", "neptune", "odysseus", "ophelia", "orion", "orpheus", "pandora", "phoebe", "pluto", "saturn", "thalia", "theia", "vesta", "zeus"]);
+    const speaker = allowed.has(body.voiceId ?? "") ? body.voiceId! : "luna";
+    const audio = await env.AI.run(VOICE_MODEL as keyof AiModels, { text, speaker, encoding: "mp3" } as never) as ReadableStream;
+    return new Response(audio, { headers: { "content-type": "audio/mpeg", "cache-control": "no-store" } });
+  }
   if ((path === "/api/attachments" || path === "/api/file-attachments") && request.method === "POST") {
     const mime = (request.headers.get("content-type") ?? "application/octet-stream").split(";")[0].trim().toLowerCase();
     const maxBytes = path === "/api/attachments" ? 10 * 1024 * 1024 : 25 * 1024 * 1024;
@@ -868,7 +1035,7 @@ async function api(request: Request, env: Env, user: User, path: string): Promis
     if (speakers.length === 0 && available[0]) speakers = [available[0]];
     for (const bot of speakers.slice(0, 8)) {
       const roomBot = { ...bot, messages: group.messages } as Bot;
-      const reply = await aiReply(env, roomBot, `${group.bulletin ? `Room instructions: ${group.bulletin}\n\n` : ""}${text}`);
+      const reply = await aiReply(env, user.id, roomBot, `${group.bulletin ? `Room instructions: ${group.bulletin}\n\n` : ""}${text}`);
       const message: Message = {
         id: crypto.randomUUID(), role: "bot", kind: "text", text: reply, at: Date.now(), parentId: group.messages.at(-1)?.id ?? null,
         from: { botId: bot.id, name: bot.name, color: bot.color },
@@ -887,6 +1054,8 @@ async function api(request: Request, env: Env, user: User, path: string): Promis
     await saveRecord(env, "groups", user.id, group.id, group, group.createdAt);
     return json({ group });
   }
+  const groupInterruptMatch = path.match(/^\/api\/groups\/([^/]+)\/interrupt$/);
+  if (groupInterruptMatch && request.method === "POST") return json({ ok: true });
   const groupMatch = path.match(/^\/api\/groups\/([^/]+)$/);
   if (groupMatch) {
     const groupId = decodeURIComponent(groupMatch[1]);
@@ -995,6 +1164,8 @@ async function api(request: Request, env: Env, user: User, path: string): Promis
     }));
     return json({ entries, total: { runtime: entries.length, native: 0 } });
   }
+  const threadRespondMatch = path.match(/^\/api\/threads\/([^/]+)\/respond$/);
+  if (threadRespondMatch && request.method === "POST") return json({ ok: true });
   if (path === "/api/decisions" && request.method === "GET") return json({ decisions: [] });
   if (path === "/api/teams/export" && request.method === "POST") {
     const body: { botIds?: string[]; groupId?: string } = await request.json<{ botIds?: string[]; groupId?: string }>().catch(() => ({}));
@@ -1021,6 +1192,17 @@ async function api(request: Request, env: Env, user: User, path: string): Promis
     const manifest = await request.json<{ team?: { name?: string; members?: Array<{ name?: string; title?: string; description?: string; appearance?: { color?: string; mascotExpression?: string } }> } }>();
     const members = manifest.team?.members ?? [];
     if (members.length === 0 || members.length > 200) return json({ error: "Team must contain 1-200 members" }, 400);
+    const mode = new URL(request.url).searchParams.get("mode") ?? "add";
+    const archivedBots: Bot[] = [];
+    const archived: Array<{ id: string; chiefOfStaff: boolean }> = [];
+    if (mode === "replace") {
+      for (const existing of (await listBots(env, user.id)).filter((bot) => !bot.hidden)) {
+        existing.hidden = true;
+        await saveBot(env, user.id, existing);
+        archivedBots.push(publicBot(existing));
+        archived.push({ id: existing.id, chiefOfStaff: existing.chiefOfStaff === true });
+      }
+    }
     const imported: Bot[] = [];
     for (const member of members) {
       if (!member.name?.trim()) return json({ error: "Every team member needs a name" }, 400);
@@ -1033,9 +1215,64 @@ async function api(request: Request, env: Env, user: User, path: string): Promis
       await saveBot(env, user.id, bot);
       imported.push(publicBot(bot));
     }
-    return json({ bots: imported }, 201);
+    let group: Group | undefined;
+    if (mode === "project" && imported.length) {
+      const url = new URL(request.url);
+      const createdAt = Date.now();
+      group = {
+        id: crypto.randomUUID(), threadId: crypto.randomUUID(), name: (url.searchParams.get("room") ?? manifest.team?.name ?? "Project room").slice(0, 100),
+        memberIds: imported.map((bot) => bot.id), defaultResponder: { kind: "member", botId: imported[0].id }, bulletin: "", unread: false,
+        createdAt, messages: [], setupCompletedAt: createdAt,
+        ...(url.searchParams.get("cwd") ? { cwd: url.searchParams.get("cwd")!.slice(0, 500) } : {}),
+      };
+      await saveRecord(env, "groups", user.id, group.id, group, createdAt);
+    }
+    return json({ bots: imported, archivedBots, archived, ...(group ? { group } : {}) }, 201);
   }
-  if (path === "/api/team-library/catalog" && request.method === "GET") return json({ teams: [] });
+  if (path === "/api/team-library/catalog" && request.method === "GET") {
+    try {
+      const value = await fetchJsonLimited(`${TEAM_LIBRARY_RAW}/catalog.json`, 256_000) as { teams?: unknown[] };
+      return json({ ...value, repositoryUrl: TEAM_LIBRARY_REPOSITORY });
+    } catch (error) {
+      return json({ repositoryUrl: TEAM_LIBRARY_REPOSITORY, teams: [], error: error instanceof Error ? error.message : String(error) });
+    }
+  }
+  const libraryTeamMatch = path.match(/^\/api\/team-library\/teams\/([a-z0-9][a-z0-9-]{0,79})$/);
+  if (libraryTeamMatch && request.method === "GET") {
+    const catalog = await fetchJsonLimited(`${TEAM_LIBRARY_RAW}/catalog.json`, 256_000) as { teams?: Array<{ slug?: string; manifest?: string }> };
+    const entry = catalog.teams?.find((team) => team.slug === libraryTeamMatch[1]);
+    if (!entry?.manifest || !entry.manifest.startsWith(`teams/${libraryTeamMatch[1]}/`) || !entry.manifest.endsWith(".json") || entry.manifest.includes("..")) {
+      return json({ error: "That library team was not found" }, 404);
+    }
+    return json(await fetchJsonLimited(`${TEAM_LIBRARY_RAW}/${entry.manifest}`));
+  }
+  if (path === "/api/team-library/github" && request.method === "POST") {
+    const body = await request.json<{ url?: string }>();
+    if (!body.url) return json({ error: "GitHub URL required" }, 400);
+    let lastError: unknown;
+    for (const url of githubTeamUrls(body.url)) {
+      try { return json(await fetchJsonLimited(url)); }
+      catch (error) { lastError = error; }
+    }
+    return json({ error: lastError instanceof Error ? lastError.message : "No team file was found" }, 404);
+  }
+  if (path === "/api/teams/scout" && request.method === "GET") {
+    const target = (new URL(request.url).searchParams.get("cwd") ?? "Web project").trim().slice(0, 300);
+    const project = target.split(/[\\/]/).filter(Boolean).at(-1)?.replace(/[-_]+/g, " ") || "Web project";
+    return json({
+      profile: { name: project, summary: `A browser-managed project at ${target}`, stacks: ["Cloudflare", "TypeScript", "Web"] },
+      suggestion: {
+        roomName: `${project} team`,
+        manifest: { format: "openmaus.team", version: 2, team: { name: `${project} team`, members: [
+          { key: "lead", name: "Project Lead", title: "Plans and coordinates delivery", description: `Own the plan and decisions for ${project}.`, appearance: { color: "purple" } },
+          { key: "builder", name: "Builder", title: "Implements the project", description: `Build and test ${project} using its Cloudflare computer.`, appearance: { color: "cyan" } },
+          { key: "reviewer", name: "Reviewer", title: "Checks quality and security", description: `Review changes for correctness, usability, and security.`, appearance: { color: "green" } },
+        ] } },
+        reasons: { lead: "Coordinates work", builder: "Implements changes", reviewer: "Validates quality" },
+      },
+    });
+  }
+  if (path === "/api/teams/scout/directory" && request.method === "GET") return json({ directory: [] });
   if (path === "/api/search" && request.method === "GET") {
     const query = (new URL(request.url).searchParams.get("q") ?? "").trim().toLowerCase();
     const limit = Math.min(Math.max(Number(new URL(request.url).searchParams.get("limit")) || 40, 1), 100);
@@ -1066,6 +1303,25 @@ async function api(request: Request, env: Env, user: User, path: string): Promis
     const bot = newBot("New bot");
     await saveBot(env, user.id, bot);
     return json({ bot: publicBot(bot) }, 201);
+  }
+  const avatarGenerateMatch = path.match(/^\/api\/bots\/([^/]+)\/avatar\/generate$/);
+  if (avatarGenerateMatch && request.method === "POST") {
+    const bot = await loadBot(env, user.id, decodeURIComponent(avatarGenerateMatch[1]));
+    if (!bot) return json({ error: "Bot not found" }, 404);
+    const body = await request.json<{ prompt?: string }>().catch(() => ({} as { prompt?: string }));
+    const direction = body.prompt?.trim().slice(0, 400) ?? "";
+    const prompt = [
+      `Square profile avatar for an AI agent named ${bot.name}.`,
+      bot.title ? `Role: ${bot.title}.` : "",
+      bot.description ? `Personality: ${bot.description.slice(0, 500)}.` : "",
+      direction,
+      "Premium editorial character portrait, simple background, centered head and shoulders, no text, no logos.",
+    ].filter(Boolean).join(" ");
+    const avatarUrl = await generatedImage(env, user.id, prompt, `${bot.name.replace(/[^a-z0-9]+/gi, "-").toLowerCase() || "bot"}-avatar.jpg`);
+    bot.avatarUrl = avatarUrl;
+    bot.avatarCrop = "circle";
+    await saveBot(env, user.id, bot);
+    return json({ avatarUrl, bot: publicBot(bot) }, 201);
   }
   const computerMatch = path.match(/^\/api\/bots\/([^/]+)\/computer(?:\/(control|provision|exec|run|read-file|write-file|sleep|remove|join|screenshot))?$/);
   if (computerMatch) {
@@ -1195,7 +1451,7 @@ async function api(request: Request, env: Env, user: User, path: string): Promis
     const branch: Message = { id: crypto.randomUUID(), role: "user", kind: "text", text, at: Date.now(), parentId: source.parentId };
     bot.messages.push(branch);
     bot.activeLeafId = branch.id;
-    const reply = await aiReply(env, bot, text);
+    const reply = await aiReply(env, user.id, bot, text);
     const assistant: Message = { id: crypto.randomUUID(), role: "bot", kind: "text", text: reply, at: Date.now(), parentId: branch.id };
     bot.messages.push(assistant);
     bot.activeLeafId = assistant.id;
@@ -1216,6 +1472,19 @@ async function api(request: Request, env: Env, user: User, path: string): Promis
   }
   const interruptMatch = path.match(/^\/api\/bots\/([^/]+)\/interrupt$/);
   if (interruptMatch && request.method === "POST") return json({ ok: true });
+  const cardMatch = path.match(/^\/api\/bots\/([^/]+)\/cards\/([^/]+)$/);
+  if (cardMatch && request.method === "PATCH") {
+    const bot = await loadBot(env, user.id, decodeURIComponent(cardMatch[1]));
+    if (!bot) return json({ error: "Bot not found" }, 404);
+    const message = bot.messages.find((item) => item.id === decodeURIComponent(cardMatch[2]));
+    if (!message) return json({ error: "Card not found" }, 404);
+    const patch = await request.json<Record<string, unknown>>();
+    message.card = { ...((message.card ?? {}) as object), ...patch };
+    await saveBot(env, user.id, bot);
+    return json({ message });
+  }
+  const botRespondMatch = path.match(/^\/api\/bots\/([^/]+)\/respond$/);
+  if (botRespondMatch && request.method === "POST") return json({ ok: true });
   const botMatch = path.match(/^\/api\/bots\/([^/]+)$/);
   if (botMatch) {
     const botId = decodeURIComponent(botMatch[1]);
@@ -1227,7 +1496,7 @@ async function api(request: Request, env: Env, user: User, path: string): Promis
     }
     if (request.method === "PATCH") {
       const patch = await request.json<Record<string, unknown>>();
-      const allowed = ["name", "title", "description", "notifications", "color", "unread", "modelSelection", "computer", "cloudBackend", "autoApprove", "speakReplies", "pinned", "hidden", "section", "chiefOfStaff", "composio"];
+      const allowed = ["name", "title", "description", "notifications", "color", "mascotExpression", "avatarUrl", "avatarCrop", "unread", "modelSelection", "computer", "cloudBackend", "cwd", "autoApprove", "alwaysAllow", "speakReplies", "voice", "pinned", "hidden", "section", "pinnedMessageId", "chiefOfStaff", "approvePeerComms", "composio"];
       for (const key of allowed) if (key in patch) bot[key] = patch[key];
       await saveBot(env, user.id, bot);
       const { messages: _messages, ...announcement } = bot;
@@ -1245,7 +1514,7 @@ async function api(request: Request, env: Env, user: User, path: string): Promis
     const body = await request.json<{ text?: string }>();
     const text = body.text?.trim() ?? "";
     if (!text || text.length > 20_000) return json({ error: "Message must be between 1 and 20,000 characters" }, 400);
-    const reply = await aiReply(env, bot, text);
+    const reply = await aiReply(env, user.id, bot, text);
     const messages = appendTurn(bot, text, reply);
     await saveBot(env, user.id, bot);
     return json({ threadId: bot.threadId, messages });

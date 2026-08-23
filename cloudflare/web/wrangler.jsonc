@@ -24,6 +24,11 @@
       "binding": "COMPUTER",
       "service": "magicbot-cf-computer",
       "entrypoint": "WebComputer"
+    },
+    {
+      "binding": "CONNECTORS",
+      "service": "openmausbot-composio",
+      "entrypoint": "WebConnectors"
     }
   ],
   "triggers": {
