@@ -15,6 +15,7 @@ import {
   FolderPlus,
   Library,
   Loader2,
+  LogOut,
   Pencil,
   PanelLeftClose,
   PanelLeftOpen,
@@ -1534,6 +1535,14 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
           >
             <Settings size={18} />
           </button>}
+          {state.config?.hosted && <a
+            href="/logout"
+            className="flex size-10 items-center justify-center rounded-md text-ink-secondary transition-colors hover:bg-raised hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+            title="Sign out"
+            aria-label="Sign out"
+          >
+            <LogOut size={17} />
+          </a>}
         </div>
       </div>
 

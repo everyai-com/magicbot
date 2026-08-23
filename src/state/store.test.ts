@@ -108,6 +108,58 @@ describe("cross-client bot creation", () => {
   });
 });
 
+describe("hosted chat turns", () => {
+  it("shows the sent message immediately and settles when the reply arrives", () => {
+    const bot = {
+      id: "hosted-bot",
+      threadId: "hosted-thread",
+      name: "SupaMaus",
+      title: "Cloud AI assistant",
+      description: "",
+      notifications: true,
+      color: "green" as const,
+      unread: false,
+      busy: false,
+      activity: "idle" as const,
+      modelSelection: { instanceId: "cloudflare-ai", model: "kimi" },
+      messages: [],
+      activeLeafId: null,
+    } satisfies Bot;
+    const sending = reducer(
+      {
+        ...initialState,
+        config: {
+          hosted: true,
+          composio: { configured: false },
+          cfComputer: { configured: true, url: "https://computer.example" },
+          vps: { configured: false, sshAlias: "" },
+          rooms: { turnTimeoutMinutes: 5 },
+          localVm: { mode: "shared", maxInstances: 0 },
+        },
+        bots: [bot],
+      },
+      { type: "send", botId: bot.id, text: "check this", clientMessageId: "client-message", sentAt: 42 },
+    );
+
+    expect(sending.bots[0]).toMatchObject({ busy: true, activeLeafId: "client-message" });
+    expect(sending.bots[0]?.messages).toEqual([{
+      id: "client-message",
+      role: "user",
+      kind: "text",
+      text: "check this",
+      at: 42,
+      parentId: null,
+    }]);
+
+    const settled = reducer(sending, {
+      type: "messageAdded",
+      threadId: bot.threadId,
+      message: { id: "reply", role: "bot", kind: "text", text: "Done", at: 43, parentId: "client-message" },
+    });
+    expect(settled.bots[0]).toMatchObject({ busy: false, activity: "idle", activeLeafId: "reply" });
+  });
+});
+
 describe("section Chiefs", () => {
   const bot = (id: string, section: string, chiefOfStaff = false) => ({
     id,

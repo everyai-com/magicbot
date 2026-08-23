@@ -28,6 +28,12 @@ export type ImageAttachment = {
 
 export type Attachment = PasteAttachment | FileAttachment | ImageAttachment;
 
+export interface SplitAttachedContent {
+  display: string;
+  images: string[];
+  files: string[];
+}
+
 export function isAttachment(value: unknown): value is Attachment {
   if (!value || typeof value !== "object") return false;
   const attachment = value as Record<string, unknown>;
@@ -243,9 +249,10 @@ export function escapeAttribute(value: string): string {
 
 /** Split a stored user message into its display text and the images it
  * attached, for transcript rendering. The tag never shows in the bubble. */
-export function splitAttachedImages(text: string): { display: string; images: string[] } {
+export function splitAttachedImages(text: string): SplitAttachedContent {
   const images: string[] = [];
-  const display = text.replace(/<attached-image\s+path="([^"]*)"\s*\/?>(?:\s*\n)?/g, (_match, raw: string) => {
+  const files: string[] = [];
+  let display = text.replace(/<attached-image\s+path="([^"]*)"\s*\/?>(?:\s*\n)?/g, (_match, raw: string) => {
     const path = raw
       .replaceAll("&quot;", '"')
       .replaceAll("&lt;", "<")
@@ -254,7 +261,16 @@ export function splitAttachedImages(text: string): { display: string; images: st
     if (path) images.push(path);
     return "";
   });
-  return { display: display.trim(), images };
+  display = display.replace(/<attached-file\s+path="([^"]*)"\s*\/?>(?:\s*\n)?/g, (_match, raw: string) => {
+    const path = raw
+      .replaceAll("&quot;", '"')
+      .replaceAll("&lt;", "<")
+      .replaceAll("&gt;", ">")
+      .replaceAll("&amp;", "&");
+    if (path) files.push(path);
+    return "";
+  });
+  return { display: display.trim(), images, files };
 }
 
 /** The bare filename a saved attachment path ends in — what the serving

@@ -422,7 +422,8 @@ export type Action =
   | { type: "instances"; instances: InstanceInfo[] }
   | { type: "configStatus"; config: ConfigStatus }
   | { type: "select"; id: string }
-  | { type: "send"; botId: string; text: string }
+  | { type: "send"; botId: string; text: string; clientMessageId?: string; sentAt?: number }
+  | { type: "hostedTurnFailed"; botId: string }
   | { type: "pendingQueued"; threadId: string; queueId: string; text: string }
   | { type: "consumePendingQueued"; threadId: string; queueId: string }
   | { type: "editMessage"; botId: string; messageId: string; text: string }
@@ -724,7 +725,12 @@ export function reducer(state: AppState, action: Action): AppState {
       // every server-side append chains onto (and becomes) the active leaf
       const next = updateBot(state, bot.id, (b) => {
         if (b.messages.some((m) => m.id === action.message.id)) {
-          return { ...b, activeLeafId: action.message.id };
+          const existing = { ...b, activeLeafId: action.message.id };
+          if (action.message.role === "bot") {
+            existing.busy = false;
+            existing.activity = "idle";
+          }
+          return existing;
         }
         let messages = [...b.messages, action.message];
         // base64 screen frames are big; a long computer-use session would
@@ -738,7 +744,12 @@ export function reducer(state: AppState, action: Action): AppState {
             messages = messages.map((m) => (dropIds.has(m.id) ? { ...m, png: undefined } : m));
           }
         }
-        return { ...b, messages, activeLeafId: action.message.id };
+        const appended = { ...b, messages, activeLeafId: action.message.id };
+        if (action.message.role === "bot") {
+          appended.busy = false;
+          appended.activity = "idle";
+        }
+        return appended;
       });
       const motion =
         action.message.kind === "options"
@@ -965,9 +976,33 @@ export function reducer(state: AppState, action: Action): AppState {
       else delete pendingQueued[action.threadId];
       return { ...state, pendingQueued };
     }
-    case "send":
+    case "send": {
+      const animated = withMascotMotion(state, action.botId, "working");
+      if (!state.config?.hosted || !action.clientMessageId) return animated;
+      const clientMessageId = action.clientMessageId;
+      return updateBot(animated, action.botId, (bot) => {
+        if (bot.messages.some((message) => message.id === clientMessageId)) return bot;
+        const message: Message = {
+          id: clientMessageId,
+          role: "user",
+          kind: "text",
+          text: action.text,
+          at: action.sentAt ?? Date.now(),
+          parentId: bot.activeLeafId ?? null,
+        };
+        return {
+          ...bot,
+          busy: true,
+          activity: "working",
+          messages: [...bot.messages, message],
+          activeLeafId: message.id,
+        };
+      });
+    }
     case "editMessage":
       return withMascotMotion(state, action.botId, "working");
+    case "hostedTurnFailed":
+      return updateBot(state, action.botId, (bot) => ({ ...bot, busy: false, activity: "idle" }));
     case "newTask":
     case "switchTask":
     case "renameTask":
@@ -1154,7 +1189,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       }).catch(() => {});
     };
 
-    const wrapped: React.Dispatch<Action> = (action) => {
+    const wrapped: React.Dispatch<Action> = (incomingAction) => {
+      const action: Action =
+        incomingAction.type === "send" && stateRef.current.config?.hosted && !incomingAction.clientMessageId
+          ? { ...incomingAction, clientMessageId: crypto.randomUUID(), sentAt: Date.now() }
+          : incomingAction;
       const botBeforeUpdate =
         action.type === "updateBot"
           ? stateRef.current.bots.find((candidate) => candidate.id === action.botId)
@@ -1186,7 +1225,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         case "send":
           void api(`/api/bots/${action.botId}/messages`, {
             method: "POST",
-            body: JSON.stringify({ text: action.text }),
+            body: JSON.stringify({ text: action.text, clientMessageId: action.clientMessageId }),
           })
             .then((body) => {
               // The local harness publishes messages over SSE. The hosted
@@ -1211,7 +1250,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
                 });
               }
             })
-            .catch(showError);
+            .catch((error) => {
+              if (stateRef.current.config?.hosted) rawDispatch({ type: "hostedTurnFailed", botId: action.botId });
+              showError(error);
+            });
           break;
         case "editMessage":
           api(`/api/bots/${action.botId}/messages/${action.messageId}/edit`, {

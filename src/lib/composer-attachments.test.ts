@@ -40,9 +40,10 @@ describe("splitAttachedImages", () => {
   it("splits tags out of a stored message and returns the paths", () => {
     const stored =
       'look at this\n\n<attached-image path="/a/b/one.png" />\n\n<attached-image path="/a/b/two.jpg" />';
-    const { display, images } = splitAttachedImages(stored);
+    const { display, images, files } = splitAttachedImages(stored);
     expect(display).toBe("look at this");
     expect(images).toEqual(["/a/b/one.png", "/a/b/two.jpg"]);
+    expect(files).toEqual([]);
   });
 
   it("unescapes attribute entities so the path round-trips", () => {
@@ -56,6 +57,13 @@ describe("splitAttachedImages", () => {
     const { display, images } = splitAttachedImages(stored);
     expect(display).toBe(stored);
     expect(images).toEqual([]);
+  });
+
+  it("hides file transport tags and exposes a downloadable file", () => {
+    const stored = 'summarize this\n\n<attached-file path="/api/attachments/file-id" />';
+    const { display, files } = splitAttachedImages(stored);
+    expect(display).toBe("summarize this");
+    expect(files).toEqual(["/api/attachments/file-id"]);
   });
 });
 
@@ -75,4 +83,3 @@ describe("isImageFile", () => {
     expect(isImageFile({ type: "text/plain", size: 10 })).toBe(false);
   });
 });
-

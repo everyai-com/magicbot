@@ -9,6 +9,7 @@ import {
   ChevronRight,
   Bug,
   Clock,
+  Cloud,
   Copy,
   Crown,
   Folder,
@@ -440,6 +441,22 @@ function Bubble({
                   ))}
                 </div>
               )}
+              {attachedImages && attachedImages.files.length > 0 && (
+                <div className="mb-2 flex flex-wrap justify-end gap-2">
+                  {attachedImages.files.map((path) => (
+                    <a
+                      key={path}
+                      href={`/api/attachments/${encodeURIComponent(attachmentBasename(path))}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="flex items-center gap-2 rounded-lg border border-hairline/40 bg-inset/35 px-3 py-2 text-[12px] text-ink-secondary transition-colors hover:bg-inset hover:text-ink"
+                      title="Open attached file"
+                    >
+                      <Folder size={14} aria-hidden="true" /> Attached file
+                    </a>
+                  ))}
+                </div>
+              )}
               <div
                 className={cn(collapsible && "max-h-40 overflow-hidden [mask-image:linear-gradient(to_bottom,black_60%,transparent)]")}
               >
@@ -775,6 +792,9 @@ export function ChatView({ bot }: { bot: Bot }) {
   const reasoning = stream.reasoning[bot.threadId];
   const provisioning = state.provisioning[bot.id];
   const mascotMotion = state.mascotMotion?.botId === bot.id ? state.mascotMotion : null;
+  const activeInstance = state.instances.find((instance) => instance.instanceId === bot.modelSelection.instanceId);
+  const activeModelLabel = activeInstance?.models.options.find((option) => option.id === bot.modelSelection.model)?.label
+    ?? bot.modelSelection.model;
 
   // only the active branch is rendered; forks stay reachable via ‹ › nav
   const messages = useMemo(() => visibleMessages(bot), [bot]);
@@ -945,18 +965,16 @@ export function ChatView({ bot }: { bot: Bot }) {
       {/* Call mode covers the thread while the bot is on the line */}
       <CallOverlay bot={bot} />
       {/* Header */}
-      <div
+      <header
         className={cn(
-          // @container so the chips on the right can fold to icon bubbles
-          // when the column is narrow (side panel open, small window)
-          "@container/chathead flex items-center justify-between px-5 py-3",
+          "@container/chathead flex min-h-[68px] items-center justify-between gap-3 border-b border-hairline/30 px-5 py-2.5",
           // Room for the drawer button, which overlays this corner below md.
           "pl-11 md:pl-5",
           isWin && "pr-[148px]",
         )}
         style={drag}
       >
-        <div className="flex min-w-0 items-center gap-2.5 rounded-lg px-1.5 py-1" style={noDrag}>
+        <div className="flex min-w-0 flex-1 items-center gap-2.5 rounded-lg px-1 py-1" style={noDrag}>
           <button
             onClick={() => dispatch({ type: "toggleSettings", open: true })}
             className="flex size-10 shrink-0 items-center justify-center rounded-lg hover:bg-raised/50"
@@ -971,22 +989,36 @@ export function ChatView({ bot }: { bot: Bot }) {
               motionKey={mascotMotion?.nonce ?? 0}
             />
           </button>
-          <RenameTitle
-            value={bot.name}
-            onCommit={(name) => dispatch({ type: "updateBot", botId: bot.id, patch: { name } })}
-            onActivate={() => dispatch({ type: "toggleSettings", open: true })}
-            showEditButton
-            className="truncate text-[15px] font-semibold text-ink"
-            inputClassName="max-w-[220px] rounded bg-inset px-1.5 py-0.5 text-[15px] font-semibold"
-          />
-          {bot.chiefOfStaff && (
-            <span className="flex items-center gap-1 rounded-full bg-accent/12 px-2 py-0.5 text-[11px] font-medium text-accent">
-              <Crown size={11} /> Chief of Staff
-            </span>
-          )}
-          {bot.busy && <Loader2 size={14} className="animate-spin text-ink-secondary" />}
+          <div className="min-w-0">
+            <div className="flex min-w-0 items-center gap-2">
+              <RenameTitle
+                value={bot.name}
+                onCommit={(name) => dispatch({ type: "updateBot", botId: bot.id, patch: { name } })}
+                onActivate={() => dispatch({ type: "toggleSettings", open: true })}
+                showEditButton
+                className="truncate text-[15px] font-semibold text-ink"
+                inputClassName="max-w-[220px] rounded bg-inset px-1.5 py-0.5 text-[15px] font-semibold"
+              />
+              {bot.chiefOfStaff && (
+                <span className="flex shrink-0 items-center gap-1 rounded-full bg-accent/12 px-2 py-0.5 text-[11px] font-medium text-accent">
+                  <Crown size={11} /> Chief of Staff
+                </span>
+              )}
+              {bot.busy && <Loader2 size={14} className="shrink-0 animate-spin text-ink-secondary" />}
+            </div>
+            <div
+              className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[11px] text-ink-secondary"
+              title={`Replies are generated by ${activeInstance?.displayName ?? "the selected provider"} using ${activeModelLabel}`}
+            >
+              {state.config?.hosted && <Cloud size={11} className="shrink-0 text-accent" aria-hidden="true" />}
+              <span className="truncate">
+                {activeInstance?.displayName ?? "AI provider"} · {activeModelLabel}
+              </span>
+              {state.config?.hosted && <span className="shrink-0 text-ink-secondary/70">· hosted</span>}
+            </div>
+          </div>
         </div>
-        <div className="flex shrink-0 items-center gap-2" style={noDrag}>
+        <div className="flex shrink-0 items-center gap-1" style={noDrag}>
           {bot.busy && (
             <button
               onClick={() => dispatch({ type: "interrupt", botId: bot.id })}
@@ -1003,10 +1035,11 @@ export function ChatView({ bot }: { bot: Bot }) {
           <TaskPicker bot={bot} />
           <UsageChip bot={bot} />
           <WorkingFolderChip bot={bot} />
-          <ModelPicker bot={bot} />
+          {!state.config?.hosted && <ModelPicker bot={bot} />}
           <CallButton bot={bot} />
           <button
             onClick={() => dispatch({ type: "toggleComputer" })}
+            aria-label="Bot's computer"
             className={cn(
               "rounded-md p-1.5 hover:bg-raised",
               state.computerOpen ? "text-accent" : "text-ink-secondary hover:text-ink",
@@ -1028,7 +1061,7 @@ export function ChatView({ bot }: { bot: Bot }) {
             <Bug size={18} />
           </button>
         </div>
-      </div>
+      </header>
 
       {/* Error banner */}
       {state.error && (

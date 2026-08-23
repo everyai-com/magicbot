@@ -124,7 +124,7 @@ interface Bot {
 
 const SESSION_COOKIE = "magicbot_session";
 const SESSION_AGE = 60 * 60 * 24 * 30;
-const MODEL = "@cf/zai-org/glm-5.2";
+const MODEL = "@cf/moonshotai/kimi-k2.6";
 const IMAGE_MODEL = "@cf/black-forest-labs/flux-1-schnell";
 const VOICE_MODEL = "@cf/deepgram/aura-2-en";
 const encoder = new TextEncoder();
@@ -180,6 +180,14 @@ async function passwordHash(password: string, salt: string): Promise<string> {
 
 function base64Bytes(bytes: Uint8Array): string {
   return btoa(String.fromCharCode(...bytes)).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
+}
+
+function standardBase64(bytes: Uint8Array): string {
+  let binary = "";
+  for (let offset = 0; offset < bytes.length; offset += 32_768) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + 32_768));
+  }
+  return btoa(binary);
 }
 
 function bytesFromBase64(value: string): Uint8Array {
@@ -339,7 +347,12 @@ async function deleteRecord(env: Env, table: HostedTable, userId: string, id: st
 
 function publicBot(bot: Bot): Bot {
   const { _taskMessages: _hidden, ...visible } = bot;
-  return visible as Bot;
+  return {
+    ...visible,
+    modelSelection: visible.modelSelection?.instanceId === "cloudflare-ai"
+      ? { ...visible.modelSelection, model: MODEL }
+      : visible.modelSelection,
+  } as Bot;
 }
 
 function stashTask(bot: Bot): void {
@@ -427,15 +440,67 @@ async function connectorTools(env: Env, userId: string): Promise<{ tools: Array<
   return { tools, session: listed.session };
 }
 
+type ModelContentPart =
+  | { type: "text"; text: string }
+  | { type: "image_url"; image_url: { url: string } };
+
+const ATTACHED_RESOURCE = /<attached-(image|file)\s+path="\/api\/attachments\/([^"&]+)"\s*\/?>(?:\s*\n)?/g;
+
+function isReadableAttachment(mime: string, name: string): boolean {
+  return mime.startsWith("text/") || [
+    "application/json",
+    "application/xml",
+    "application/javascript",
+    "application/x-javascript",
+    "application/yaml",
+  ].includes(mime) || /\.(?:txt|md|markdown|json|csv|tsv|xml|ya?ml|js|mjs|cjs|ts|tsx|jsx|css|html|py|rb|go|rs|java|kt|swift|sh|sql|log)$/i.test(name);
+}
+
+async function modelContentForPrompt(env: Env, userId: string, prompt: string): Promise<string | ModelContentPart[]> {
+  const matches = [...prompt.matchAll(ATTACHED_RESOURCE)];
+  if (matches.length === 0) return prompt;
+  const notes: string[] = [];
+  const images: ModelContentPart[] = [];
+  for (const match of matches.slice(0, 6)) {
+    const kind = match[1];
+    const id = decodeURIComponent(match[2] ?? "");
+    const row = await env.DB.prepare("SELECT object_key, mime, name, bytes FROM attachments WHERE id = ? AND user_id = ?")
+      .bind(id, userId).first<{ object_key: string; mime: string; name: string; bytes: number }>();
+    if (!row) {
+      notes.push(`[Attachment unavailable: ${id}]`);
+      continue;
+    }
+    const object = await env.FILES.get(row.object_key);
+    if (!object) {
+      notes.push(`[Attachment data unavailable: ${row.name}]`);
+      continue;
+    }
+    const bytes = new Uint8Array(await object.arrayBuffer());
+    if (kind === "image" && row.mime.startsWith("image/")) {
+      images.push({ type: "image_url", image_url: { url: `data:${row.mime};base64,${standardBase64(bytes)}` } });
+    } else if (isReadableAttachment(row.mime, row.name)) {
+      const decoded = new TextDecoder().decode(bytes.subarray(0, 300_000));
+      const clipped = bytes.length > 300_000 ? `${decoded}\n\n[File clipped after 300 KB]` : decoded;
+      notes.push(`<uploaded-file name="${row.name.replaceAll('"', "'")}" type="${row.mime}">\n${clipped}\n</uploaded-file>`);
+    } else {
+      notes.push(`[Uploaded file ${row.name} (${row.mime}) cannot be read as text. Tell the user this file type is not supported yet.]`);
+    }
+  }
+  const cleanPrompt = prompt.replace(ATTACHED_RESOURCE, "").trim();
+  const text = [cleanPrompt, ...notes].filter(Boolean).join("\n\n") || "Describe the attached content.";
+  return images.length > 0 ? [{ type: "text", text }, ...images] : text;
+}
+
 async function aiReply(env: Env, userId: string, bot: Bot, text: string): Promise<string> {
   const history = bot.messages.filter((message) => message.kind === "text").slice(-24).map((message) => ({
     role: message.role === "bot" ? "assistant" : "user",
     content: message.text,
   }));
+  const userContent = await modelContentForPrompt(env, userId, text);
   const messages: Array<Record<string, unknown>> = [
       { role: "system", content: `You are ${bot.name}, ${bot.title || "a capable AI assistant"}. ${bot.description || "Be practical, clear, and proactive."}` },
       ...history,
-      { role: "user", content: text },
+      { role: "user", content: userContent },
   ];
   const tools: Array<Record<string, unknown>> = [{
     name: "computer_exec",
@@ -499,9 +564,10 @@ async function aiReply(env: Env, userId: string, bot: Bot, text: string): Promis
   return "I reached the computer-action limit for this turn. Ask me to continue and I'll pick up from here.";
 }
 
-function appendTurn(bot: Bot, text: string, reply: string): [Message, Message] {
+function appendTurn(bot: Bot, text: string, reply: string, clientMessageId?: string): [Message, Message] {
   const userMessage: Message = {
-    id: crypto.randomUUID(), role: "user", kind: "text", text, at: Date.now(), parentId: bot.activeLeafId,
+    id: clientMessageId && /^[A-Za-z0-9_-]{8,128}$/.test(clientMessageId) ? clientMessageId : crypto.randomUUID(),
+    role: "user", kind: "text", text, at: Date.now(), parentId: bot.activeLeafId,
   };
   const assistantMessage: Message = {
     id: crypto.randomUUID(), role: "bot", kind: "text", text: reply, at: Date.now(), parentId: userMessage.id,
@@ -731,7 +797,7 @@ async function api(request: Request, env: Env, user: User, path: string): Promis
   if (path === "/api/instances") return json({ instances: [{
     instanceId: "cloudflare-ai", driverKind: "cloudflareAi", displayName: "Cloudflare AI",
     snapshot: { state: "available", authenticated: true, billing: "metered" },
-    models: { default: MODEL, options: [{ id: MODEL, label: "GLM 5.2" }] },
+    models: { default: MODEL, options: [{ id: MODEL, label: "Kimi K2.6" }] },
     capabilities: { computerMcp: true, agentsMcp: false, composioMcp: await credentialConfigured(env, user.id, "composio"), images: true, queueing: false },
     access: "custom",
   }] });
@@ -1511,11 +1577,11 @@ async function api(request: Request, env: Env, user: User, path: string): Promis
     if (!await withinRateLimit(env, `chat:${user.id}`, 20, 60)) {
       return json({ error: "Too many messages. Please wait a minute and try again." }, 429);
     }
-    const body = await request.json<{ text?: string }>();
+    const body = await request.json<{ text?: string; clientMessageId?: string }>();
     const text = body.text?.trim() ?? "";
     if (!text || text.length > 20_000) return json({ error: "Message must be between 1 and 20,000 characters" }, 400);
     const reply = await aiReply(env, user.id, bot, text);
-    const messages = appendTurn(bot, text, reply);
+    const messages = appendTurn(bot, text, reply, body.clientMessageId);
     await saveBot(env, user.id, bot);
     return json({ threadId: bot.threadId, messages });
   }
