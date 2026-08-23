@@ -1354,7 +1354,15 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           api(`/api/groups/${action.groupId}/messages`, {
             method: "POST",
             body: JSON.stringify({ text: action.text }),
-          }).catch(showError);
+          })
+            .then((body) => {
+              if (Array.isArray(body?.messages) && typeof body?.threadId === "string") {
+                for (const message of body.messages) {
+                  rawDispatch({ type: "messageAdded", threadId: body.threadId, message });
+                }
+              }
+            })
+            .catch(showError);
           break;
         case "patchGroup":
           api(`/api/groups/${action.groupId}`, {

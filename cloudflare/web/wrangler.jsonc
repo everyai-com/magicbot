@@ -13,6 +13,22 @@
   "ai": {
     "binding": "AI"
   },
+  "r2_buckets": [
+    {
+      "binding": "FILES",
+      "bucket_name": "magicbot-web-files"
+    }
+  ],
+  "services": [
+    {
+      "binding": "COMPUTER",
+      "service": "magicbot-cf-computer",
+      "entrypoint": "WebComputer"
+    }
+  ],
+  "triggers": {
+    "crons": ["* * * * *"]
+  },
   "d1_databases": [
     {
       "binding": "DB",

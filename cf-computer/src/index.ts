@@ -12,6 +12,7 @@
 //   wrangler secret put MAGICBOT_COMPUTER_TOKEN
 //   wrangler deploy
 import { getSandbox, Sandbox } from "@cloudflare/sandbox";
+import { WorkerEntrypoint } from "cloudflare:workers";
 export { Sandbox }; // required re-export for the container class
 
 interface Env {
@@ -21,6 +22,38 @@ interface Env {
 
 const json = (data: unknown, status = 200) =>
   new Response(JSON.stringify(data), { status, headers: { "content-type": "application/json" } });
+
+/** Private service-binding API for the hosted MagicBot Worker. It bypasses
+ * the public bearer-token route because Cloudflare only exposes this named
+ * entrypoint to explicitly bound Workers in the same account. */
+export class WebComputer extends WorkerEntrypoint<Env> {
+  async exec(botId: string, command: string) {
+    if (!command.trim()) throw new Error("command required");
+    const result = await getSandbox(this.env.Sandbox, botId).exec(command);
+    return { ok: result.success, stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode };
+  }
+
+  async run(botId: string, code: string, language: "python" | "javascript" | "typescript" = "python") {
+    if (!code) throw new Error("code required");
+    const result = await getSandbox(this.env.Sandbox, botId).runCode(code, { language });
+    return { ok: true, results: result.results, logs: result.logs, error: result.error ?? null };
+  }
+
+  async writeFile(botId: string, path: string, content: string) {
+    await getSandbox(this.env.Sandbox, botId).writeFile(path, content);
+    return { ok: true };
+  }
+
+  async readFile(botId: string, path: string) {
+    const content = await getSandbox(this.env.Sandbox, botId).readFile(path);
+    return { ok: true, content };
+  }
+
+  async destroy(botId: string) {
+    await getSandbox(this.env.Sandbox, botId).destroy();
+    return { ok: true };
+  }
+}
 
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {
