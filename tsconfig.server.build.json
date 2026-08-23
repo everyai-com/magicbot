@@ -6,5 +6,12 @@
     "rewriteRelativeImportExtensions": true,
     "declaration": false,
     "sourceMap": false
-  }
+  },
+  "exclude": [
+    "server/**/*.test.ts",
+    "server/testing"
+  ],
+  "include": [
+    "server"
+  ]
 }

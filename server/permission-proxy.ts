@@ -2,7 +2,7 @@
 // --permission-prompt-tool (ported from agentcal's runPermissionProxy;
 // dedicated entry file, so there is no argv-dispatch fork-bomb hazard).
 // Forwards each ask over a unix socket to the broker living in the
-// MagicBot server and waits for the human's answer.
+// OpenMausBot server and waits for the human's answer.
 //
 //   approve   — the CLI calls this for any tool use its permission mode
 //               would deny; the answer is the --permission-prompt-tool
@@ -18,9 +18,15 @@ const socketPath = process.argv[2] ?? "";
 
 const waiting = new Map<string, (msg: any) => void>();
 const conn = connect(socketPath);
+
+interface AllowPermissionResult {
+  behavior: "allow";
+  updatedInput: object;
+  updatedPermissions?: object[];
+}
 const dead = () => {
   for (const resolve of waiting.values()) {
-    resolve({ behavior: "deny", message: "MagicBot: permission broker unavailable — skip this action" });
+    resolve({ behavior: "deny", message: "OpenMausBot: permission broker unavailable — skip this action" });
   }
   waiting.clear();
 };
@@ -52,7 +58,7 @@ const send = (obj: unknown) => process.stdout.write(JSON.stringify(obj) + "\n");
 const TOOLS = [
   {
     name: "approve",
-    description: "Ask the MagicBot user whether a tool use is allowed",
+    description: "Ask the OpenMausBot user whether a tool use is allowed",
     inputSchema: {
       type: "object",
       properties: {
@@ -90,7 +96,7 @@ async function handle(msg: any) {
       result: {
         protocolVersion: msg.params?.protocolVersion ?? "2024-11-05",
         capabilities: { tools: {} },
-        serverInfo: { name: "magicbot-permissions", version: "1" },
+        serverInfo: { name: "openmausbot-permissions", version: "1" },
       },
     });
   }
@@ -120,17 +126,16 @@ async function handle(msg: any) {
         dead();
       }
     });
-    const text = isQuestion
-      ? answer.message || "No answer was given — use your best judgment."
-      : JSON.stringify(
-          answer.behavior === "allow"
-            ? {
-                behavior: "allow",
-                updatedInput: args.input ?? {},
-                ...(answer.always && suggestions ? { updatedPermissions: suggestions } : {}),
-              }
-            : { behavior: "deny", message: answer.message || "Denied from MagicBot" },
-        );
+    let text = answer.message || "No answer was given — use your best judgment.";
+    if (!isQuestion) {
+      if (answer.behavior === "allow") {
+        const result: AllowPermissionResult = { behavior: "allow", updatedInput: args.input ?? {} };
+        if (answer.always && suggestions) result.updatedPermissions = suggestions;
+        text = JSON.stringify(result);
+      } else {
+        text = JSON.stringify({ behavior: "deny", message: answer.message || "Denied from OpenMausBot" });
+      }
+    }
     return send({ jsonrpc: "2.0", id: msg.id, result: { content: [{ type: "text", text }] } });
   }
   if (String(msg.method ?? "").startsWith("notifications/")) return;
