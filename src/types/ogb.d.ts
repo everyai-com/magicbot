@@ -75,7 +75,7 @@ type SkillRecordingPayload = {
     };
     dictation: {
       available: boolean;
-      engine: "apple-speech" | "none";
+      engine: "apple-speech" | "browser-speech" | "none";
       onDevice: boolean;
       reasonCode?: string;
     };

@@ -9,6 +9,7 @@ import {
   attachmentBasename,
   attachmentsFromDroppedFiles,
   formatSize,
+  fileAttachmentFromFile,
   imageAttachmentFromFile,
   isImageFile,
   pasteSummary,
@@ -64,7 +65,8 @@ export function ComposerAttachments({
       const files = Array.from(e.dataTransfer?.files ?? []);
       const images = allowImages ? files.filter(isImageFile) : [];
       const rest = files.filter((f) => !isImageFile(f));
-      const { attachments, rejectedNames } = await attachmentsFromDroppedFiles(rest, pathForFile);
+      const { attachments, rejectedNames } = await attachmentsFromDroppedFiles(rest, pathForFile, fileAttachmentFromFile);
+      if (!allowImages) rejectedNames.push(...files.filter(isImageFile).map((file) => file.name));
       const uploaded: Attachment[] = [];
       const imageErrors: string[] = [];
       for (const file of images) {
@@ -81,7 +83,7 @@ export function ComposerAttachments({
         rejectedNames.length && imageErrors.length
           ? `${rejectedNames.join(", ")} — that drag carried no file on disk. Save it first, then drop it from Finder. (${imageErrors.join("; ")})`
           : rejectedNames.length
-            ? `${rejectedNames.join(", ")} — that drag carried no file on disk. Save it first, then drop it from Finder.`
+            ? `${rejectedNames.join(", ")} could not be attached. Files can be up to 25 MB.`
             : imageErrors.length
               ? imageErrors.join("; ")
               : null,

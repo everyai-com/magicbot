@@ -30,6 +30,7 @@ import { pendingApprovals } from "./PendingApproval";
 import { cn } from "@/lib/cn";
 import { track } from "@/lib/analytics";
 import { useDesktopCapabilities } from "./DesktopCapabilities";
+import { speechInput } from "@/lib/speech-input";
 
 /** Spoken answers to a permission card. Anything else is read as a reply
  * to the bot, not as consent — an approval must never be granted by a
@@ -73,7 +74,7 @@ export function CallTargetButton({
   const { state, dispatch } = useStore();
   const { capabilities, ready: capabilitiesReady } = useDesktopCapabilities();
   const active = useOnCall() === targetId;
-  const supported = capabilities.dictation.available && Boolean(window.ogb?.speechStart);
+  const supported = capabilities.dictation.available && speechInput.available();
   const configured = Boolean(state.config?.tts?.configured);
   const everyTargetHasVoice = voices.length > 0 && voices.every((voice) => Boolean(voice));
   const voiceReady =
@@ -89,7 +90,7 @@ export function CallTargetButton({
     : !capabilitiesReady
       ? "Checking call availability"
       : !supported
-        ? "Calls currently need the macOS desktop app"
+        ? "Calls need speech recognition in this browser or the desktop app"
         : !configured
           ? "Add an ElevenLabs key in an agent profile to make calls"
           : !voiceReady
@@ -99,9 +100,9 @@ export function CallTargetButton({
   const reason = !capabilitiesReady
     ? "Checking whether this device can make calls."
     : !capabilities.dictation.available
-      ? "Calls require OpenMausBot for macOS because speech recognition runs on-device."
-      : !window.ogb?.speechStart
-        ? "The speech service is unavailable in this app build. Restart or update OpenMausBot."
+      ? "This browser does not provide speech recognition. Try Chrome, Edge, or the desktop app."
+      : !speechInput.available()
+        ? "The speech service is unavailable. Reload the page or restart OpenMausBot."
         : !configured
           ? "Add an ElevenLabs API key so the bot can speak during calls."
           : !voiceReady
@@ -242,7 +243,7 @@ function Call({ bot }: { bot: Bot }) {
   }, []);
 
   const hush = useCallback(() => {
-    void window.ogb?.speechStop();
+    void speechInput.stop();
   }, []);
 
   const listen = useCallback(() => {
@@ -250,9 +251,9 @@ function Call({ bot }: { bot: Bot }) {
     move("listening");
     setHeard("");
     setNote(null);
-    void window.ogb?.speechStart({ endpointMs: CALL_ENDPOINT_MS }).catch(() => {
+    void speechInput.start({ endpointMs: CALL_ENDPOINT_MS }).catch(() => {
       if (alive.current && currentCall() === bot.id) {
-        setNote("The microphone couldn't start. Check Microphone and Speech Recognition access.");
+        setNote("The microphone couldn't start. Check microphone permission for this app or site.");
       }
     });
   }, [bot.id, move]);
@@ -298,9 +299,7 @@ function Call({ bot }: { bot: Bot }) {
 
   // ── the microphone ───────────────────────────────────────────────────
   useEffect(() => {
-    const bridge = window.ogb;
-    if (!bridge) return;
-    const offTranscript = bridge.onSpeechTranscript((line) => {
+    const offTranscript = speechInput.onTranscript((line) => {
       if (!alive.current || currentCall() !== bot.id || phaseRef.current !== "listening") return;
       if (line.error) {
         setNote("Dictation stopped unexpectedly. Check Microphone and Speech Recognition access.");
@@ -345,17 +344,19 @@ function Call({ bot }: { bot: Bot }) {
       move("sending");
       dispatch({ type: "send", botId: bot.id, text: said });
     });
-    const offEnd = bridge.onSpeechEnd(({ code, reason }) => {
+    const offEnd = speechInput.onEnd(({ code, reason }) => {
       if (!alive.current || currentCall() !== bot.id) return;
       if (code === 2) {
-        setNote("Calls need macOS dictation, which isn't available here yet.");
+        setNote("Speech recognition does not support this language or browser.");
         return;
       }
       if (code === 1) {
         setNote(
           reason === "helper-build-failed"
             ? "The dictation helper couldn't be built. Install Apple's Command Line Tools and try again."
-            : "Dictation needs Microphone + Speech Recognition access in System Settings.",
+            : window.ogb
+              ? "Dictation needs Microphone + Speech Recognition access in System Settings."
+              : "Allow microphone access in this site's browser permissions, then try again.",
         );
         return;
       }
@@ -368,7 +369,7 @@ function Call({ bot }: { bot: Bot }) {
     return () => {
       offTranscript();
       offEnd();
-      void window.ogb?.speechStop();
+      void speechInput.stop();
     };
     // busy/approval are intentionally initial snapshots. Their live changes
     // are handled below without tearing down native event listeners.

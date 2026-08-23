@@ -17,6 +17,7 @@ import { SkinPicker } from "./SkinPicker";
 import { RoomTurnTimeoutSettings } from "./RoomTurnTimeoutSettings";
 import { TranscriptionSettings } from "./TranscriptionSettings";
 import { cn } from "@/lib/cn";
+import { useWebAppInstall } from "@/lib/web-app";
 
 const SECTIONS: Array<{ id: AppSettingsSection; label: string; icon: typeof User }> = [
   { id: "general", label: "General", icon: User },
@@ -102,6 +103,41 @@ function UpdatesRow() {
   );
 }
 
+function WebAppRow() {
+  const webApp = useWebAppInstall();
+  if (window.ogb) return null;
+  return (
+    <Card
+      title="Web app"
+      subtitle={
+        webApp.installed
+          ? "MagicBot is installed and opens in its own window."
+          : "Install MagicBot for one-click access, an app window, and a cached shell when the network drops."
+      }
+    >
+      {webApp.installed ? (
+        <span className="text-[13px] font-medium text-success">Installed</span>
+      ) : (
+        <div className="flex flex-col items-start gap-2">
+          <button
+            type="button"
+            onClick={() => void webApp.install()}
+            disabled={!webApp.installable}
+            className="rounded-lg border border-hairline/40 px-3 py-1.5 text-[13px] text-ink hover:bg-control disabled:cursor-not-allowed disabled:opacity-45"
+          >
+            Install MagicBot
+          </button>
+          {!webApp.installable && (
+            <span className="text-[12px] text-ink-secondary">
+              If your browser supports installation, use its “Install app” menu after loading the production web build.
+            </span>
+          )}
+        </div>
+      )}
+    </Card>
+  );
+}
+
 /** Usage analytics, on by default and switchable here. Naming what is sent
  * matters more than the switch: people who cannot see the scope assume the
  * worst, and the worst — conversation text — is exactly what this never
@@ -156,6 +192,7 @@ function DiagnosticsRow() {
     }
   };
 
+  if (!window.ogb?.exportDiagnostics) return null;
   return (
     <Card
       title="Diagnostics"
@@ -291,6 +328,7 @@ export function SettingsModal() {
                 <Card title="Channel turns" subtitle="Set one maximum duration for every bot turn in a channel.">
                   <RoomTurnTimeoutSettings />
                 </Card>
+                <WebAppRow />
                 <UpdatesRow />
                 <DiagnosticsRow />
                 <AnalyticsRow />
@@ -300,7 +338,7 @@ export function SettingsModal() {
             {section === "connections" && (
               <Card
                 title="Connections"
-                subtitle="Connected apps work automatically in the installed app. Other optional service keys stay on this computer."
+                subtitle="Connected apps and optional service keys are shared by this MagicBot server across desktop and web."
               >
                 <div className="flex flex-col gap-4">
                   {state.config?.composio.mode === "managed" ? (
@@ -308,7 +346,7 @@ export function SettingsModal() {
                       Connected apps service is ready
                     </div>
                   ) : null}
-                  <TranscriptionSettings />
+                  {window.ogb?.transcription && <TranscriptionSettings />}
                   <CloudflareConnection />
                   <VpsConnection />
                   <ApiKeyRow section="opencodeGo" />

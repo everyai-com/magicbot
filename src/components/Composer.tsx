@@ -1,6 +1,6 @@
 import { track } from "@/lib/analytics";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowUp, Clock, Mic, Square, Users, X } from "lucide-react";
+import { ArrowUp, Clock, Mic, Paperclip, Square, Users, X } from "lucide-react";
 import { useStore, visibleMessages, type Bot, type Group } from "@/state/store";
 import { cn } from "@/lib/cn";
 import { useComposerDraft } from "@/lib/drafts";
@@ -9,6 +9,8 @@ import { ComposerAttachments } from "./ComposerAttachments";
 import {
   composeMessage,
   imageAttachmentFromFile,
+  attachmentsFromDroppedFiles,
+  fileAttachmentFromFile,
   isImageFile,
   isLongPaste,
   pasteAttachment,
@@ -18,6 +20,7 @@ import { normalizeState } from "@/lib/mascot";
 import { groupComposerHint, roomRespondersForComposer } from "@/lib/group-routing";
 import { PendingApprovalActions, PendingApprovalPanel, pendingApprovals } from "./PendingApproval";
 import { useDesktopCapabilities } from "./DesktopCapabilities";
+import { speechInput } from "@/lib/speech-input";
 
 /** The active @mention query at the caret: the text between an `@` that
  * starts a word and the caret. null = no mention being typed. */
@@ -89,6 +92,7 @@ export function Composer({
   const [highlight, setHighlight] = useState(0);
   const [dismissedAt, setDismissedAt] = useState<number | null>(null); // Esc'd this @
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   // what was typed before the mic went on — partials append after it
   const baseText = useRef("");
 
@@ -202,47 +206,78 @@ export function Composer({
     setQueued(null);
   }, [busy, queued, group, members, state.instances, dispatch]);
 
-  // native dictation: partials stream into the input while the Swift
-  // helper runs; the final transcript stays in the box, ready to edit/send
+  // Native Apple dictation and browser Web Speech share one input surface:
+  // partials stream into the box and the final text remains editable.
   useEffect(() => {
     if (!recording) return;
-    const bridge = window.ogb;
-    if (!bridge) {
+    if (!speechInput.available()) {
       setRecording(false);
       return;
     }
     setSpeechError(null);
-    const offTranscript = bridge.onSpeechTranscript((line) => {
+    const offTranscript = speechInput.onTranscript((line) => {
       if (typeof line.text === "string") {
         const base = baseText.current;
         setText(base ? `${base} ${line.text}` : line.text);
       }
     });
-    const offEnd = bridge.onSpeechEnd(({ code }) => {
+    const offEnd = speechInput.onEnd(({ code, reason }) => {
       setRecording(false);
       if (code === 2) {
-        setSpeechError("Dictation is only available on macOS for now.");
+        setSpeechError("Speech recognition does not support this language or browser.");
       } else if (code === 1) {
-        setSpeechError(
-          "Dictation needs Microphone + Speech Recognition access — System Settings → Privacy & Security.",
-        );
+        setSpeechError(window.ogb
+          ? "Dictation needs Microphone + Speech Recognition access — System Settings → Privacy & Security."
+          : "Microphone access was blocked. Allow it in this site's browser permissions and try again.");
+      } else if (reason && reason !== "no-speech") {
+        setSpeechError(`Dictation stopped: ${reason}.`);
       }
     });
-    void bridge.speechStart();
+    void speechInput.start().catch(() => {
+      setRecording(false);
+      setSpeechError("The microphone couldn't start. Check this site's microphone permission.");
+    });
     return () => {
       offTranscript();
       offEnd();
-      void bridge.speechStop();
+      void speechInput.stop();
     };
   }, [recording]);
 
   const toggleMic = () => {
-    if (!capabilities.dictation.available || !window.ogb) {
-      setSpeechError("Dictation isn't available in this build.");
+    if (!capabilities.dictation.available || !speechInput.available()) {
+      setSpeechError("Dictation isn't supported by this browser. Try Chrome, Edge, or the desktop app.");
       return;
     }
     baseText.current = text.trim();
     setRecording((r) => !r);
+  };
+
+  const attachPickedFiles = async (files: FileList | null) => {
+    if (!files?.length) return;
+    const selected = Array.from(files);
+    const images = engineSupportsImages ? selected.filter(isImageFile) : [];
+    const rest = selected.filter((file) => !isImageFile(file));
+    const next: Attachment[] = [];
+    const failures: string[] = engineSupportsImages ? [] : selected.filter(isImageFile).map((file) => file.name);
+    const dropped = await attachmentsFromDroppedFiles(
+      rest,
+      (file) => window.ogb?.getPathForFile?.(file) ?? "",
+      fileAttachmentFromFile,
+    );
+    next.push(...dropped.attachments);
+    failures.push(...dropped.rejectedNames);
+    for (const file of images) {
+      try {
+        const image = await imageAttachmentFromFile(file);
+        if (image) next.push(image);
+      } catch {
+        failures.push(file.name);
+      }
+    }
+    if (next.length) addAttachments(next);
+    if (failures.length) dispatch({ type: "error", message: `${failures.join(", ")} could not be attached. Files can be up to 25 MB.` });
+    if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
   return (
@@ -328,6 +363,24 @@ export function Composer({
           allowImages={engineSupportsImages}
         />
         <div className="flex items-end gap-2 rounded-3xl border border-hairline/40 bg-raised/60 py-2 pl-3 pr-2">
+        <input
+          ref={fileInputRef}
+          type="file"
+          multiple
+          className="hidden"
+          onChange={(event) => void attachPickedFiles(event.currentTarget.files)}
+        />
+        {!locked && !busy && (
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            aria-label="Attach files"
+            title="Attach files (up to 25 MB each)"
+            className="flex size-8 shrink-0 items-center justify-center rounded-full text-ink-secondary hover:bg-raised hover:text-ink"
+          >
+            <Paperclip size={17} />
+          </button>
+        )}
         <textarea
           ref={inputRef}
           rows={1}

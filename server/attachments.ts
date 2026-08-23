@@ -11,19 +11,20 @@ export const ATTACHMENTS_DIR = join(DATA_DIR, "attachments");
 /** The spec's ceiling: a screenshot bigger than this is rejected before it
  * is ever buffered, matching the composer's existing size discipline. */
 export const IMAGE_MAX_BYTES = 10 * 1024 * 1024;
+export const FILE_MAX_BYTES = 25 * 1024 * 1024;
 
 /** Mimes the endpoint accepts, mapped to the extension stored on disk.
  * Sniffing is not attempted — a lie here only changes the filename. */
-const IMAGE_MIMES: Record<string, string> = {
-  "image/png": ".png",
-  "image/jpeg": ".jpg",
-  "image/gif": ".gif",
-  "image/webp": ".webp",
-};
+const IMAGE_MIMES = new Map([
+  ["image/png", ".png"],
+  ["image/jpeg", ".jpg"],
+  ["image/gif", ".gif"],
+  ["image/webp", ".webp"],
+]);
 
 export function extensionForMime(mime: string | undefined): string | null {
   if (!mime) return null;
-  return IMAGE_MIMES[mime.split(";")[0]!.trim().toLowerCase()] ?? null;
+  return IMAGE_MIMES.get(mime.split(";")[0]!.trim().toLowerCase()) ?? null;
 }
 
 export function ensureAttachmentsDir(): void {
@@ -51,6 +52,22 @@ export function saveImage(bytes: Buffer, mime: string): SavedAttachment {
   const path = join(ATTACHMENTS_DIR, name);
   writeFileSync(path, bytes, { mode: 0o600, flag: "wx" });
   return { path, mime: mime.split(";")[0]!.trim().toLowerCase(), bytes: bytes.byteLength };
+}
+
+/** Persist a browser-uploaded file so local agent processes can open the
+ * same absolute path they receive from a desktop drag. The original base
+ * name is never used; only a short, conservative extension is retained. */
+export function saveFile(bytes: Buffer, originalName: string, mime = "application/octet-stream"): SavedAttachment {
+  if (bytes.byteLength === 0) throw Object.assign(new Error("empty file"), { status: 400 });
+  if (bytes.byteLength > FILE_MAX_BYTES) {
+    throw Object.assign(new Error(`file exceeds ${FILE_MAX_BYTES} bytes`), { status: 413 });
+  }
+  const candidate = extname(originalName).toLowerCase();
+  const ext = /^\.[a-z0-9][a-z0-9._-]{0,15}$/.test(candidate) ? candidate : ".bin";
+  ensureAttachmentsDir();
+  const path = join(ATTACHMENTS_DIR, `${randomUUID()}${ext}`);
+  writeFileSync(path, bytes, { mode: 0o600, flag: "wx" });
+  return { path, mime: mime.split(";")[0]!.trim().toLowerCase() || "application/octet-stream", bytes: bytes.byteLength };
 }
 
 /** Existence check with the same name discipline as readAttachment, without

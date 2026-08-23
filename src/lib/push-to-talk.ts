@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 
 import { currentCall } from "./call";
+import { speechInput } from "./speech-input";
 
 type ModifierEvent = Pick<KeyboardEvent, "altKey" | "ctrlKey" | "code" | "repeat">;
 
@@ -30,14 +31,13 @@ export function usePushToTalk(targetId: string, enabled: boolean, onError: () =>
   }, [enabled]);
 
   useEffect(() => {
-    const bridge = window.ogb;
-    if (!bridge?.speechFinish) return;
+    if (!speechInput.available()) return;
 
     const finish = () => {
       if (!held.current) return;
       held.current = false;
       setActive(false);
-      void bridge.speechFinish?.();
+      void speechInput.finish();
     };
     const onKeyDown = (event: KeyboardEvent) => {
       if (
@@ -51,7 +51,7 @@ export function usePushToTalk(targetId: string, enabled: boolean, onError: () =>
       event.preventDefault();
       held.current = true;
       setActive(true);
-      void bridge.speechStart().catch(() => {
+      void speechInput.start().catch(() => {
         held.current = false;
         setActive(false);
         onErrorRef.current();

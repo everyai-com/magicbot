@@ -18,6 +18,7 @@ import { cn } from "@/lib/cn";
 import { MausAvatar } from "./Avatar";
 import { CallTargetButton } from "./CallView";
 import { pendingApprovals } from "./PendingApproval";
+import { speechInput } from "@/lib/speech-input";
 
 const YES = /^(yes|yeah|yep|yup|sure|ok|okay|go ahead|do it|allow|approve|approved|fine|please do)\b/i;
 const NO = /^(no|nope|don'?t|do not|stop|deny|denied|cancel|never|skip it)\b/i;
@@ -104,7 +105,7 @@ function GroupCall({ group, members }: { group: Group; members: Bot[] }) {
   }, []);
 
   const hush = useCallback(() => {
-    void window.ogb?.speechStop();
+    void speechInput.stop();
   }, []);
 
   const listen = useCallback(() => {
@@ -113,9 +114,9 @@ function GroupCall({ group, members }: { group: Group; members: Bot[] }) {
     setSpeakingMemberId(null);
     setHeard("");
     setNote(null);
-    void window.ogb?.speechStart({ endpointMs: CALL_ENDPOINT_MS }).catch(() => {
+    void speechInput.start({ endpointMs: CALL_ENDPOINT_MS }).catch(() => {
       if (alive.current && currentCall() === group.id) {
-        setNote("The microphone couldn't start. Check Microphone and Speech Recognition access.");
+        setNote("The microphone couldn't start. Check microphone permission for this app or site.");
       }
     });
   }, [group.id, move]);
@@ -196,9 +197,7 @@ function GroupCall({ group, members }: { group: Group; members: Bot[] }) {
   }, [group.id]);
 
   useEffect(() => {
-    const bridge = window.ogb;
-    if (!bridge) return;
-    const offTranscript = bridge.onSpeechTranscript((line) => {
+    const offTranscript = speechInput.onTranscript((line) => {
       if (!alive.current || currentCall() !== group.id || phaseRef.current !== "listening") return;
       if (line.error) {
         setNote("Dictation stopped unexpectedly. Check Microphone and Speech Recognition access.");
@@ -258,17 +257,19 @@ function GroupCall({ group, members }: { group: Group; members: Bot[] }) {
       dispatch({ type: "sendGroup", groupId: group.id, text: routed.text });
       scheduleListen(false, 600);
     });
-    const offEnd = bridge.onSpeechEnd(({ code, reason }) => {
+    const offEnd = speechInput.onEnd(({ code, reason }) => {
       if (!alive.current || currentCall() !== group.id) return;
       if (code === 2) {
-        setNote("Calls need macOS dictation, which isn't available here yet.");
+        setNote("Speech recognition does not support this language or browser.");
         return;
       }
       if (code === 1) {
         setNote(
           reason === "helper-build-failed"
             ? "The dictation helper couldn't be built. Install Apple's Command Line Tools and try again."
-            : "Dictation needs Microphone + Speech Recognition access in System Settings.",
+            : window.ogb
+              ? "Dictation needs Microphone + Speech Recognition access in System Settings."
+              : "Allow microphone access in this site's browser permissions, then try again.",
         );
         return;
       }
@@ -279,7 +280,7 @@ function GroupCall({ group, members }: { group: Group; members: Bot[] }) {
     return () => {
       offTranscript();
       offEnd();
-      void window.ogb?.speechStop();
+      void speechInput.stop();
     };
     // Live busy/card changes are handled below without restarting native capture.
     // eslint-disable-next-line react-hooks/exhaustive-deps

@@ -123,8 +123,24 @@ export function pasteAttachment(text: string): PasteAttachment {
 }
 
 export const INLINE_DROP_LIMIT = 512 * 1024;
+export const FILE_MAX_BYTES = 25 * 1024 * 1024;
 
 export type DroppedFile = Pick<File, "name" | "size" | "type" | "text">;
+
+export async function fileAttachmentFromFile(file: File): Promise<FileAttachment> {
+  if (file.size > FILE_MAX_BYTES) throw Object.assign(new Error(`${file.name} exceeds 25 MB`), { status: 413 });
+  const response = await fetch(`/api/file-attachments?name=${encodeURIComponent(file.name || "attachment.bin")}`, {
+    method: "POST",
+    headers: { "content-type": file.type || "application/octet-stream" },
+    body: new Uint8Array(await file.arrayBuffer()),
+  });
+  if (!response.ok) {
+    const detail = (await response.json().catch(() => ({ error: response.statusText }))) as { error?: string };
+    throw Object.assign(new Error(detail.error ?? "upload failed"), { status: response.status });
+  }
+  const saved = (await response.json()) as { path: string; bytes: number };
+  return fileAttachment(file.name || "attachment", saved.path, saved.bytes);
+}
 
 /** Turn a browser drop into composer attachments. Electron-backed files
  * keep their disk path; small pathless text drops keep their contents.
@@ -133,6 +149,7 @@ export type DroppedFile = Pick<File, "name" | "size" | "type" | "text">;
 export async function attachmentsFromDroppedFiles<T extends DroppedFile>(
   files: readonly T[],
   getPath: (file: T) => string,
+  upload?: (file: T) => Promise<FileAttachment>,
 ): Promise<{ attachments: Attachment[]; rejectedNames: string[] }> {
   const results = await Promise.all(
     files.map(async (file) => {
@@ -148,6 +165,14 @@ export async function attachmentsFromDroppedFiles<T extends DroppedFile>(
           return { attachment: pasteAttachment(await file.text()) };
         } catch {
           // Treat an unreadable browser drag like any other pathless file.
+        }
+      }
+      if (upload) {
+        try {
+          return { attachment: await upload(file) };
+        } catch {
+          // The caller reports the rejected name without leaking server text
+          // into a chip; its normal upload-error notice remains actionable.
         }
       }
       return { rejectedName: file.name };

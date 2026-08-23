@@ -1,6 +1,6 @@
 // attachments.ts: save + read-back, the mime allowlist, size ceiling, and
 // the name-lock that keeps the serving route inside the attachments dir.
-import { mkdtempSync, rmSync, statSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -10,7 +10,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 const DATA_ROOT = mkdtempSync(join(tmpdir(), "omb-attachments-"));
 process.env.OMB_DATA_DIR = join(DATA_ROOT, "data");
 
-const { ATTACHMENTS_DIR, IMAGE_MAX_BYTES, extensionForMime, readAttachment, saveImage } = await import("./attachments.ts");
+const { ATTACHMENTS_DIR, FILE_MAX_BYTES, IMAGE_MAX_BYTES, extensionForMime, readAttachment, saveFile, saveImage } = await import("./attachments.ts");
 
 describe("extensionForMime", () => {
   it("maps the accepted image mimes to extensions", () => {
@@ -81,5 +81,24 @@ describe("readAttachment name lock", () => {
     expect(readAttachment("a/b.png")).toBeNull();
     expect(readAttachment("no-extension")).toBeNull();
     expect(readAttachment("uuid.jpeg")).toBeNull(); // saved as .jpg
+  });
+});
+
+describe("saveFile", () => {
+  beforeEach(() => rmSync(ATTACHMENTS_DIR, { recursive: true, force: true }));
+  afterEach(() => rmSync(ATTACHMENTS_DIR, { recursive: true, force: true }));
+
+  it("stores browser files under generated names while preserving a safe extension", () => {
+    const saved = saveFile(Buffer.from("a,b\n1,2\n"), "../../Quarterly Report.CSV", "text/csv");
+    expect(saved.path.startsWith(ATTACHMENTS_DIR)).toBe(true);
+    expect(saved.path.endsWith(".csv")).toBe(true);
+    expect(readFileSync(saved.path, "utf8")).toBe("a,b\n1,2\n");
+    expect(saved.mime).toBe("text/csv");
+  });
+
+  it("uses a neutral extension and enforces the upload ceiling", () => {
+    expect(saveFile(Buffer.from("x"), "payload.<script>").path.endsWith(".bin")).toBe(true);
+    expect(() => saveFile(Buffer.alloc(0), "empty.txt")).toThrow(/empty/);
+    expect(() => saveFile(Buffer.alloc(FILE_MAX_BYTES + 1), "huge.bin")).toThrow(/exceeds/);
   });
 });

@@ -13,7 +13,16 @@ import { botAvatarUrlFromStoredPath } from "../shared/bot-avatar.ts";
 import { approvalKey, autoVerdict } from "./auto-approve.ts";
 import { appendDecision, readDecisions } from "./decision-log.ts";
 import { validateBotCwd } from "./bot-cwd.ts";
-import { attachmentExists, extensionForMime, IMAGE_MAX_BYTES, readAttachment, saveImage, type SavedAttachment } from "./attachments.ts";
+import {
+  attachmentExists,
+  extensionForMime,
+  FILE_MAX_BYTES,
+  IMAGE_MAX_BYTES,
+  readAttachment,
+  saveFile,
+  saveImage,
+  type SavedAttachment,
+} from "./attachments.ts";
 import {
   avatarGenerationRequestSchema,
   avatarGenerationStateMatches,
@@ -125,6 +134,7 @@ const MIME: Record<string, string> = {
   ".png": "image/png",
   ".ico": "image/x-icon",
   ".json": "application/json",
+  ".webmanifest": "application/manifest+json",
   ".woff2": "font/woff2",
 };
 
@@ -3003,6 +3013,42 @@ const server = createServer(async (req, res) => {
           }
         });
         req.on("error", (e) => fail(400, e instanceof Error ? e.message : String(e)));
+      });
+      return json(res, 201, saved);
+    }
+
+    // Browser File objects deliberately hide their local path. Upload a
+    // normal file into the app-owned attachment directory so web users get
+    // the same agent-readable path semantics as a Finder/Explorer drag.
+    if (method === "POST" && path === "/api/file-attachments") {
+      const name = (url.searchParams.get("name") ?? "attachment.bin").slice(0, 255);
+      const rawType = Array.isArray(req.headers["content-type"]) ? req.headers["content-type"][0] : req.headers["content-type"];
+      const mime = rawType?.split(";")[0]?.trim().toLowerCase() || "application/octet-stream";
+      const saved = await new Promise<SavedAttachment>((resolve, reject) => {
+        const chunks: Buffer[] = [];
+        let received = 0;
+        let settled = false;
+        const fail = (status: number, message: string) => {
+          if (settled) return;
+          settled = true;
+          reject(Object.assign(new Error(message), { status }));
+        };
+        req.on("data", (chunk: Buffer) => {
+          if (settled) return;
+          received += chunk.byteLength;
+          if (received > FILE_MAX_BYTES) return fail(413, `file exceeds ${FILE_MAX_BYTES} bytes`);
+          chunks.push(chunk);
+        });
+        req.on("end", () => {
+          if (settled) return;
+          settled = true;
+          try {
+            resolve(saveFile(Buffer.concat(chunks), name, mime));
+          } catch (error) {
+            reject(error);
+          }
+        });
+        req.on("error", (error) => fail(400, error instanceof Error ? error.message : String(error)));
       });
       return json(res, 201, saved);
     }

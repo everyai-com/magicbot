@@ -1,41 +1,47 @@
-const browserCapabilities: DesktopCapabilities = {
-  host: {
-    platform: "other",
-    label: "Browser",
-    session: "unknown",
-    packaged: false,
-  },
-  windowChrome: "native",
-  screenPreview: {
-    available: false,
-    interaction: "none",
-    reasonCode: "desktop-app-required",
-  },
-  dictation: {
-    available: false,
-    engine: "none",
-    onDevice: false,
-    reasonCode: "desktop-app-required",
-  },
-  localComputer: {
-    available: false,
-    support: "unsupported",
-    enabled: false,
-    status: "unavailable",
-    reasonCode: "desktop-app-required",
-  },
-};
+import { speechInput } from "./speech-input";
+
+function makeBrowserCapabilities(): DesktopCapabilities {
+  const speechAvailable = speechInput.available();
+  return {
+    host: {
+      platform: "other",
+      label: "Browser",
+      session: "unknown",
+      packaged: false,
+    },
+    windowChrome: "native",
+    screenPreview: {
+      available: false,
+      interaction: "none",
+      reasonCode: "desktop-app-required",
+    },
+    dictation: {
+      available: speechAvailable,
+      engine: speechAvailable ? "browser-speech" : "none",
+      onDevice: false,
+      reasonCode: speechAvailable ? undefined : "browser-speech-unavailable",
+    },
+    localComputer: {
+      available: false,
+      support: "unsupported",
+      enabled: false,
+      status: "unavailable",
+      reasonCode: "desktop-app-required",
+    },
+  };
+}
 
 let cached: DesktopCapabilities | null = null;
 let cacheRevision = 0;
 
 export function browserDesktopCapabilities(): DesktopCapabilities {
-  return browserCapabilities;
+  return makeBrowserCapabilities();
 }
 
 export function initialDesktopCapabilities(): DesktopCapabilities {
   const platform = window.ogb?.platform;
-  if (!platform) return browserCapabilities;
+  if (!platform) return makeBrowserCapabilities();
+  const browserCapabilities = makeBrowserCapabilities();
   const isMac = platform === "darwin";
   const dictation: DesktopCapabilities["dictation"] = {
     available: isMac,
@@ -57,13 +63,13 @@ export function initialDesktopCapabilities(): DesktopCapabilities {
 
 export async function loadDesktopCapabilities(): Promise<DesktopCapabilities> {
   if (cached) return cached;
-  if (!window.ogb?.getCapabilities) return browserCapabilities;
+  if (!window.ogb?.getCapabilities) return makeBrowserCapabilities();
   const revisionAtStart = cacheRevision;
   let loaded: DesktopCapabilities;
   try {
     loaded = await window.ogb.getCapabilities();
   } catch {
-    loaded = browserCapabilities;
+    loaded = makeBrowserCapabilities();
   }
   // An IPC push may deliver newer runtime readiness while the initial query is
   // still pending. Never let that older response replace the pushed state.
