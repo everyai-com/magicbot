@@ -309,7 +309,6 @@ export function SettingsModal() {
                     </div>
                   ) : null}
                   <TranscriptionSettings />
-                  <ApiKeyRow section="box" />
                   <CloudflareConnection />
                   <VpsConnection />
                   <ApiKeyRow section="opencodeGo" />

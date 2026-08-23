@@ -172,7 +172,7 @@ export interface Bot {
   modelSelection: ModelSelection;
   /** Where this bot's computer runs; unset = auto (cloud box if one exists, else local). */
   computer?: "cloud" | "vm" | "local" | "off";
-  /** Which cloud computer backs `computer: "cloud"`; absent means Box. */
+  /** Which cloud computer backs `computer: "cloud"`; new and migrated bots use Cloudflare. */
   cloudBackend?: CloudBackend;
   /** where new tasks run their shell tools; absent = the private bot workspace */
   cwd?: string;
@@ -234,7 +234,6 @@ export function messageVersions(bot: Bot, message: Message): Message[] {
 export interface ConfigStatus {
   xai?: { configured: boolean };
   composio: { configured: boolean; mode?: "managed" | "self-hosted" | "unavailable" };
-  box: { configured: boolean };
   cfComputer: { configured: boolean; url: string };
   vps: { configured: boolean; sshAlias: string };
   rooms: { turnTimeoutMinutes: number };
@@ -252,14 +251,13 @@ export interface ConfigStatus {
 
 export type ConfigStatusFrame = Pick<
   ConfigStatus,
-  "xai" | "composio" | "box" | "cfComputer" | "vps" | "rooms" | "localVm" | "opencodeGo" | "tts" | "imageGen" | "profile"
+  "xai" | "composio" | "cfComputer" | "vps" | "rooms" | "localVm" | "opencodeGo" | "tts" | "imageGen" | "profile"
 >;
 
 export function configStatusFromFrame(frame: ConfigStatusFrame): ConfigStatus {
   return {
     xai: frame.xai,
     composio: frame.composio,
-    box: frame.box,
     cfComputer: frame.cfComputer,
     vps: frame.vps,
     rooms: frame.rooms,

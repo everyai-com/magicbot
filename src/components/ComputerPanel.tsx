@@ -1,6 +1,6 @@
 // The bot's computer, in the right-side slot. Where it runs decides the
-// whole flow: cloud → provision the box on open (idempotent) and preview
-// via SSE frames or a ~4s screenshot poll. macOS local mode keeps the legacy
+// whole flow: Cloudflare → attach a persistent headless Sandbox; VPS →
+// provision and preview. macOS local mode keeps the legacy
 // in-panel capture. Linux local mode is an automation readiness state and its
 // separate preview remains explicitly user-initiated. Auto never selects a
 // Linux user's desktop.
@@ -20,7 +20,6 @@ import {
 } from "lucide-react";
 import { useStore, type Bot } from "@/state/store";
 import type { Routine } from "@/lib/routines";
-import { ApiKeyRow } from "./ApiKeys";
 import { cn } from "@/lib/cn";
 import { CloudBackendPicker } from "./CloudBackendPicker";
 import { useDesktopCapabilities } from "./DesktopCapabilities";
@@ -131,10 +130,10 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
   const [error, setError] = useState<string | null>(null);
   const [creatingRoutine, setCreatingRoutine] = useState(false);
   const [panelView, setPanelView] = useState<"computer" | "android">("computer");
+  // Refreshes status after Local VM lifecycle operations/readiness polling.
+  const [retry, setRetry] = useState(0);
   const androidStatus = useAndroidUsbDevices();
   const androidConnected = androidStatus.devices.length > 0;
-  // bumped when a Box API key is saved inline, to re-run the spin-up flow
-  const [retry, setRetry] = useState(0);
   const vmReadinessAttempts = useRef(0);
   const selectedInstance = state.instances.find(
     (instance) => instance.instanceId === bot.modelSelection.instanceId,
@@ -159,25 +158,18 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
   );
   const computerToolSupported = selectedInstance?.capabilities?.computerMcp === true;
   const vpsSupported = Boolean(computerToolSupported && selectedInstance?.driverKind !== "boxAgent");
-  const cloudBackend = bot.cloudBackend ?? "box";
-  const cloudSupported = cloudBackend === "vps"
-    ? vpsSupported
-    : cloudBackend === "cloudflare"
-      ? vpsSupported
-    : computerToolSupported || selectedInstance?.driverKind === "boxAgent";
+  const cloudBackend = bot.cloudBackend === "box" || !bot.cloudBackend ? "cloudflare" : bot.cloudBackend;
+  const cloudSupported = vpsSupported;
   const botRoutines = state.routines
     .filter((routine) => routine.botId === bot.id)
     .sort((a, b) => Number(b.enabled) - Number(a.enabled) || (a.nextRunAt ?? Infinity) - (b.nextRunAt ?? Infinity));
-  const cloudRoutineReady = Boolean(
-    state.config?.box.configured &&
-      state.instances.some((instance) => instance.driverKind === "boxAgent" && instance.snapshot.state === "available"),
-  );
+  const cloudRoutineReady = Boolean(state.config?.cfComputer.configured && vpsSupported);
   const activeRoutineRun = state.routineRuns.find(
     (run) => run.botId === bot.id && ["queued", "running", "waiting"].includes(run.status),
   );
   const computerDestination =
     bot.computer === "cloud"
-      ? cloudBackend === "vps" ? "this self-hosted VPS" : cloudBackend === "cloudflare" ? "this Cloudflare computer" : "this cloud box"
+      ? cloudBackend === "vps" ? "this self-hosted VPS" : "this Cloudflare computer"
       : bot.computer === "vm"
         ? "the Local VM"
       : bot.computer === "local"
@@ -185,7 +177,7 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
         : bot.computer === "off"
           ? null
           : phase === "ready"
-            ? cloudBackend === "vps" ? "the self-hosted VPS selected by Auto" : cloudBackend === "cloudflare" ? "the Cloudflare computer selected by Auto" : "the cloud box selected by Auto"
+            ? cloudBackend === "vps" ? "the self-hosted VPS selected by Auto" : "the Cloudflare computer selected by Auto"
             : "this computer selected by Auto";
 
   // resolve the mode on open; box endpoints are only ever hit on the
@@ -274,7 +266,7 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
       if (!vpsSupported) {
         if (autoLocal) setPhase("local");
         else {
-          setError("This model engine cannot use a Cloudflare computer. Choose Claude or an ACP engine, or switch the cloud backend to Box.");
+          setError("This model engine cannot use a Cloudflare computer. Choose Claude or an ACP engine.");
           setPhase("error");
         }
         return;
@@ -305,7 +297,7 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
       if (!vpsSupported) {
         if (autoLocal) setPhase("local");
         else {
-          setError("This model engine cannot use a self-hosted VPS. Choose Claude or an ACP engine, or switch the cloud backend to Box.");
+          setError("This model engine cannot use a self-hosted VPS. Choose Claude or an ACP engine.");
           setPhase("error");
         }
         return;
@@ -822,12 +814,14 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
         {phase === "unconfigured" && (
           <div className="mt-3 rounded-xl bg-card p-4">
             <div className="mb-3 text-[13px] text-ink-secondary">
-              Add a Box API key to give this bot a cloud computer — it spins up right here.
+              Connect your Cloudflare Worker to give this bot a persistent headless Linux computer.
             </div>
-            <ApiKeyRow
-              section="box"
-              onSaved={(configured) => configured && setRetry((n) => n + 1)}
-            />
+            <button
+              onClick={openConnectionSettings}
+              className="rounded-lg bg-control px-3 py-2 text-[13px] text-ink hover:bg-raised-hover"
+            >
+              Open Cloudflare settings
+            </button>
           </div>
         )}
         {phase === "vps-unconfigured" && (
@@ -852,9 +846,7 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
             </div>
             <div className="mt-2 flex gap-2">
               <button
-                onClick={() =>
-                  phase === "vm" || cloudBackend === "box" ? void openDesktop() : controlAction("take")
-                }
+                onClick={() => phase === "vm" ? void openDesktop() : controlAction("take")}
                 disabled={controlPending || pending === "join"}
                 className="flex flex-1 items-center justify-center gap-2 rounded-lg bg-accent py-2 text-[13px] font-medium text-white hover:brightness-110 disabled:opacity-50"
               >
@@ -875,7 +867,6 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
           <div className="mt-3 rounded-xl border border-accent/25 bg-accent/10 p-4">
             <div className="text-[13px] leading-relaxed text-ink">
               You have the wheel — the bot's clicks and keystrokes are refused until you hand it back.
-              {phase === "ready" && cloudBackend === "box" && " Use Open desktop to drive."}
               {phase === "vm" && " Use Open desktop to drive — the preview here is watch-only."}
             </div>
             <button
@@ -926,25 +917,13 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
           <div className="mt-3 flex gap-2">
             {!control.held && !control.helpReason && (
               <button
-                onClick={() =>
-                  cloudBackend === "box" ? void openDesktop() : controlAction("take")
-                }
+                onClick={() => controlAction("take")}
                 disabled={controlPending || pending === "join"}
                 className="flex flex-1 items-center justify-center gap-2 rounded-lg bg-control py-2 text-[13px] text-ink hover:bg-raised-hover disabled:opacity-50"
                 title="Pause the bot's hands and drive this computer yourself"
               >
                 {pending === "join" ? <Loader2 size={14} className="animate-spin" /> : <Hand size={14} />}
                 Take control
-              </button>
-            )}
-            {cloudBackend === "box" && control.held && (
-              <button
-                onClick={() => void openDesktop()}
-                disabled={pending === "join"}
-                className="flex flex-1 items-center justify-center gap-2 rounded-lg bg-control py-2 text-[13px] text-ink hover:bg-raised-hover disabled:opacity-50"
-              >
-                {pending === "join" ? <Loader2 size={14} className="animate-spin" /> : <Monitor size={14} />}
-                Open live desktop
               </button>
             )}
             {(cloudBackend === "vps" || boxState !== "archived") && (
@@ -976,7 +955,7 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
                     : `${linuxAutoDescription()} `
                   : cloudBackend === "vps"
                     ? "Auto reuses a ready VPS when one exists, otherwise this computer. "
-                    : "Auto uses a cloud box when one exists, otherwise this computer. ")}
+                    : "Auto uses Cloudflare when it is connected, otherwise this computer. ")}
               Pick where this bot's computer lives. <b className="text-ink">Local VM</b> is a Cua-controlled Linux desktop
               in a container on this machine — free and separate from your own desktop. Set it up in App
               Settings → Local VM.
@@ -1056,7 +1035,7 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
           {!computerDestination && (
             <div className="mt-3 flex items-start gap-2 rounded-lg border border-warning/25 bg-warning/10 px-3 py-2 text-[11.5px] leading-relaxed text-warning">
               <Power size={13} className="mt-0.5 shrink-0" />
-              Scheduled tasks on this computer will not have desktop access while this is Off. Choose Cloud VM in the schedule editor to run the whole job there.
+              Scheduled tasks on this computer will not have computer access while this is Off. Choose Cloudflare in the schedule editor to attach the Cloudflare computer.
             </div>
           )}
           {activeRoutineRun && (
@@ -1082,7 +1061,7 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-[12.5px] font-medium text-ink">{routine.name}</span>
                     <span className="block truncate text-[10.5px] text-ink-secondary">
-                      {routineScheduleLabel(routine)}{routine.runOn === "cloud" ? " · runs on VM" : ""}
+                      {routineScheduleLabel(routine)}{routine.runOn === "cloud" ? " · Cloudflare" : ""}
                     </span>
                   </span>
                   <span className="shrink-0 text-[10px] text-ink-secondary">{nextRunLabel(routine.nextRunAt)}</span>

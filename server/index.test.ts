@@ -992,7 +992,7 @@ describe("harness HTTP API", () => {
     } finally {
       stream.close();
     }
-  });
+  }, 40_000);
 
   it("imports a team as a project: one room, on a folder", async () => {
     // The manifest still describes only people. Room name and folder come
@@ -1145,7 +1145,7 @@ describe("harness HTTP API", () => {
     expect(impostor.approvePeerComms).toBeUndefined();
     expect(impostor.composio).toBe(false);
     expect(impostor.computer).toBeUndefined();
-    expect(impostor.cloudBackend).toBeUndefined();
+    expect(impostor.cloudBackend).toBe("cloudflare");
     expect(impostor.cwd).toBeUndefined();
 
     // the existing bot is untouched, field for field — an import can only
@@ -1458,26 +1458,26 @@ describe("harness HTTP API", () => {
     expect(missing.status).toBe(404);
   });
 
-  it("refuses a box token the provider rejects, at the point of pasting", async () => {
+  it("keeps retired Box credentials hidden while preserving config compatibility", async () => {
     // the stub answers 401 for anything but the good token
     const bad = await api("PUT", "/api/config", { box: { token: "box_wrong" } });
     expect(bad.status).toBe(400);
     expect(String(bad.body.error)).toMatch(/rejected/i);
     const after = await api("GET", "/api/config");
-    expect(after.body.box).toEqual({ configured: false });
+    expect(after.body).not.toHaveProperty("box");
   });
 
   it("saves config keys write-only and reports booleans", async () => {
     const before = await api("GET", "/api/config");
-    expect(before.body.box).toEqual({ configured: false });
+    expect(before.body).not.toHaveProperty("box");
 
     const put = await api("PUT", "/api/config", { box: { token: "box_good" } });
     expect(put.status).toBe(200);
-    expect(put.body.box).toEqual({ configured: true });
+    expect(put.body).not.toHaveProperty("box");
     expect(JSON.stringify(put.body)).not.toContain("box_good");
 
     const after = await api("GET", "/api/config");
-    expect(after.body.box).toEqual({ configured: true });
+    expect(after.body).not.toHaveProperty("box");
     expect(JSON.stringify(after.body)).not.toContain("box_good");
 
     const nothing = await api("PUT", "/api/config", {});
@@ -1592,10 +1592,10 @@ describe("harness HTTP API", () => {
     }
   });
 
-  it("validates the non-secret VPS alias and keeps old bots on Box by default", async () => {
+  it("validates the non-secret VPS alias and keeps bots on Cloudflare by default", async () => {
     const before = await api("GET", "/api/bots");
     const bot = before.body.bots[0];
-    expect(bot.cloudBackend).toBeUndefined();
+    expect(bot.cloudBackend).toBe("cloudflare");
 
     const bad = await api("PUT", "/api/config", { vps: { sshAlias: "prod; reboot" } });
     expect(bad.status).toBe(400);

@@ -621,7 +621,7 @@ export function SettingsPanel({ bot }: { bot: Bot }) {
             </div>
             {(!bot.computer || bot.computer === "cloud") && (
               <CloudBackendPicker
-                value={bot.cloudBackend ?? "box"}
+                value={bot.cloudBackend ?? "cloudflare"}
                 vpsSupported={canUseVps}
                 onChange={(backend) => patch({ cloudBackend: backend })}
               />

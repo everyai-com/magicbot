@@ -246,7 +246,7 @@ posixOnly("VPS turn routing e2e (fake ACP fleet + fake docker over SSH)", () => 
       expect(aliasChange.status).toBe(409);
       expect(aliasChange.body.error).toMatch(/active VPS turn/);
       // ...and neither can the bot's cloud backend
-      expect((await api("PATCH", `/api/bots/${bot.id}`, { cloudBackend: "box" })).status).toBe(409);
+      expect((await api("PATCH", `/api/bots/${bot.id}`, { cloudBackend: "cloudflare" })).status).toBe(409);
 
       // open the gate: the echo settles carrying the FULL prompt
       writeFileSync(gateFile, "open");

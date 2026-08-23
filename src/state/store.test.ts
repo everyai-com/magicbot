@@ -49,7 +49,6 @@ describe("config status frames", () => {
       configStatusFromFrame({
         xai: { configured: true },
         composio: { configured: true, mode: "managed" },
-        box: { configured: false },
         cfComputer: { configured: false, url: "" },
         vps: { configured: true, sshAlias: "homelab" },
         rooms: { turnTimeoutMinutes: 20 },
@@ -62,7 +61,6 @@ describe("config status frames", () => {
     ).toEqual({
       xai: { configured: true },
       composio: { configured: true, mode: "managed" },
-      box: { configured: false },
       cfComputer: { configured: false, url: "" },
       vps: { configured: true, sshAlias: "homelab" },
       rooms: { turnTimeoutMinutes: 20 },

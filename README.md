@@ -176,7 +176,7 @@ flowchart LR
     BUS -- "one SSE stream" --> UI
     REG --> CL & CX & GR
     CL & CX & GR -- "permission requests" --> BROKER
-    server -- "Box API" --> BOX[("Cloud computer<br/>box.ascii.dev")]
+    server -- "Worker API" --> CF[("Cloudflare Sandbox<br/>one computer per bot")]
     server -- "Composio Session" --> APPS[("Gmail · Slack · GitHub · …")]
 ```
 
@@ -230,7 +230,7 @@ pnpm package:linux    # Ubuntu x64: .deb + AppImage + verified CUA runtime
 | Capability | macOS | Ubuntu 24.04 Xorg | Ubuntu 24.04 Wayland |
 |---|---|---|---|
 | Packaged app, embedded harness, local agent CLIs | Supported | Beta | Beta |
-| Composio and Box/cloud computers | Supported | Beta | Beta |
+| Composio and Cloudflare computers | Supported | Beta | Beta |
 | Explicit preview-only local screen capture | Supported | Beta | Beta |
 | Bot control of this computer | Supported | Beta: opt-in, bundled Cua 0.19.3 | Beta: GNOME only, opt-in, bundled Cua 0.19.3; separately installed WinRects v8 helper |
 | Native on-device dictation | Supported | Planned | Planned |
@@ -256,11 +256,11 @@ in the sidebar footer) when you want to enable its integration:
 | Credential | What it enables | Where to get it |
 |---|---|---|
 | Composio project key (`ak_…`) | Connect Gmail, GitHub, Slack, Notion, and other apps to your bots | [OpenMausBot Composio setup](docs/composio.md) |
-| Box API key | Give bots an isolated remote Linux computer with a desktop and terminal | [Box API key guide](https://docs.ascii.dev/box/api-keys) |
+| Cloudflare Worker URL + bearer token | Give every bot a persistent isolated Linux computer with shell, code, and files | [Cloudflare computer setup](cf-computer/README.md) |
 | ElevenLabs key | Read replies aloud, and call your bots | [ElevenLabs API keys](https://elevenlabs.io/app/settings/api-keys) |
 
-Composio and Box are third-party services with their own accounts and terms. Box is a paid service after
-its trial, and using a cloud computer may incur charges.
+Composio and Cloudflare are third-party services with their own accounts and terms. Cloudflare Sandbox
+usage may incur charges under your Cloudflare plan.
 
 ```sh
 pnpm typecheck     # app + server

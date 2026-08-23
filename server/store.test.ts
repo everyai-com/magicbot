@@ -119,7 +119,7 @@ describe("Store", () => {
     expect(messages.at(-1)).toMatchObject({ role: "user", text: "hi there" });
   });
 
-  it("normalizes persisted cloud backends without changing valid or absent values", () => {
+  it("migrates Box, invalid, and absent cloud backends to Cloudflare", () => {
     const store = new Store(selection);
     const box = store.createBot();
     const vps = store.createBot();
@@ -133,16 +133,16 @@ describe("Store", () => {
     writeFileSync(join(DATA_DIR, "bots.json"), JSON.stringify(raw));
 
     const reloaded = new Store(selection);
-    expect(reloaded.bot(box.id)?.cloudBackend).toBe("box");
+    expect(reloaded.bot(box.id)?.cloudBackend).toBe("cloudflare");
     expect(reloaded.bot(vps.id)?.cloudBackend).toBe("vps");
-    expect(reloaded.bot(invalid.id)?.cloudBackend).toBeUndefined();
-    expect(reloaded.bot(absent.id)?.cloudBackend).toBeUndefined();
+    expect(reloaded.bot(invalid.id)?.cloudBackend).toBe("cloudflare");
+    expect(reloaded.bot(absent.id)?.cloudBackend).toBe("cloudflare");
 
     const saved: BotRecord[] = JSON.parse(readFileSync(join(DATA_DIR, "bots.json"), "utf8"));
-    expect(saved.find((bot) => bot.id === box.id)?.cloudBackend).toBe("box");
+    expect(saved.find((bot) => bot.id === box.id)?.cloudBackend).toBe("cloudflare");
     expect(saved.find((bot) => bot.id === vps.id)?.cloudBackend).toBe("vps");
-    expect(saved.find((bot) => bot.id === invalid.id)).not.toHaveProperty("cloudBackend");
-    expect(saved.find((bot) => bot.id === absent.id)).not.toHaveProperty("cloudBackend");
+    expect(saved.find((bot) => bot.id === invalid.id)?.cloudBackend).toBe("cloudflare");
+    expect(saved.find((bot) => bot.id === absent.id)?.cloudBackend).toBe("cloudflare");
   });
 
   it("migrates unambiguous legacy peer grants without guessing duplicate names", () => {

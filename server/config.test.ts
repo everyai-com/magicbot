@@ -213,15 +213,15 @@ describe("credential env narrowing", () => {
     expect(instances.codex.environment).toEqual({});
   });
 
-  it("hands no credential to any default-fleet CLI engine except the Computer", () => {
+  it("hands no workspace credential to any default-fleet CLI engine", () => {
     // the default `grok` instance is the CLI-login grokAgent, not the
     // API-key driver, so a configured xai key reaches nobody by default
     const cfg: AppConfig = { xai: { key: "SECRET-XAI" }, box: { token: "SECRET-BOX" } };
     const instances = instanceConfigs(cfg);
-    for (const [id, entry] of Object.entries(instances)) {
-      if (id === "computer") expect(entry.environment).toEqual({ BOX_TOKEN: "SECRET-BOX" });
-      else expect(entry.environment).toEqual({});
+    for (const entry of Object.values(instances)) {
+      expect(entry.environment).toEqual({});
     }
+    expect(instances).not.toHaveProperty("computer");
   });
 
   it("keeps a per-instance environment while layering the credential on top", () => {

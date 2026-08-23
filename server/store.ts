@@ -268,10 +268,10 @@ export interface BotRecord {
   modelSelection: ModelSelection;
   /** provider-native continuation per instance (e.g. claude session id) */
   resumeCursors: Record<string, unknown>;
-  /** which computer the bot acts on: its cloud box, this Mac (local CUA),
-   * or none. Unset = auto (box when it exists, else local when available). */
+  /** which computer the bot acts on: Cloudflare/VPS, this Mac (local CUA),
+   * or none. Unset = auto (cloud when available, else local). */
   computer?: "cloud" | "vm" | "local" | "off";
-  /** Which cloud computer backs `computer: "cloud"`; absent means Box. */
+  /** Which cloud computer backs `computer: "cloud"`; absent is migrated to Cloudflare. */
   cloudBackend?: CloudBackend;
   /** where NEW tasks run their shell tools; each task pins its own copy
    * on its first turn (TaskRecord.cwd). Absent = the home folder. */
@@ -460,8 +460,8 @@ export class Store {
       if (b.busy || (b.activity !== undefined && b.activity !== "idle")) botsMigrated = true;
       b.busy = false;
       b.activity = "idle";
-      if (b.cloudBackend !== undefined && b.cloudBackend !== "box" && b.cloudBackend !== "vps" && b.cloudBackend !== "cloudflare") {
-        delete b.cloudBackend;
+      if (b.cloudBackend !== "vps" && b.cloudBackend !== "cloudflare") {
+        b.cloudBackend = "cloudflare";
         botsMigrated = true;
       }
       const avatar = botAvatarProfile(b);

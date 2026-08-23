@@ -53,7 +53,7 @@ export function localComputerDisabledReason({
 }
 
 export function linuxAutoDescription(): string {
-  return "Auto uses a cloud box when one is configured; otherwise computer use stays off.";
+  return "Auto uses Cloudflare when it is connected; otherwise computer use stays off.";
 }
 
 export function autoSelectsLocalComputer({

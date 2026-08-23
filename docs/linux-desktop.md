@@ -9,7 +9,7 @@ of Linux desktop on your own server instead of this machine, see [byo-vps.md](by
 - The native Electron window and embedded OpenMausBot server on GNOME Xorg and GNOME Wayland.
 - Local Claude, Codex, Grok, Gemini, and other configured agent CLIs.
 - Chat, streaming turns, approvals, bot-to-bot communication, and local data storage.
-- Composio connected apps and Box cloud computers.
+- Composio connected apps and Cloudflare Sandbox computers.
 - External documentation and OAuth links in the default browser.
 - An explicit, view-only local screen preview on GNOME Xorg and GNOME Wayland. The Wayland path uses the
   native portal chooser and keeps the selected PipeWire stream open until the user stops sharing.
@@ -270,7 +270,7 @@ considered for automatic discovery.
 
 ### A bot needs computer tools
 
-Choose **Cloud box** and add a Box token in App Settings, or complete the local-control opt-in above on a supported
+Choose **Cloud** with the **Cloudflare** backend and connect the Worker in App Settings, or complete the local-control opt-in above on a supported
 GNOME session. A missing driver/helper, unsupported compositor or provider keeps **This computer** disabled with
 an explanation.
 

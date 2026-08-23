@@ -275,7 +275,12 @@ const wireTask = ({ resumeCursors, lastInstanceId, ...task }: TaskRecord) => tas
 
 const wireBot = (bot: NonNullable<ReturnType<typeof store.bot>>) => {
   const { resumeCursors, tasks, ...rest } = bot;
-  return { ...rest, avatarUrl: rest.avatarUrl ?? null, ...(tasks ? { tasks: tasks.map(wireTask) } : {}) };
+  return {
+    ...rest,
+    cloudBackend: rest.cloudBackend ?? "cloudflare",
+    avatarUrl: rest.avatarUrl ?? null,
+    ...(tasks ? { tasks: tasks.map(wireTask) } : {}),
+  };
 };
 
 /** Profile URLs are app-owned references, not merely strings with a trusted
@@ -1306,8 +1311,8 @@ async function startTurn(
     excludeMessageIds?: string[];
     /** Routines run in detached tasks; pin the destination for the whole turn. */
     threadId?: string;
-    /** Cloud routines run the whole agent inside the bot's Box VM instead
-     * of merely mounting that VM's computer tools on the MAUS's provider. */
+    /** Cloud routines force-mount the configured Cloudflare computer while
+     * keeping the bot's selected model and provider. */
     runOn?: RoutineRunOn;
     /** Lets the system prompt put externally supplied payloads behind an
      * explicit untrusted-data boundary without changing ordinary chat. */
@@ -1335,24 +1340,18 @@ async function startTurn(
   // a task takes its name from the first thing you asked it to do
   if (text.trim() && !opts?.connectorContinuation) store.titleTaskFromFirstMessage(bot.id, text, threadId);
 
-  const instance = opts?.runOn === "cloud"
-    ? registry.instances().find((candidate) => candidate.driverKind === "boxAgent") ?? null
-    : registry.get(bot.modelSelection.instanceId);
+  const instance = registry.get(bot.modelSelection.instanceId);
   if (!instance) {
     throw Object.assign(
       new Error(
-        opts?.runOn === "cloud"
-          ? "the Cloud VM runner is unavailable — configure Box in App Settings"
-          : `provider instance "${bot.modelSelection.instanceId}" is unavailable — pick another model in settings`,
+        `provider instance "${bot.modelSelection.instanceId}" is unavailable — pick another model in settings`,
       ),
       { status: 409 },
     );
   }
   const instanceId = instance.instanceId;
-  const model = opts?.runOn === "cloud" ? instance.models.default : bot.modelSelection.model;
-  // a cloud routine borrows the instance default model, so it borrows no
-  // per-bot effort either
-  const effort = opts?.runOn === "cloud" ? undefined : bot.modelSelection.effort;
+  const model = bot.modelSelection.model;
+  const effort = bot.modelSelection.effort;
   // A selection can be persisted while its engine is offline. Re-check when
   // the engine returns so an old or unsupported value never reaches a CLI.
   if (effort && !instance.adapter.capabilities.effortLevels?.includes(effort)) {
@@ -1463,9 +1462,9 @@ async function startTurn(
       const dwebUrl = process.env.DWEB_URL?.trim();
       if (dwebUrl) integrations.dweb = { url: dwebUrl };
       const wants = opts?.runOn === "cloud" ? "cloud" : bot.computer; // cloud routine overrides the MAUS default
-      // Cloud routines always use Box/BoxAgent. The per-bot backend applies
-      // only to ordinary turns that mount a computer into the local agent.
-      const cloudBackend = opts?.runOn === "cloud" ? "box" : (bot.cloudBackend ?? "box");
+      // A cloud routine explicitly targets Cloudflare. Ordinary turns use
+      // the bot's selected backend, with Cloudflare as the product default.
+      const cloudBackend = opts?.runOn === "cloud" ? "cloudflare" : (bot.cloudBackend ?? "cloudflare");
       const mountsComputerMcp = instance.adapter.capabilities.computerMcp === true;
       const mountsCloudComputer = mountsComputerMcp || instance.driverKind === "boxAgent";
       const mountsLocalComputer = instance.adapter.capabilities.localComputerMcp === true;
@@ -1756,13 +1755,9 @@ routines = new RoutineManager({
   },
   startTurn: (botId, threadId, prompt, runOn, triggerSource, onDispatchError) =>
     startTurn(botId, prompt, { threadId, runOn, automationSource: triggerSource, onDispatchError }),
-  interruptTurn: async (botId, threadId, runOn) => {
+  interruptTurn: async (botId, threadId, _runOn) => {
     const bot = store.bot(botId);
-    const instance = runOn === "cloud"
-      ? registry.instances().find((candidate) => candidate.driverKind === "boxAgent") ?? null
-      : bot
-        ? registry.get(bot.modelSelection.instanceId)
-        : null;
+    const instance = bot ? registry.get(bot.modelSelection.instanceId) : null;
     await instance?.adapter.interruptTurn(threadId);
   },
   onRunFailed: (run) => {
@@ -2329,7 +2324,6 @@ function configStatus() {
       configured: composio.configured(cfg),
       mode: composio.connectionMode(cfg),
     },
-    box: { configured: Boolean(cfg.box?.token) },
     cfComputer: { configured: cfComputer.cfConfigured(cfg), url: cfg.cfComputer?.url ?? "" },
     vps: { configured: Boolean(vpsSshAlias(cfg)), sshAlias: vpsSshAlias(cfg) ?? "" },
     opencodeGo: { configured: Boolean(cfg.opencodeGo?.apiKey) },
@@ -3652,8 +3646,8 @@ const server = createServer(async (req, res) => {
       ) {
         return json(res, 400, { error: "computer must be cloud, vm, local, or off" });
       }
-      if (body.cloudBackend !== undefined && !["box", "vps", "cloudflare"].includes(String(body.cloudBackend))) {
-        return json(res, 400, { error: "cloudBackend must be box, vps, or cloudflare" });
+      if (body.cloudBackend !== undefined && !["vps", "cloudflare"].includes(String(body.cloudBackend))) {
+        return json(res, 400, { error: "cloudBackend must be vps or cloudflare" });
       }
       if (body.chiefOfStaff !== undefined && typeof body.chiefOfStaff !== "boolean") {
         return json(res, 400, { error: "chiefOfStaff must be true or false" });
@@ -4509,9 +4503,10 @@ const server = createServer(async (req, res) => {
     if (m && method === "GET") {
       const bot = store.bot(m[1]);
       if (!bot) return json(res, 404, { error: "no such bot" });
-      return bot.cloudBackend === "vps"
+      const backend = bot.cloudBackend ?? "cloudflare";
+      return backend === "vps"
         ? json(res, 200, { backend: "vps", ...(await vps.vpsComputerStatus(cfg, bot.id)) })
-        : bot.cloudBackend === "cloudflare"
+        : backend === "cloudflare"
           ? json(res, 200, { backend: "cloudflare", ...cfComputer.status(cfg) })
         : json(res, 200, { backend: "box", ...(await box.boxStatus(cfg, bot.id)) });
     }
@@ -4543,6 +4538,7 @@ const server = createServer(async (req, res) => {
       const botId = m[1];
       const bot = store.bot(botId);
       if (!bot) return json(res, 404, { error: "no such bot" });
+      const backend = bot.cloudBackend ?? "cloudflare";
       // Requiring JSON makes every computer mutation a non-simple browser
       // request (same reasoning as the Local VM lifecycle routes above): a
       // hostile page cannot submit it with a form, and its cross-origin JSON
@@ -4551,7 +4547,7 @@ const server = createServer(async (req, res) => {
       if (!String(req.headers["content-type"] ?? "").toLowerCase().startsWith("application/json")) {
         return json(res, 415, { error: "content-type must be application/json" });
       }
-      if (bot.cloudBackend === "vps") {
+      if (backend === "vps") {
         if (m[2] === "join" || m[2] === "exec") {
           return json(res, 409, { error: "interactive VPS desktop access is not supported" });
         }
@@ -4565,7 +4561,7 @@ const server = createServer(async (req, res) => {
         const action = m[2] === "provision" ? "provision" : m[2] === "remove" ? "remove" : "stop";
         return json(res, 200, await vps.vpsComputerAction(action, cfg, botId));
       }
-      if (bot.cloudBackend === "cloudflare") {
+      if (backend === "cloudflare") {
         if (!cfComputer.cfConfigured(cfg)) return json(res, 409, { error: "Cloudflare computer is not configured" });
         if (m[2] === "join" || m[2] === "screenshot") {
           return json(res, 409, { error: "Cloudflare computer is headless; interactive desktop access is not supported" });

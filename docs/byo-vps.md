@@ -9,7 +9,7 @@ runs an agent remotely.
 ## What works
 
 - A per-bot Linux desktop in a managed container on your VPS, driven through the official Cua tools.
-- Live screen preview in the Computer panel and in transcripts, same as a Box.
+- Live screen preview in the Computer panel and in transcripts.
 - Explicit **Cloud** with the **Self-hosted VPS** backend provisions or starts the container; **Auto** only
   reuses one that is already running and verified.
 

@@ -6,7 +6,7 @@ import { Check, CircleHelp, ExternalLink, Loader2, TriangleAlert } from "lucide-
 import { api, useStore, type ConfigStatus } from "@/state/store";
 import { cn } from "@/lib/cn";
 
-export type ConfigSection = "composio" | "box" | "opencodeGo";
+export type ConfigSection = "composio" | "opencodeGo";
 
 const SECTIONS: Record<
   ConfigSection,
@@ -16,13 +16,11 @@ const SECTIONS: Record<
     body: (v) => ({ composio: { apiKey: v } }),
     flag: (c) => c.composio.configured,
   },
-  box: { body: (v) => ({ box: { token: v } }), flag: (c) => c.box.configured },
   opencodeGo: { body: (v) => ({ opencodeGo: { apiKey: v } }), flag: (c) => c.opencodeGo?.configured ?? false },
 };
 
-const ELECTRON_CREDENTIAL: Record<ConfigSection, "composioApiKey" | "boxToken" | "opencodeGoApiKey"> = {
+const ELECTRON_CREDENTIAL: Record<ConfigSection, "composioApiKey" | "opencodeGoApiKey"> = {
   composio: "composioApiKey",
-  box: "boxToken",
   opencodeGo: "opencodeGoApiKey",
 };
 
@@ -45,15 +43,6 @@ const CREDENTIALS: Record<
     href: "https://dashboard.composio.dev",
     linkLabel: "Create or copy a project key",
     optional: true,
-  },
-  box: {
-    label: "Box API key",
-    placeholder: "Paste your Box API key",
-    description: "Give bots an isolated remote Linux computer with a desktop and terminal.",
-    href: "https://docs.ascii.dev/box/api-keys",
-    linkLabel: "Open Box API key guide",
-    optional: true,
-    warning: "Box is a paid service after its trial. Usage may incur charges.",
   },
   opencodeGo: {
     label: "OpenCode Go API key",

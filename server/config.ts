@@ -406,7 +406,6 @@ export function instanceConfigs(cfg: AppConfig): InstanceConfigMap {
     codex: { driver: "codex" },
     antigravity: { driver: "antigravityAgent" },
     opencodeGo: { driver: "opencodeGo" },
-    computer: { driver: "boxAgent" },
     openaiCompat: { driver: "openai-compat" },
     qwen: { driver: "qwenAgent" },
     hermes: { driver: "hermesAgent" },
