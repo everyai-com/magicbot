@@ -1187,6 +1187,15 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             body: JSON.stringify({ text: action.text }),
           })
             .then((body) => {
+              // The local harness publishes messages over SSE. The hosted
+              // Cloudflare API may complete a turn in the request itself and
+              // return the settled messages so it does not need a long-lived
+              // per-user event broker just to make web chat responsive.
+              if (Array.isArray(body?.messages) && typeof body?.threadId === "string") {
+                for (const message of body.messages) {
+                  rawDispatch({ type: "messageAdded", threadId: body.threadId, message });
+                }
+              }
               if (
                 body?.queued &&
                 typeof body.threadId === "string" &&

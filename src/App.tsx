@@ -18,6 +18,25 @@ import { NoEngines } from "@/components/NoEngines";
 import { CommandPalette } from "@/components/CommandPalette";
 import { SkillRecorderPage } from "@/components/SkillRecorderPage";
 
+function WebAccount() {
+  const [account, setAccount] = useState<{ name: string; email: string } | null>(null);
+
+  useEffect(() => {
+    fetch("/api/auth/me")
+      .then((response) => (response.ok ? response.json() : null))
+      .then((value) => value?.user && setAccount(value.user))
+      .catch(() => {});
+  }, []);
+
+  if (!account) return null;
+  return (
+    <div className="fixed right-3 top-3 z-40 flex items-center gap-2 rounded-full border border-line bg-panel/95 px-3 py-1.5 text-[11px] text-ink-secondary shadow-lg backdrop-blur">
+      <span className="max-w-36 truncate">{account.name || account.email}</span>
+      <a className="font-medium text-accent hover:underline" href="/logout">Sign out</a>
+    </div>
+  );
+}
+
 function Shell() {
   const { state, dispatch } = useStore();
   // Mobile-only drawer state. Above md, none of these properties are emitted
@@ -144,14 +163,24 @@ function Shell() {
 }
 
 export default function App() {
-  const [gated, setGated] = useState(() => !emailGateDone());
+  // Hosted accounts already collected an identity during sign-up. Ask the
+  // local-first desktop/browser build for its onboarding profile only when
+  // the authenticated web endpoint is absent.
+  const [gated, setGated] = useState(false);
   useEffect(() => {
     initAnalytics();
+    if (emailGateDone()) return;
+    fetch("/api/auth/me")
+      .then((response) => {
+        if (!response.ok) setGated(true);
+      })
+      .catch(() => setGated(true));
   }, []);
   return (
     <DesktopCapabilitiesProvider>
       <StoreProvider>
         <Shell />
+        <WebAccount />
         {gated && <Onboarding onDone={() => setGated(false)} />}
       </StoreProvider>
     </DesktopCapabilitiesProvider>

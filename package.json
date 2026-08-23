@@ -63,7 +63,9 @@
     "broker:types": "wrangler types --config cloudflare/composio-broker/wrangler.jsonc cloudflare/composio-broker/worker-configuration.d.ts",
     "broker:check": "pnpm broker:types && tsc -p cloudflare/composio-broker/tsconfig.json",
     "broker:test": "vitest run --config cloudflare/composio-broker/vitest.config.ts",
-    "broker:deploy": "wrangler deploy --config cloudflare/composio-broker/wrangler.jsonc"
+    "broker:deploy": "wrangler deploy --config cloudflare/composio-broker/wrangler.jsonc",
+    "web:migrate": "wrangler d1 migrations apply magicbot-web --remote --config cloudflare/web/wrangler.jsonc",
+    "web:deploy": "pnpm build && wrangler deploy --config cloudflare/web/wrangler.jsonc"
   },
   "dependencies": {
     "@trycua/cua-driver": "0.20.0",
