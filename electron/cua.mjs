@@ -16,9 +16,19 @@
 
 import { app, ipcMain } from "electron";
 import { spawnSync } from "node:child_process";
+import { createRequire } from "node:module";
 import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
+
+const require = createRequire(import.meta.url);
+const { createCuaConnectionStore } = require("./cua-connection.cjs");
+const {
+  createLinuxCuaRuntime,
+  createUnavailableLinuxRuntime,
+} = require("./cua-linux-runtime.cjs");
+const { cleanupAppImageCuaBundle, stageAppImageCuaBundle } = require("./cua-linux-bundle.cjs");
 
 const INSTALLED_DRIVER = "/Applications/CuaDriver.app/Contents/MacOS/cua-driver";
 const STANDALONE_SOCKET = path.join(
@@ -26,9 +36,58 @@ const STANDALONE_SOCKET = path.join(
   "Library/Caches/cua-driver/cua-driver.sock",
 );
 const HOST_BUNDLE_ID = "com.magicbot.app";
+const CUA_ENV = { CUA_DRIVER_RS_TELEMETRY_ENABLED: "0" };
+process.env.CUA_DRIVER_RS_TELEMETRY_ENABLED ??= "0";
 
 let embeddedHost = null; // EmbeddedCuaDriverHost | null
-let connection = null; // descriptor exposed to harness + renderer
+let linuxRuntime = null;
+let linuxBundleStage = null;
+let stateListener = () => {};
+const connectionStore = createCuaConnectionStore({
+  getUserData: () => app.getPath("userData"),
+});
+
+function ensureLinuxRuntime() {
+  if (!linuxRuntime) {
+    try {
+      let bundledDriverPath;
+      if (app.isPackaged && !process.env.CUA_DRIVER_PATH) {
+        bundledDriverPath = path.join(process.resourcesPath, "cua-linux-x64", "cua-driver");
+        // AppImage builders may normalize the read-only resource tree to 0755
+        // or 0775. Always copy only the pinned binaries to a fresh 0700
+        // process-owned directory and verify their hashes after the copy, so
+        // every AppImage follows the same execution invariant.
+        if (process.env.APPIMAGE) {
+          linuxBundleStage ??= stageAppImageCuaBundle({ resourcesPath: process.resourcesPath });
+          bundledDriverPath = linuxBundleStage.driverPath;
+        }
+      }
+      linuxRuntime = createLinuxCuaRuntime({
+        getUserData: () => app.getPath("userData"),
+        connectionStore,
+        bundledDriverPath,
+        onChange: (connection) => stateListener(connection),
+      });
+    } catch (error) {
+      console.error("[cua] Bundled Linux driver failed integrity validation:", error);
+      linuxRuntime = createUnavailableLinuxRuntime({
+        connectionStore,
+        onChange: (connection) => stateListener(connection),
+      });
+    }
+  }
+  return linuxRuntime;
+}
+
+export function setCuaStateListener(listener) {
+  stateListener = typeof listener === "function" ? listener : () => {};
+}
+
+function persistAndNotify(next) {
+  const connection = connectionStore.persist(next);
+  stateListener(connection);
+  return connection;
+}
 
 export function resolveDriverBinary() {
   if (process.env.CUA_DRIVER_PATH) return process.env.CUA_DRIVER_PATH;
@@ -54,62 +113,127 @@ function socketAlive(sockPath) {
   });
 }
 
-async function startEmbedded(binary) {
-  // Dynamic import: the SDK ships a native FFI lib; keep dev startup
-  // resilient if it fails to load on this machine.
-  const { EmbeddedCuaDriverHost } = await import("@trycua/cua-driver/embedded");
-  embeddedHost = new EmbeddedCuaDriverHost(binary, HOST_BUNDLE_ID);
-  const conn = await embeddedHost.start();
+async function loadEmbeddedSdk() {
+  if (!app.isPackaged) {
+    const [embedded, permissions] = await Promise.all([
+      import("@trycua/cua-driver/embedded"),
+      import("@trycua/cua-driver/electron"),
+    ]);
+    return { ...embedded, ...permissions };
+  }
+  process.env.MAGICBOT_CUA_SDK_LIBRARY = path.join(
+    process.resourcesPath,
+    "cua-sdk",
+    "native",
+    "libcua_driver_sdk.dylib",
+  );
+  return import(pathToFileURL(path.join(process.resourcesPath, "cua-sdk", "cua-sdk.mjs")).href);
+}
+
+async function attachStandalone() {
+  const driver = fs.existsSync(INSTALLED_DRIVER) ? INSTALLED_DRIVER : null;
+  if (!driver) return null;
+  if (!(await socketAlive(STANDALONE_SOCKET))) {
+    // Launch CuaDriver.app through LaunchServices so Accessibility /
+    // Screen Recording stay on com.trycua.driver — the identity this
+    // machine already granted — instead of the freshly signed MagicBot.
+    spawnSync("open", ["-a", "CuaDriver"], { timeout: 8000 });
+    for (let i = 0; i < 25; i++) {
+      if (await socketAlive(STANDALONE_SOCKET)) break;
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+  }
+  if (!(await socketAlive(STANDALONE_SOCKET))) return null;
   return {
-    mode: "embedded",
-    socketPath: conn.socketPath,
-    mcpCommand: binary,
-    mcpArgs: ["mcp", "--embedded", "--socket", conn.socketPath],
-    mcpEnv: { CUA_DRIVER_EMBEDDED: "1", CUA_DRIVER_HOST_BUNDLE_ID: HOST_BUNDLE_ID },
+    mode: "standalone",
+    socketPath: STANDALONE_SOCKET,
+    mcpCommand: driver,
+    mcpArgs: ["mcp"],
+    mcpEnv: { ...CUA_ENV },
   };
 }
 
+async function startEmbedded(binary) {
+  // Import from the staged Resources tree in production. The app intentionally
+  // excludes general node_modules, so a bare package import only works in dev.
+  const sdk = await loadEmbeddedSdk();
+  // CUA's embedding contract requires grants before the child daemon starts;
+  // these SDK calls execute in Electron main so macOS attributes them to
+  // MagicBot rather than to a terminal or helper process.
+  const permissionStatus = sdk.requestMacOSPermissions();
+  if (!sdk.hasRequiredMacOSPermissions(permissionStatus)) {
+    const missing = [
+      !permissionStatus.accessibility && "Accessibility",
+      !permissionStatus.screenRecording && "Screen Recording",
+    ].filter(Boolean).join(" and ");
+    throw new Error(`${missing || "macOS permissions"} required; grant access in System Settings and restart MagicBot`);
+  }
+  const host = new sdk.EmbeddedCuaDriverHost(binary, HOST_BUNDLE_ID);
+  try {
+    const conn = await host.start();
+    embeddedHost = host;
+    return {
+      mode: "embedded",
+      socketPath: conn.socketPath,
+      mcpCommand: binary,
+      mcpArgs: ["mcp", "--embedded", "--socket", conn.socketPath],
+      mcpEnv: { ...CUA_ENV, CUA_DRIVER_EMBEDDED: "1", CUA_DRIVER_HOST_BUNDLE_ID: HOST_BUNDLE_ID },
+    };
+  } catch (err) {
+    try {
+      await host.stop();
+    } catch {
+      // startup already failed; stop is best-effort before destroy
+    }
+    host.uniffiDestroy?.();
+    throw err;
+  }
+}
+
 export async function startCua() {
+  if (process.platform === "linux") return ensureLinuxRuntime().initialize();
   const binary = resolveDriverBinary();
   if (!binary) {
-    connection = { mode: "unavailable", reason: "cua-driver binary not found" };
-    return connection;
+    return persistAndNotify({
+      mode: "unavailable",
+      reason: "cua-driver binary not found",
+    });
   }
 
   const wantEmbedded =
-    app.isPackaged || process.env.OPENMAUSBOT_CUA_EMBEDDED === "1";
+    app.isPackaged || process.env.MAGICBOT_CUA_EMBEDDED === "1";
+  let nextConnection;
 
   if (wantEmbedded) {
     try {
-      connection = await startEmbedded(binary);
+      nextConnection = await startEmbedded(binary);
     } catch (err) {
-      connection = {
-        mode: "unavailable",
-        reason: `embedded host failed: ${err?.message ?? err}`,
-      };
+      nextConnection = await attachStandalone();
+      if (!nextConnection) {
+        nextConnection = {
+          mode: "unavailable",
+          reason: `embedded host failed: ${err?.message ?? err}`,
+        };
+      }
     }
   } else if (await socketAlive(STANDALONE_SOCKET)) {
     // Dev machine with CuaDriver.app's daemon already running.
-    connection = {
+    nextConnection = {
       mode: "standalone",
       socketPath: STANDALONE_SOCKET,
       mcpCommand: binary,
       mcpArgs: ["mcp"],
-      mcpEnv: {},
+      mcpEnv: { ...CUA_ENV },
     };
   } else {
-    connection = {
+    nextConnection = {
       mode: "unavailable",
       reason:
         "no running cua-driver daemon; run `cua-driver serve` or grant via `cua-driver permissions grant`",
     };
   }
 
-  fs.writeFileSync(
-    path.join(app.getPath("userData"), "cua-connection.json"),
-    JSON.stringify(connection, null, 2),
-  );
-  return connection;
+  return persistAndNotify(nextConnection);
 }
 
 export function cuaPermissionsStatus() {
@@ -118,6 +242,7 @@ export function cuaPermissionsStatus() {
   const out = spawnSync(binary, ["permissions", "status", "--json"], {
     encoding: "utf8",
     timeout: 5000,
+    env: { ...process.env, ...CUA_ENV },
   });
   try {
     return { available: true, ...JSON.parse(out.stdout) };
@@ -127,6 +252,14 @@ export function cuaPermissionsStatus() {
 }
 
 export async function stopCua() {
+  if (linuxRuntime) {
+    await linuxRuntime.shutdown();
+    if (linuxBundleStage) {
+      cleanupAppImageCuaBundle(linuxBundleStage);
+      linuxBundleStage = null;
+    }
+    return;
+  }
   if (embeddedHost) {
     try {
       await embeddedHost.stop();
@@ -136,9 +269,71 @@ export async function stopCua() {
     }
     embeddedHost = null;
   }
+  if (connectionStore.get()) {
+    persistAndNotify({ mode: "unavailable", reason: "desktop-host-stopped" });
+  }
 }
 
 export function registerCuaIpc() {
-  ipcMain.handle("cua:connection", () => connection);
+  ipcMain.handle("cua:connection", () => connectionStore.get());
   ipcMain.handle("cua:permissions", () => cuaPermissionsStatus());
+  ipcMain.handle("cua:linux-status", () =>
+    process.platform === "linux"
+      ? ensureLinuxRuntime().getStatus()
+      : { enabled: false, status: "unavailable", reasonCode: "unsupported-platform" },
+  );
+  ipcMain.handle("cua:linux-enable", async () => {
+    if (process.platform !== "linux") {
+      return { enabled: false, status: "unavailable", reasonCode: "unsupported-platform" };
+    }
+    try {
+      await ensureLinuxRuntime().enable();
+    } catch (error) {
+      console.error("[cua] Linux enable failed:", error);
+    }
+    return ensureLinuxRuntime().getStatus();
+  });
+  ipcMain.handle("cua:linux-disable", async () => {
+    if (process.platform !== "linux") {
+      return { enabled: false, status: "unavailable", reasonCode: "unsupported-platform" };
+    }
+    try {
+      await ensureLinuxRuntime().disable();
+    } catch (error) {
+      console.error("[cua] Linux disable failed:", error);
+    }
+    return ensureLinuxRuntime().getStatus();
+  });
+  ipcMain.handle("cua:linux-retry", async () => {
+    if (process.platform === "darwin") {
+      try {
+        await stopCua();
+        const connection = await startCua();
+        const ready = connection?.mode === "embedded" || connection?.mode === "standalone";
+        return {
+          enabled: ready,
+          status: ready ? "ready" : "error",
+          reasonCode: ready ? undefined : "permissions-required",
+          message: connection?.reason,
+        };
+      } catch (error) {
+        console.error("[cua] macOS retry failed:", error);
+        return {
+          enabled: false,
+          status: "error",
+          reasonCode: "permissions-required",
+          message: error instanceof Error ? error.message : String(error),
+        };
+      }
+    }
+    if (process.platform !== "linux") {
+      return { enabled: false, status: "unavailable", reasonCode: "unsupported-platform" };
+    }
+    try {
+      await ensureLinuxRuntime().retry();
+    } catch (error) {
+      console.error("[cua] Linux retry failed:", error);
+    }
+    return ensureLinuxRuntime().getStatus();
+  });
 }
