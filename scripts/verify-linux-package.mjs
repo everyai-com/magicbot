@@ -133,6 +133,11 @@ function verifyCompliance(licenses, label) {
   const registryIds = new Set();
   for (const component of registry) {
     const packageId = component.properties?.find(
+      // NOT rebranded on purpose: this namespace is written by
+      // scripts/generate-cua-sbom.mjs into the vendored attestation under
+      // third_party/cua-driver/, which MagicBot leaves untouched (rewriting
+      // a third-party provenance document would falsify it). Generator,
+      // committed SBOM and this check must move together or not at all.
       (property) => property.name === "openmausbot:cargo:package-id",
     )?.value;
     if (typeof packageId !== "string" || !packageId.startsWith("registry+")) {
@@ -347,7 +352,7 @@ const fields = execFileSync(
 for (const expected of [
   "Package: magicbot",
   "Architecture: amd64",
-  "Maintainer: Milind Soni",
+  "Maintainer: everyai-com",
   "Section: utils",
   "Priority: optional",
 ]) {
