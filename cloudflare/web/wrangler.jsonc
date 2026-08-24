@@ -4,6 +4,7 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-08-01",
   "compatibility_flags": ["nodejs_compat"],
+  "upload_source_maps": true,
   "assets": {
     "directory": "../../dist",
     "binding": "ASSETS",

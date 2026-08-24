@@ -413,7 +413,7 @@ function safeNext(value: string | null): string {
   return value?.startsWith("/") && !value.startsWith("//") ? value : "/";
 }
 
-function loginPage(message = "", mode: "login" | "signup" = "login"): Response {
+function loginPage(message = "", mode: "login" | "signup" = "login", status = 200): Response {
   const signup = mode === "signup";
   const title = signup ? "Create your MagicBot account" : "Welcome back";
   const switchText = signup ? "Already have an account?" : "New to MagicBot?";
@@ -421,7 +421,7 @@ function loginPage(message = "", mode: "login" | "signup" = "login"): Response {
   const switchLabel = signup ? "Sign in" : "Create account";
   const escaped = message.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
   return new Response(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title><style>
-  *{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;background:#090b10;color:#eef1f7;font:15px/1.45 Inter,ui-sans-serif,system-ui,sans-serif}.glow{position:fixed;inset:0;background:radial-gradient(circle at 50% 15%,#7038ff33,transparent 38%),radial-gradient(circle at 10% 90%,#15a6ff18,transparent 34%);pointer-events:none}.card{position:relative;width:min(92vw,420px);padding:34px;border:1px solid #ffffff17;border-radius:24px;background:#141721e8;box-shadow:0 30px 90px #0009;backdrop-filter:blur(18px)}.brand{display:flex;align-items:center;gap:11px;margin-bottom:28px;font-weight:750;letter-spacing:-.02em}.mark{display:grid;place-items:center;width:34px;height:34px;border-radius:11px;background:linear-gradient(135deg,#8b5cff,#4ba9ff);box-shadow:0 8px 26px #744cff66}h1{margin:0 0 7px;font-size:27px;letter-spacing:-.04em}p{margin:0 0 24px;color:#99a2b5}.field{display:grid;gap:7px;margin:14px 0}label{font-size:12px;font-weight:650;color:#bdc4d2}input{width:100%;border:1px solid #ffffff18;border-radius:12px;background:#0c0e14;color:#fff;padding:12px 13px;outline:none}input:focus{border-color:#7a61ff;box-shadow:0 0 0 3px #7555ff22}button{width:100%;margin-top:9px;border:0;border-radius:12px;padding:12px;background:linear-gradient(135deg,#8058ff,#4a9dff);color:white;font-weight:750;cursor:pointer}.error{margin:0 0 16px;border:1px solid #ff657544;border-radius:10px;background:#ff405b14;color:#ff9ca7;padding:10px 12px;font-size:13px}.switch{margin:20px 0 0;text-align:center;font-size:13px}.switch a{color:#9d8bff;text-decoration:none;font-weight:700}.fine{margin-top:18px;text-align:center;color:#697185;font-size:11px}</style></head><body><div class="glow"></div><main class="card"><div class="brand"><span class="mark">✦</span> MagicBot</div><h1>${title}</h1><p>Your AI team, available securely from anywhere.</p>${escaped ? `<div class="error">${escaped}</div>` : ""}<form method="post" action="${signup ? "/signup" : "/login"}">${signup ? '<div class="field"><label for="name">Name</label><input id="name" name="name" autocomplete="name" required maxlength="80"></div>' : ""}<div class="field"><label for="email">Email</label><input id="email" name="email" type="email" autocomplete="email" required maxlength="254"></div><div class="field"><label for="password">Password</label><input id="password" name="password" type="password" autocomplete="${signup ? "new-password" : "current-password"}" minlength="8" required></div><button type="submit">${signup ? "Create account" : "Sign in"}</button></form><p class="switch">${switchText} <a href="${switchLink}">${switchLabel}</a></p><div class="fine">Protected by secure, HTTP-only sessions on Cloudflare.</div></main></body></html>`, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "x-frame-options": "DENY", "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'" } });
+  *{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;background:#090b10;color:#eef1f7;font:15px/1.45 Inter,ui-sans-serif,system-ui,sans-serif}.glow{position:fixed;inset:0;background:radial-gradient(circle at 50% 15%,#7038ff33,transparent 38%),radial-gradient(circle at 10% 90%,#15a6ff18,transparent 34%);pointer-events:none}.card{position:relative;width:min(92vw,420px);padding:34px;border:1px solid #ffffff17;border-radius:24px;background:#141721e8;box-shadow:0 30px 90px #0009;backdrop-filter:blur(18px)}.brand{display:flex;align-items:center;gap:11px;margin-bottom:28px;font-weight:750;letter-spacing:-.02em}.mark{display:grid;place-items:center;width:34px;height:34px;border-radius:11px;background:linear-gradient(135deg,#8b5cff,#4ba9ff);box-shadow:0 8px 26px #744cff66}h1{margin:0 0 7px;font-size:27px;letter-spacing:-.04em}p{margin:0 0 24px;color:#99a2b5}.field{display:grid;gap:7px;margin:14px 0}label{font-size:12px;font-weight:650;color:#bdc4d2}input{width:100%;border:1px solid #ffffff18;border-radius:12px;background:#0c0e14;color:#fff;padding:12px 13px;outline:none}input:focus{border-color:#7a61ff;box-shadow:0 0 0 3px #7555ff22}button{width:100%;margin-top:9px;border:0;border-radius:12px;padding:12px;background:linear-gradient(135deg,#8058ff,#4a9dff);color:white;font-weight:750;cursor:pointer}.error{margin:0 0 16px;border:1px solid #ff657544;border-radius:10px;background:#ff405b14;color:#ff9ca7;padding:10px 12px;font-size:13px}.switch{margin:20px 0 0;text-align:center;font-size:13px}.switch a{color:#9d8bff;text-decoration:none;font-weight:700}.fine{margin-top:18px;text-align:center;color:#697185;font-size:11px}</style></head><body><div class="glow"></div><main class="card"><div class="brand"><span class="mark">✦</span> MagicBot</div><h1>${title}</h1><p>Your AI team, available securely from anywhere.</p>${escaped ? `<div class="error">${escaped}</div>` : ""}<form method="post" action="${signup ? "/signup" : "/login"}">${signup ? '<div class="field"><label for="name">Name</label><input id="name" name="name" autocomplete="name" required maxlength="80"></div>' : ""}<div class="field"><label for="email">Email</label><input id="email" name="email" type="email" autocomplete="email" required maxlength="254"></div><div class="field"><label for="password">Password</label><input id="password" name="password" type="password" autocomplete="${signup ? "new-password" : "current-password"}" minlength="8" required></div><button type="submit">${signup ? "Create account" : "Sign in"}</button></form><p class="switch">${switchText} <a href="${switchLink}">${switchLabel}</a></p><div class="fine">Protected by secure, HTTP-only sessions on Cloudflare.</div></main></body></html>`, { status, headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "x-frame-options": "DENY", "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'" } });
 }
 
 function newBot(name = "SupaMaus"): Bot {
@@ -2078,8 +2078,7 @@ async function api(request: Request, env: Env, user: User, path: string): Promis
   return json({ error: "This feature is not available in the hosted version yet" }, 501);
 }
 
-export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+async function handleRequest(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
     const hookMatch = url.pathname.match(/^\/hooks\/([A-Za-z0-9_-]+)$/);
     if (hookMatch && request.method === "POST") return handleWebhook(request, env, hookMatch[1]);
@@ -2129,6 +2128,36 @@ export default {
     }
     if (url.pathname.startsWith("/api/")) return api(request, env, user, url.pathname);
     return env.ASSETS.fetch(request);
+}
+
+function requestFailure(request: Request, error: unknown): Response {
+  const incident = crypto.randomUUID().slice(0, 8);
+  const url = new URL(request.url);
+  const detail = error instanceof Error
+    ? { name: error.name, message: error.message, stack: error.stack }
+    : { message: String(error) };
+  console.error(JSON.stringify({ event: "request_failed", incident, method: request.method, path: url.pathname, ...detail }));
+
+  if ((url.pathname === "/login" || url.pathname === "/signup") && request.method === "POST") {
+    const mode = url.pathname === "/signup" ? "signup" : "login";
+    return loginPage(`MagicBot hit a temporary sign-in problem. Please try again. Reference: ${incident}`, mode, 503);
+  }
+  if (url.pathname.startsWith("/api/")) {
+    return json({ error: "MagicBot hit a temporary server problem. Please retry.", reference: incident }, 503);
+  }
+  return new Response(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>MagicBot is recovering</title><style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#090b10;color:#eef1f7;font:15px/1.5 system-ui,sans-serif}.card{width:min(88vw,420px);padding:32px;border:1px solid #ffffff18;border-radius:22px;background:#141721;text-align:center;box-shadow:0 24px 80px #0008}h1{margin:0 0 8px;font-size:24px}p{color:#aab1c0}a{display:inline-block;margin-top:12px;border-radius:11px;background:#7657ff;color:#fff;padding:10px 18px;text-decoration:none;font-weight:700}.ref{margin-top:20px;font:11px ui-monospace,monospace;color:#747d91}</style></head><body><main class="card"><h1>MagicBot hit a temporary problem</h1><p>Your account and bots are safe. Retry the page to reconnect.</p><a href="${url.pathname}${url.search}">Try again</a><div class="ref">Reference ${incident}</div></main></body></html>`, {
+    status: 503,
+    headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "x-frame-options": "DENY" },
+  });
+}
+
+export default {
+  async fetch(request: Request, env: Env): Promise<Response> {
+    try {
+      return await handleRequest(request, env);
+    } catch (error) {
+      return requestFailure(request, error);
+    }
   },
   async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext) {
     ctx.waitUntil(runDueRoutines(env));
