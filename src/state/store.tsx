@@ -1020,7 +1020,7 @@ export function reducer(state: AppState, action: Action): AppState {
     }
     case "send": {
       const animated = withMascotMotion(dismissOnboardingCard(state, action.botId), action.botId, "working");
-      if (!state.config?.hosted || !action.clientMessageId) return animated;
+      if (!action.clientMessageId) return animated;
       const clientMessageId = action.clientMessageId;
       return updateBot(animated, action.botId, (bot) => {
         if (bot.messages.some((message) => message.id === clientMessageId)) return bot;
@@ -1232,8 +1232,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     };
 
     const wrapped: React.Dispatch<Action> = (incomingAction) => {
+      const hostedWeb = stateRef.current.config?.hosted === true
+        || (!window.ogb && window.location.protocol === "https:");
       const action: Action =
-        incomingAction.type === "send" && stateRef.current.config?.hosted && !incomingAction.clientMessageId
+        incomingAction.type === "send" && hostedWeb && !incomingAction.clientMessageId
           ? { ...incomingAction, clientMessageId: crypto.randomUUID(), sentAt: Date.now() }
           : incomingAction;
       const botBeforeUpdate =

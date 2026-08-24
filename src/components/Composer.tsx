@@ -281,7 +281,7 @@ export function Composer({
   };
 
   return (
-    <div className="shrink-0 border-t border-hairline/30 bg-app/95 px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3 backdrop-blur-xl sm:px-5 sm:pb-5 sm:pt-3">
+    <div className="shrink-0 border-t border-hairline/30 bg-app/95 px-2.5 pb-[max(0.6rem,env(safe-area-inset-bottom))] pt-2.5 backdrop-blur-xl sm:px-5 sm:pb-5 sm:pt-3">
       {speechError && (
         <div className="mx-auto mb-2 max-w-[900px] rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-[12px] text-warning">
           {speechError}
@@ -362,7 +362,7 @@ export function Composer({
           onRemove={removeAttachment}
           allowImages={engineSupportsImages}
         />
-        <div className="flex min-h-14 items-end gap-1.5 rounded-2xl border border-hairline/70 bg-card px-2 py-2 shadow-[0_10px_30px_rgba(0,0,0,0.22)] transition focus-within:border-accent-border focus-within:shadow-[0_10px_30px_rgba(0,0,0,0.26),0_0_0_3px_color-mix(in_srgb,var(--color-accent)_16%,transparent)] sm:gap-2 sm:rounded-3xl sm:pl-3">
+        <div className="flex min-h-14 items-end gap-1 rounded-2xl border border-hairline/70 bg-card px-1.5 py-1.5 shadow-[0_10px_30px_rgba(0,0,0,0.22)] transition focus-within:border-accent-border focus-within:shadow-[0_10px_30px_rgba(0,0,0,0.26),0_0_0_3px_color-mix(in_srgb,var(--color-accent)_16%,transparent)] sm:gap-2 sm:rounded-3xl sm:px-2 sm:py-2 sm:pl-3">
         <input
           ref={fileInputRef}
           type="file"
@@ -376,7 +376,7 @@ export function Composer({
             onClick={() => fileInputRef.current?.click()}
             aria-label="Attach files"
             title="Attach files (up to 25 MB each)"
-            className="flex size-9 shrink-0 items-center justify-center rounded-full text-ink-secondary hover:bg-raised hover:text-ink"
+            className="flex size-10 shrink-0 touch-manipulation items-center justify-center rounded-full text-ink-secondary hover:bg-raised hover:text-ink sm:size-9"
           >
             <Paperclip size={17} />
           </button>
@@ -488,7 +488,7 @@ export function Composer({
               else if (bot) dispatch({ type: "interrupt", botId: bot.id });
             }}
             aria-label="Stop this turn"
-            className="flex size-9 shrink-0 items-center justify-center rounded-full text-ink-secondary hover:bg-raised hover:text-ink"
+            className="flex size-10 shrink-0 touch-manipulation items-center justify-center rounded-full text-ink-secondary hover:bg-raised hover:text-ink sm:size-9"
             title="Stop"
           >
             <Square size={14} className="fill-current" />
@@ -499,7 +499,7 @@ export function Composer({
             onClick={toggleMic}
             aria-label={recording ? "Stop dictation" : "Start dictation"}
             className={cn(
-              "flex size-9 shrink-0 items-center justify-center rounded-full",
+              "flex size-10 shrink-0 touch-manipulation items-center justify-center rounded-full sm:size-9",
               recording
                 ? "animate-pulse bg-danger/20 text-danger"
                 : "text-ink-secondary hover:bg-raised hover:text-ink",
@@ -515,7 +515,7 @@ export function Composer({
             aria-label={busy && canSteer ? "Send into the running turn" : busy ? "Queue message" : "Send message"}
             title={busy && canSteer ? "Send into the running turn" : busy ? "Sends when the current turn finishes" : "Send"}
             className={cn(
-              "flex size-9 shrink-0 items-center justify-center rounded-full text-white",
+              "flex size-10 shrink-0 touch-manipulation items-center justify-center rounded-full text-white sm:size-9",
               busy && !canSteer ? "bg-raised text-ink-secondary hover:bg-raised-hover" : "bg-accent hover:brightness-110",
             )}
           >

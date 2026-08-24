@@ -252,6 +252,36 @@ describe("hosted chat turns", () => {
     });
     expect(settled.bots[0]).toMatchObject({ busy: false, activity: "idle", activeLeafId: "reply" });
   });
+
+  it("keeps the optimistic message when hosted configuration is still loading", () => {
+    const bot = {
+      id: "early-hosted-bot",
+      threadId: "early-hosted-thread",
+      name: "SupaMaus",
+      title: "Cloud AI assistant",
+      description: "",
+      notifications: true,
+      color: "green" as const,
+      unread: false,
+      busy: false,
+      activity: "idle" as const,
+      modelSelection: { instanceId: "cloudflare-ai", model: "kimi" },
+      messages: [],
+      activeLeafId: null,
+    } satisfies Bot;
+
+    const sending = reducer(
+      { ...initialState, config: null, bots: [bot] },
+      { type: "send", botId: bot.id, text: "show this now", clientMessageId: "early-client-message", sentAt: 84 },
+    );
+
+    expect(sending.bots[0]).toMatchObject({ busy: true, activeLeafId: "early-client-message" });
+    expect(sending.bots[0]?.messages[0]).toMatchObject({
+      id: "early-client-message",
+      role: "user",
+      text: "show this now",
+    });
+  });
 });
 
 describe("section Chiefs", () => {

@@ -17,7 +17,7 @@ const EXTENDED_SET = [
   "💀", "✨", "🎉", "☕",
 ] as const;
 
-export function ReactionBar({ threadId, message }: { threadId: string; message: Message }) {
+export function ReactionBar({ threadId, message, alwaysVisible = false }: { threadId: string; message: Message; alwaysVisible?: boolean }) {
   const { dispatch } = useStore();
   const [pickerOpen, setPickerOpen] = useState(false);
   const anchorRef = useRef<HTMLDivElement>(null);
@@ -48,7 +48,10 @@ export function ReactionBar({ threadId, message }: { threadId: string; message: 
     <div className="relative">
       <div
         ref={anchorRef}
-        className="flex items-center gap-0.5 rounded-full border border-hairline/40 bg-panel px-1 py-0.5 opacity-0 shadow-sm transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
+        className={cn(
+          "flex items-center gap-0.5 rounded-full border border-hairline/40 bg-panel px-1 py-0.5 shadow-sm transition-opacity",
+          alwaysVisible ? "opacity-100" : "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100",
+        )}
       >
         {REACTION_SET.map((emoji) => (
           <button

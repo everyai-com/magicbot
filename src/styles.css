@@ -282,6 +282,7 @@ body {
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
   overflow: hidden;
+  overscroll-behavior: none;
 }
 
 /* Keep focus visible after components clear the browser outline. These

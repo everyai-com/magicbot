@@ -77,6 +77,24 @@ function ProfileFields() {
   );
 }
 
+function DevicesRow() {
+  const { state } = useStore();
+  if (!state.config?.hosted) return null;
+  return (
+    <Card
+      title="Your devices"
+      subtitle="Sign in with the same MagicBot account on your phone, tablet, and computers. Each device keeps its own secure session and shares the same bots and conversations."
+    >
+      <a
+        href="/logout"
+        className="inline-flex rounded-lg border border-hairline/40 px-3 py-1.5 text-[13px] text-ink transition-colors hover:bg-control"
+      >
+        Sign out this device
+      </a>
+    </Card>
+  );
+}
+
 function UpdatesRow() {
   const s = useUpdaterState();
   if (!window.ogb?.updater) return null;
@@ -342,7 +360,7 @@ export function SettingsModal() {
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-6"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-0 sm:p-6"
       onMouseDown={(e) => e.target === e.currentTarget && dispatch({ type: "toggleAppSettings", open: false })}
     >
       <div
@@ -351,14 +369,14 @@ export function SettingsModal() {
         aria-modal="true"
         aria-labelledby="app-settings-title"
         tabIndex={-1}
-        className="flex h-[560px] w-full max-w-[860px] overflow-hidden rounded-2xl border border-hairline/50 bg-panel shadow-2xl outline-none"
+        className="flex h-[100dvh] w-full max-w-[860px] flex-col overflow-hidden border-0 bg-panel shadow-2xl outline-none sm:h-[560px] sm:flex-row sm:rounded-2xl sm:border sm:border-hairline/50"
       >
         {/* section nav */}
-        <nav className="flex w-[190px] shrink-0 flex-col gap-0.5 border-r border-hairline/40 p-3">
-          <div id="app-settings-title" className="px-2 pb-2 pt-1 text-[15px] font-semibold text-ink">
+        <nav className="flex w-full shrink-0 gap-1 overflow-x-auto border-b border-hairline/40 p-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden sm:w-[190px] sm:flex-col sm:gap-0.5 sm:overflow-x-visible sm:border-b-0 sm:border-r sm:p-3">
+          <div id="app-settings-title" className="hidden px-2 pb-2 pt-1 text-[15px] font-semibold text-ink sm:block">
             Settings
           </div>
-          <div className="mb-1.5 flex items-center gap-2 rounded-lg bg-control/70 px-2.5 py-1.5">
+          <div className="mb-1.5 hidden items-center gap-2 rounded-lg bg-control/70 px-2.5 py-1.5 sm:flex">
             <Search size={14} className="shrink-0 text-ink-secondary" />
             <input
               value={query}
@@ -375,7 +393,7 @@ export function SettingsModal() {
             />
           </div>
           {visibleSections.length === 0 && (
-            <div className="px-2.5 py-4 text-[12.5px] leading-relaxed text-ink-secondary">
+            <div className="hidden px-2.5 py-4 text-[12.5px] leading-relaxed text-ink-secondary sm:block">
               Nothing matches “{query.trim()}”
             </div>
           )}
@@ -385,7 +403,7 @@ export function SettingsModal() {
               onClick={() => dispatch({ type: "toggleAppSettings", open: true, section: id })}
               aria-current={section === id ? "page" : undefined}
               className={cn(
-                "flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[14px]",
+                "flex shrink-0 items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[13px] sm:gap-2.5 sm:text-[14px]",
                 section === id ? "bg-control text-ink" : "text-ink-secondary hover:bg-control/50 hover:text-ink",
               )}
             >
@@ -396,7 +414,7 @@ export function SettingsModal() {
         </nav>
 
         <div className="flex min-w-0 flex-1 flex-col">
-          <div className="flex items-center justify-between px-5 py-3">
+          <div className="flex items-center justify-between px-4 py-3 sm:px-5">
             <span className="text-[15px] font-semibold text-ink">
               {SECTIONS.find((s) => s.id === section)?.label}
             </span>
@@ -409,12 +427,13 @@ export function SettingsModal() {
             </button>
           </div>
 
-          <div className="flex flex-1 flex-col gap-4 overflow-y-auto px-5 pb-5">
+          <div className="flex flex-1 flex-col gap-4 overflow-y-auto px-4 pb-[max(1.25rem,env(safe-area-inset-bottom))] sm:px-5 sm:pb-5">
             {section === "general" && (
               <>
                 <Card title="Profile" subtitle="Shown in the sidebar. Saved as you go.">
                   <ProfileFields />
                 </Card>
+                <DevicesRow />
                 <Card title="Skin" subtitle="Applies instantly and is remembered on this machine.">
                   <SkinPicker />
                 </Card>

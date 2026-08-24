@@ -95,7 +95,7 @@ function TaskTimeline({ messages, busy }: { messages: Message[]; busy: boolean }
   if (events.length === 0) return null;
   const recent = events.slice(-8);
   return (
-    <div className="mx-auto w-full max-w-[900px] px-5 pt-1">
+    <div className="mx-auto w-full max-w-[900px] px-3 pt-1 sm:px-5">
       <button
         type="button"
         onClick={() => setOpen((value) => !value)}
@@ -165,7 +165,7 @@ function ThinkingStrip({ text, active }: { text: string; active: boolean }) {
   }, [text, open]);
   return (
     <div className="flex w-full justify-start">
-      <div className="max-w-[70%] min-w-[200px]">
+      <div className="min-w-[200px] max-w-[88%] sm:max-w-[70%]">
         <button
           onClick={() => setOpen((o) => !o)}
           aria-expanded={open}
@@ -367,14 +367,14 @@ function Bubble({
           <button
             onClick={onStartEdit}
             aria-label="Edit message"
-            className="rounded-md p-1.5 text-ink-secondary opacity-0 transition-opacity hover:bg-raised hover:text-ink focus-visible:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100"
+            className="hidden rounded-md p-1.5 text-ink-secondary opacity-0 transition-opacity hover:bg-raised hover:text-ink focus-visible:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100 sm:block"
             title="Edit message"
           >
             <Pencil size={14} />
           </button>
         )}
-        {user && message.kind === "text" && <ReactionBar threadId={bot.threadId} message={message} />}
-        {user && <CopyButton text={visibleText} />}
+        {user && message.kind === "text" && <div className="hidden sm:block"><ReactionBar threadId={bot.threadId} message={message} /></div>}
+        {user && <CopyButton text={visibleText} className="max-sm:hidden" />}
         <button
           onClick={() =>
             dispatch({
@@ -384,7 +384,7 @@ function Bubble({
             })
           }
           aria-label={bot.pinnedMessageId === message.id ? "Unpin message" : "Pin message"}
-          className="rounded-md p-1.5 text-ink-secondary opacity-0 transition-opacity hover:bg-raised hover:text-ink focus-visible:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100"
+          className="hidden rounded-md p-1.5 text-ink-secondary opacity-0 transition-opacity hover:bg-raised hover:text-ink focus-visible:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100 sm:block"
           title={
             bot.pinnedMessageId === message.id
               ? "Unpin this message"
@@ -395,7 +395,7 @@ function Bubble({
         </button>
         <div
           className={cn(
-            "max-w-[70%] rounded-2xl text-[15px] leading-relaxed",
+            "max-w-[88%] rounded-2xl text-[15px] leading-relaxed sm:max-w-[70%]",
             user && webhookView
               ? "overflow-hidden border border-accent/25 bg-card text-ink shadow-[0_10px_30px_rgba(0,0,0,0.18)]"
               : user
@@ -405,7 +405,7 @@ function Bubble({
           title={new Date(message.at).toLocaleString()}
         >
           {user && webhookView ? (
-            <div className="min-w-[300px] max-w-[520px]">
+            <div className="min-w-0 max-w-[520px] sm:min-w-[300px]">
               <div className="flex items-center gap-2 border-b border-accent/15 bg-accent/[0.055] px-4 py-2.5 text-[11.5px] font-medium text-accent">
                 <Webhook size={13} />
                 <span>Webhook task</span>
@@ -485,7 +485,7 @@ function Bubble({
           )}
         </div>
         {!user && (
-          <div className="flex flex-col gap-0.5 self-end pb-0.5">
+          <div className="hidden flex-col gap-0.5 self-end pb-0.5 sm:flex">
             <CopyButton text={text} />
             {message.kind === "text" && (
               <SpeakButton text={text} botId={bot.id} messageId={message.id} voiceId={bot.voice} />
@@ -502,15 +502,36 @@ function Bubble({
             )}
           </div>
         )}
-        {!user && message.kind === "text" && <ReactionBar threadId={bot.threadId} message={message} />}
+        {!user && message.kind === "text" && <div className="hidden sm:block"><ReactionBar threadId={bot.threadId} message={message} /></div>}
         <span
           className={cn(
-            "self-end pb-1 text-[11px] tabular-nums text-ink-secondary/70 opacity-0 transition-opacity group-hover:opacity-100",
+            "hidden self-end pb-1 text-[11px] tabular-nums text-ink-secondary/70 opacity-0 transition-opacity group-hover:opacity-100 sm:block",
             user ? "order-first mr-1" : "ml-1",
           )}
         >
           {formatTime(message.at)}
         </span>
+      </div>
+      <div className={cn("mt-1 flex items-center gap-1 sm:hidden", user ? "justify-end" : "justify-start")}>
+        <span className="px-1 text-[10.5px] tabular-nums text-ink-secondary/70">{formatTime(message.at)}</span>
+        <CopyButton text={visibleText} className="opacity-100" />
+        {message.kind === "text" && <ReactionBar threadId={bot.threadId} message={message} alwaysVisible />}
+        <button
+          onClick={() =>
+            dispatch({
+              type: "updateBot",
+              botId: bot.id,
+              patch: { pinnedMessageId: bot.pinnedMessageId === message.id ? "" : message.id },
+            })
+          }
+          aria-label={bot.pinnedMessageId === message.id ? "Unpin message" : "Pin message"}
+          className="rounded-md p-1.5 text-ink-secondary hover:bg-raised hover:text-ink"
+        >
+          {bot.pinnedMessageId === message.id ? <PinOff size={14} /> : <Pin size={14} />}
+        </button>
+        {!user && message.kind === "text" && (
+          <SpeakButton text={text} botId={bot.id} messageId={message.id} voiceId={bot.voice} />
+        )}
       </div>
       {/* busy-gated so a flag stranded by a server restart shows nothing */}
       {user && message.queued && bot.busy && (
@@ -597,7 +618,7 @@ function ScreenFrame({ png, mime }: { png: string; mime?: string }) {
       <img
         src={`data:${mime ?? "image/png"};base64,${png}`}
         alt="Bot's screen"
-        className="max-w-[70%] rounded-2xl border border-hairline/40"
+        className="max-w-[88%] rounded-2xl border border-hairline/40 sm:max-w-[70%]"
       />
     </div>
   );
@@ -609,7 +630,7 @@ function StreamingBubble({ text }: { text: string }) {
   const deferred = useDeferredValue(text);
   return (
     <div className="flex w-full justify-start">
-      <div className="max-w-[70%] rounded-2xl bg-card px-4 py-2.5 text-[15px] leading-relaxed text-ink">
+      <div className="max-w-[88%] rounded-2xl bg-card px-4 py-2.5 text-[15px] leading-relaxed text-ink sm:max-w-[70%]">
         <MessageBoundary fallbackText={deferred}>
           <ChatMarkdown text={deferred} streaming />
         </MessageBoundary>
@@ -762,7 +783,7 @@ function PinnedBanner({
   const text = (pinned.text ?? "").replace(/\s+/g, " ").trim();
   if (!text) return null;
   return (
-    <div className="mx-auto w-full max-w-[900px] px-5">
+    <div className="mx-auto w-full max-w-[900px] px-3 sm:px-5">
       <div className="mb-2 flex items-center gap-2 rounded-lg border border-accent/25 bg-accent/[0.07] px-3 py-1.5">
         <Pin size={12} className="shrink-0 text-accent" />
         <button
@@ -964,20 +985,20 @@ export function ChatView({ bot }: { bot: Bot }) {
   const noDrag = isWin ? ({ WebkitAppRegion: "no-drag" } as React.CSSProperties) : undefined;
 
   return (
-    <main className="relative flex h-full min-w-0 flex-1 flex-col bg-app">
+    <main className="relative flex h-full min-h-0 min-w-0 flex-1 flex-col bg-app">
       {/* Call mode covers the thread while the bot is on the line */}
       <CallOverlay bot={bot} />
       {/* Header */}
       <header
         className={cn(
-          "@container/chathead flex min-h-[68px] items-center justify-between gap-3 border-b border-hairline/30 px-5 py-2.5 max-sm:flex-wrap max-sm:items-start max-sm:gap-y-1.5 max-sm:pb-2",
+          "@container/chathead flex min-h-[64px] items-center justify-between gap-2 border-b border-hairline/30 px-3 py-2 sm:min-h-[68px] sm:gap-3 sm:px-5 sm:py-2.5",
           // Room for the drawer button, which overlays this corner below md.
           "pl-11 md:pl-5",
           isWin && "pr-[148px]",
         )}
         style={drag}
       >
-        <div className="flex min-w-0 flex-1 items-center gap-2.5 rounded-lg px-1 py-1 max-sm:basis-full" style={noDrag}>
+        <div className="flex min-w-0 flex-1 items-center gap-2 rounded-lg py-1 sm:gap-2.5 sm:px-1" style={noDrag}>
           <button
             onClick={() => dispatch({ type: "toggleSettings", open: true })}
             className="flex size-10 shrink-0 items-center justify-center rounded-lg hover:bg-raised/50"
@@ -1021,12 +1042,12 @@ export function ChatView({ bot }: { bot: Bot }) {
             </div>
           </div>
         </div>
-        <div className="flex shrink-0 items-center gap-1 max-sm:w-full max-sm:overflow-x-auto max-sm:pb-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden" style={noDrag}>
+        <div className="flex max-w-[52vw] shrink-0 items-center gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden sm:max-w-none" style={noDrag}>
           {bot.busy && (
             <button
               onClick={() => dispatch({ type: "interrupt", botId: bot.id })}
               className={cn(
-                "flex items-center gap-1.5 rounded-full border border-hairline/40 bg-raised/60 px-2.5 py-1 text-[13px] text-ink-secondary hover:bg-raised hover:text-ink",
+                "hidden items-center gap-1.5 rounded-full border border-hairline/40 bg-raised/60 px-2.5 py-1 text-[13px] text-ink-secondary hover:bg-raised hover:text-ink sm:flex",
                 COMPACT_BUBBLE,
               )}
               title="Stop this turn"
@@ -1036,15 +1057,17 @@ export function ChatView({ bot }: { bot: Bot }) {
             </button>
           )}
           <TaskPicker bot={bot} />
-          <UsageChip bot={bot} />
-          <WorkingFolderChip bot={bot} />
           <ModelPicker bot={bot} />
+          <div className="hidden items-center gap-1 sm:flex">
+            <UsageChip bot={bot} />
+            <WorkingFolderChip bot={bot} />
+          </div>
           <CallButton bot={bot} />
           <button
             onClick={() => dispatch({ type: "toggleComputer" })}
             aria-label="Bot's computer"
             className={cn(
-              "rounded-md p-1.5 hover:bg-raised",
+              "shrink-0 rounded-md p-1.5 hover:bg-raised",
               state.computerOpen ? "text-accent" : "text-ink-secondary hover:text-ink",
             )}
             title="Bot's computer"
@@ -1056,7 +1079,7 @@ export function ChatView({ bot }: { bot: Bot }) {
             aria-label="Inspector"
             aria-pressed={state.inspectorOpen}
             className={cn(
-              "rounded-md p-1.5 hover:bg-raised",
+              "shrink-0 rounded-md p-1.5 hover:bg-raised",
               state.inspectorOpen ? "text-accent" : "text-ink-secondary hover:text-ink",
             )}
             title="Inspector — runtime events and raw protocol for this thread"
@@ -1068,7 +1091,7 @@ export function ChatView({ bot }: { bot: Bot }) {
 
       {/* Error banner */}
       {state.error && (
-        <div className="mx-auto w-full max-w-[900px] px-5">
+        <div className="mx-auto w-full max-w-[900px] px-3 sm:px-5">
           <div className="mb-2 rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-[13px] text-danger">
             {state.error}
           </div>
@@ -1093,7 +1116,7 @@ export function ChatView({ bot }: { bot: Bot }) {
       {/* Messages */}
       <div
         ref={scrollRef}
-        className="flex-1 overflow-y-auto px-5 [overflow-anchor:none]"
+        className="min-h-0 flex-1 overflow-y-auto px-3 [overflow-anchor:none] [overscroll-behavior-y:contain] sm:px-5"
         onWheel={(e) => {
           if (e.deltaY < 0) setBottomFollow(false);
           else if (atEnd()) setBottomFollow(true);

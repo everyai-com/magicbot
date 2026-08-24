@@ -1243,6 +1243,7 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
         // silently reparents NewRoomPanel's overlay and the "+" menu backdrop on
         // desktop.
         "max-md:absolute max-md:inset-y-0 max-md:left-0 max-md:z-40",
+        "max-md:w-[88vw] max-md:max-w-[320px]",
         "max-md:transition-transform max-md:duration-200",
         open ? "max-md:translate-x-0" : "max-md:-translate-x-full",
       )}
