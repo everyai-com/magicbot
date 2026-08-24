@@ -95,6 +95,11 @@ export interface SendTurnInput {
   transcript?: Array<{ role: "user" | "assistant"; text: string }>;
   /** Bot persona (name/title/description) as a system prompt. */
   system?: string;
+  /** Nobody is watching this turn (routine-/delegation-/approval-fired), so
+   * the governance organ is the gate: the driver MUST route every permission
+   * ask through the request seam even in its most permissive mode, or the
+   * gate has nothing to decide on. See server/organs/governance.ts. */
+  governed?: boolean;
   /** Per-bot integrations the driver may hand to the agent as tools. */
   integrations?: {
     composio?: { url?: string; key: string };

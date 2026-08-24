@@ -225,12 +225,20 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       const sessionId = typeof turn.resumeCursor === "string" ? turn.resumeCursor : null;
       const newSessionId = sessionId ? null : newId();
 
+      // a governed (unattended) turn never runs in bypassPermissions: nothing
+      // would ever prompt, and the governance gate would have nothing to
+      // decide on. It is downgraded to acceptEdits so every non-edit action
+      // reaches the broker — and from there the gate (organs/governance.ts).
+      const permissionMode =
+        config.permissionMode === "auto" || (turn.governed && config.permissionMode === "bypassPermissions")
+          ? "acceptEdits"
+          : config.permissionMode;
       const args = [
         "-p",
         "--output-format", "stream-json",
         "--input-format", "stream-json",
         "--verbose", // required by stream-json output
-        "--permission-mode", config.permissionMode === "auto" ? "acceptEdits" : config.permissionMode,
+        "--permission-mode", permissionMode,
       ];
       if (sessionId) args.push("--resume", sessionId);
       else args.push("--session-id", newSessionId!);
@@ -269,9 +277,11 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       }
       // permission broker: anything acceptEdits would silently deny becomes
       // an Allow/Deny card in chat, and the agent gets ask_user. Skipped in
-      // bypassPermissions (fullAuto) — nothing would ever ask.
+      // bypassPermissions (fullAuto) — nothing would ever ask — EXCEPT on a
+      // governed (unattended) turn, where the governance gate needs to see
+      // every ask and a bypassPermissions run is exactly what it exists for.
       let broker: ReturnType<typeof createPermissionBroker> | undefined;
-      if (config.permissionMode !== "bypassPermissions") {
+      if (permissionMode !== "bypassPermissions") {
         const socketPath = permissionSocketPath(threadId);
         broker = createPermissionBroker({
           socketPath,
@@ -284,6 +294,9 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
               tool: ask.tool,
               summary: askSummary(ask),
               choices: Array.isArray(ask.input?.choices) ? (ask.input.choices as string[]).slice(0, 5) : undefined,
+              // the raw tool input rides along so the harness-level governance
+              // gate can classify the action, not just its one-line summary
+              raw: { source: "permission.ask", payload: ask.input },
             }),
           onResolve: (resolved) =>
             emit({

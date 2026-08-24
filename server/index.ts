@@ -17,6 +17,7 @@ import { EventBus } from "./harness/bus.ts";
 import * as memory from "./organs/memory.ts";
 import * as routines from "./organs/routines.ts";
 import * as delegation from "./organs/delegation.ts";
+import * as governance from "./organs/governance.ts";
 import { ProviderRegistry } from "./harness/registry.ts";
 import { Store, type Message } from "./store.ts";
 
@@ -132,6 +133,53 @@ bus.subscribe((event: RuntimeEvent) => {
       break;
     case "request.opened": {
       const permission = event.requestType === "permission";
+      // AIOS governance organ: on an unattended run (routine- or delegation-
+      // fired) a sensitive action is denied and HELD for a human instead of
+      // becoming a card nobody is there to answer. Attended turns fall through
+      // to the broker flow untouched.
+      if (permission) {
+        const decision = governance.gate({
+          botId: bot.id,
+          threadId: event.threadId,
+          tool: event.tool,
+          summary: event.summary,
+          input: event.raw?.source === "permission.ask" ? event.raw.payload : undefined,
+        });
+        const auto = governance.autoAnswer(decision);
+        if (auto && event.requestId) {
+          void answerRequest(bot.id, event.threadId, event.requestId, decision, auto);
+          if (decision.verdict === "deny-queued") {
+            const held = governance.hold({
+              botId: bot.id,
+              threadId: event.threadId,
+              fingerprint: decision.action.fingerprint,
+              actionClass: decision.action.actionClass,
+              tool: event.tool,
+              summary: decision.action.summary,
+              prompt: governance.promptOf(event.threadId),
+            });
+            const card = pushMessage({
+              role: "bot",
+              kind: "options",
+              card: {
+                title: "Held for your approval",
+                subtitle: `${decision.action.actionClass.replace(/_/g, " ")} — ${decision.action.summary}`,
+                options: ["Allow", "Deny"],
+                requestId: `gov:${held.id}`,
+              },
+            });
+            broadcast({ kind: "approvals", botId: bot.id, approvals: governance.pendingFor(bot.id) });
+            askMessageByRequest.set(`gov:${held.id}`, card.id);
+          } else if (decision.verdict === "approved") {
+            pushMessage({
+              role: "bot",
+              kind: "activity",
+              tool: { name: `you approved: ${decision.action.summary.slice(0, 60)}`, ok: true },
+            });
+          }
+          break;
+        }
+      }
       const message = pushMessage({
         role: "bot",
         kind: "options",
@@ -169,6 +217,7 @@ bus.subscribe((event: RuntimeEvent) => {
       if (frame) pushMessage({ role: "bot", kind: "screen", png: frame.png, mime: frame.mime });
       store.patchBot(bot.id, { busy: false, unread: true });
       broadcast({ kind: "bot", bot: store.bot(bot.id) });
+      governance.endTurn(event.threadId);
       // delegation organ: run any [DELEGATE] handoffs this turn queued, then
       // feed the results back so the orchestrator continues (bounded by hops)
       const pending = pendingDelegations.get(event.threadId);
@@ -279,7 +328,13 @@ async function runDelegations(orchestratorId: string, threadId: string, delegati
     }
     post({ role: "bot", kind: "activity", tool: { name: `delegated to ${target.name}: ${d.task.slice(0, 60)}` } });
     try {
-      const answer = await delegation.collectTurn(bus, startTurn, target.id, target.threadId, d.task);
+      const answer = await delegation.collectTurn(
+        bus,
+        (id, task) => startTurn(id, task, "delegation"),
+        target.id,
+        target.threadId,
+        d.task,
+      );
       results.push(`Result from ${target.name}:\n${answer}`);
     } catch (e) {
       results.push(`${target.name} could not complete it: ${e instanceof Error ? e.message : String(e)}`);
@@ -288,11 +343,36 @@ async function runDelegations(orchestratorId: string, threadId: string, delegati
 
   delegationHops.set(threadId, hops + 1);
   // hand the results back to the orchestrator as its next input so it continues
-  await startTurn(orchestratorId, `[delegation results]\n\n${results.join("\n\n")}`).catch(() => {});
+  await startTurn(orchestratorId, `[delegation results]\n\n${results.join("\n\n")}`, "delegation").catch(() => {});
+}
+
+// ── governance organ: answer a gated permission ask on the bot's behalf ──
+// deny-queued → the agent is told to stop and not retry; approved → the ask is
+// allowed straight through (nobody is watching to press the button).
+async function answerRequest(
+  botId: string,
+  threadId: string,
+  requestId: string,
+  decision: governance.GateDecision,
+  behavior: "allow" | "deny",
+) {
+  const bot = store.bot(botId);
+  const instance = bot && registry.get(bot.modelSelection.instanceId);
+  if (!instance) return;
+  await instance.adapter
+    .respondToRequest(threadId, requestId, {
+      behavior,
+      message: behavior === "deny" ? governance.heldNotice(decision.action) : undefined,
+    })
+    .catch(() => {
+      /* the turn may already be gone — the audit row is written either way */
+    });
 }
 
 // ── turn dispatch (upstream ProviderCommandReactor, miniature) ──────────
-async function startTurn(botId: string, text: string) {
+// `origin` is the governance organ's attendance signal: only a turn a human
+// typed is attended; routine-, delegation- and approval-fired turns are not.
+async function startTurn(botId: string, text: string, origin: governance.TurnOrigin = "user") {
   const bot = store.bot(botId);
   if (!bot) throw Object.assign(new Error("no such bot"), { status: 404 });
   if (bot.busy) throw Object.assign(new Error("the bot is already working — interrupt it first"), { status: 409 });
@@ -305,6 +385,7 @@ async function startTurn(botId: string, text: string) {
     );
   }
 
+  governance.beginTurn(bot.threadId, origin, text);
   const userMessage = store.appendMessage(bot.threadId, { role: "user", kind: "text", text });
   broadcast({ kind: "message", threadId: bot.threadId, message: userMessage });
 
@@ -361,6 +442,10 @@ async function startTurn(botId: string, text: string) {
       await instance.adapter.sendTurn({
         threadId: bot.threadId,
         text,
+        // governance organ: an unattended turn must route every permission ask
+        // through the request seam so the gate — not the CLI's permission mode
+        // — is what decides. See server/organs/governance.ts.
+        governed: origin !== "user",
         model: bot.modelSelection.model,
         resumeCursor: bot.resumeCursors[bot.modelSelection.instanceId],
         transcript,
@@ -525,6 +610,15 @@ const server = createServer(async (req, res) => {
       return json(res, 200, { ok: true });
     }
 
+    // governance organ — actions held for approval + the audit trail
+    m = path.match(/^\/api\/bots\/([\w-]+)\/approvals$/);
+    if (m && method === "GET") return json(res, 200, { approvals: governance.pendingFor(m[1]) });
+    m = path.match(/^\/api\/bots\/([\w-]+)\/audit$/);
+    if (m && method === "GET") {
+      const limit = Math.min(1000, Number(new URL(req.url ?? "/", "http://x").searchParams.get("limit")) || 200);
+      return json(res, 200, { audit: governance.auditTrail(m[1], limit) });
+    }
+
     // cloud computer (Cloudflare) — status + a one-shot connectivity test so
     // the user can confirm a deployed cf-computer/ Worker before relying on it
     if (method === "GET" && path === "/api/cfcomputer") {
@@ -574,9 +668,52 @@ const server = createServer(async (req, res) => {
       const bot = store.bot(m[1]);
       if (!bot) return json(res, 404, { error: "no such bot" });
       const body = await readBody(req);
+      // governance organ: a held approval is not a live provider request — the
+      // turn that wanted it was already denied. Approving grants that one
+      // action and re-runs the held prompt so it actually happens.
+      const requestId = String(body.requestId ?? "");
+      if (requestId.startsWith("gov:")) {
+        const approved = body.behavior === "allow";
+        const held = governance.resolve(requestId.slice(4), approved);
+        if (!held) return json(res, 404, { error: "no such held approval" });
+        governance.audit({
+          botId: held.botId,
+          threadId: held.threadId,
+          tool: held.tool,
+          actionClass: held.actionClass,
+          summary: held.summary,
+          fingerprint: held.fingerprint,
+          attendance: "unattended",
+          verdict: approved ? "approved" : "rejected",
+          decidedBy: "user",
+          reason: approved ? "approved by the owner" : "rejected by the owner",
+        });
+        broadcast({ kind: "approvals", botId: held.botId, approvals: governance.pendingFor(held.botId) });
+        const messageId = askMessageByRequest.get(requestId);
+        const existing = messageId ? store.messagesFor(held.threadId).find((msg) => msg.id === messageId) : null;
+        if (messageId && existing?.card) {
+          const patched = store.patchMessage(held.threadId, messageId, {
+            card: { ...existing.card, answered: approved ? "Allow" : "Deny" },
+          });
+          if (patched) broadcast({ kind: "message.patch", threadId: held.threadId, message: patched });
+          askMessageByRequest.delete(requestId);
+        }
+        if (approved && held.prompt) {
+          // still unattended: the grant covers this one action, nothing else
+          await startTurn(held.botId, held.prompt, "approval").catch((e) => {
+            const note = store.appendMessage(held.threadId, {
+              role: "bot",
+              kind: "activity",
+              tool: { name: `could not re-run the approved action: ${e instanceof Error ? e.message : String(e)}`, ok: false },
+            });
+            broadcast({ kind: "message", threadId: held.threadId, message: note });
+          });
+        }
+        return json(res, 200, { ok: true, approved });
+      }
       const instance = registry.get(bot.modelSelection.instanceId);
       if (!instance) return json(res, 409, { error: "provider unavailable" });
-      await instance.adapter.respondToRequest(bot.threadId, String(body.requestId), {
+      await instance.adapter.respondToRequest(bot.threadId, requestId, {
         behavior: body.behavior,
         message: body.message,
       });
@@ -697,7 +834,7 @@ server.listen(PORT, "127.0.0.1", () => {
 // AIOS routines organ: run due scheduled tasks by firing them as turns.
 // startTurn throws when the bot is busy/unavailable → routines.runDue leaves
 // the routine to retry on the next tick.
-routines.startScheduler((botId, prompt) => startTurn(botId, prompt));
+routines.startScheduler((botId, prompt) => startTurn(botId, prompt, "routine"));
 
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.on(signal, () => {

@@ -20,4 +20,5 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile --config.minimumReleaseAge=0
       - run: pnpm typecheck
+      - run: pnpm test
       - run: pnpm build
