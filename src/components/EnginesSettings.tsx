@@ -283,8 +283,19 @@ function EngineRow({ instance }: { instance: InstanceInfo }) {
 }
 
 export function EnginesSettings() {
-  const { state } = useStore();
-  if (!window.ogb) {
+  const { state, refreshInstances } = useStore();
+  const hosted = state.config?.hosted === true;
+
+  useEffect(() => {
+    if (!state.config || hosted || state.instances.length > 0) return;
+    void refreshInstances();
+  }, [hosted, refreshInstances, state.config, state.instances.length]);
+
+  // A browser is not necessarily the hosted app: the Vite development UI
+  // also runs in a browser while talking to the local harness. Use the
+  // server-owned mode flag so localhost exposes its installed CLI engines,
+  // while the Cloudflare deployment exposes subscription connections.
+  if (hosted) {
     const cloudflare = state.instances.find((instance) => instance.instanceId === "cloudflare-ai");
     return (
       <div className="flex flex-col gap-3">

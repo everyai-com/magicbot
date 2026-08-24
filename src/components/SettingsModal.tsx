@@ -456,8 +456,8 @@ export function SettingsModal() {
 
             {section === "engines" && (
               <Card
-                title={window.ogb ? "Engine CLIs" : "Hosted engines"}
-                subtitle={window.ogb ? "Which binary each engine runs. Saved as you go." : "Connect and manage the AI engines available to bots on the web app."}
+                title={state.config?.hosted ? "Hosted engines" : "Engine CLIs"}
+                subtitle={state.config?.hosted ? "Connect and manage the AI engines available to bots on the web app." : "Which binary each engine runs. Saved as you go."}
               >
                 <EnginesSettings />
               </Card>
