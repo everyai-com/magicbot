@@ -406,7 +406,7 @@ export function RoutineEditor({
             {runOn === "cloud" && (
               <div className={cn("mt-2 rounded-lg px-3 py-2 text-[11.5px] leading-relaxed", cloudReady ? "bg-accent/10 text-ink-secondary" : "border border-warning/25 bg-warning/10 text-warning")}>
                 {cloudReady
-                  ? "The Cloudflare Sandbox is attached automatically for each run. Keep OpenMausBot running so its scheduler can launch the job."
+                  ? "The Cloudflare Sandbox is attached automatically for each run. Keep MagicBots running so its scheduler can launch the job."
                   : "Connect the Cloudflare Worker in App Settings before this routine can run."}
               </div>
             )}

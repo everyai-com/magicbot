@@ -1,4 +1,4 @@
-# MagicBot Cloudflare Computer
+# MagicBots Cloudflare Computer
 
 The primary hosted computer stack, built on the official preview
 [`@cloudflare/computer`](https://github.com/cloudflare/computer) package. Each
@@ -6,7 +6,7 @@ bot gets a SQLite-backed Durable Object workspace plus a private Linux runtime.
 The workspace is keyed by `botId`, so files survive container restarts and
 remain isolated between bots.
 
-Cloudflare currently marks this package preview-only. MagicBot pins the version
+Cloudflare currently marks this package preview-only. MagicBots pins the version
 and keeps the existing web/service API small so upgrades stay contained here.
 
 This runs in **your own** Cloudflare account.
@@ -34,7 +34,7 @@ wrangler secret put MAGICBOT_COMPUTER_TOKEN   # pick any strong string
 wrangler deploy
 ```
 
-Then in MagicBot's App Settings, set the cloud-computer endpoint to your
+Then in MagicBots' App Settings, set the cloud-computer endpoint to your
 Worker URL and paste the same token. Bots with computer = cloud will use it.
 
 Public port sharing and an interactive desktop are intentionally not advertised

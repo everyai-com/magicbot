@@ -21,6 +21,6 @@
     { "new_sqlite_classes": ["Computer"], "tag": "v2" }
   ],
   // Set with: wrangler secret put MAGICBOT_COMPUTER_TOKEN
-  // The MagicBot harness sends this as a Bearer token on every request.
+  // The MagicBots harness sends this as a Bearer token on every request.
   "vars": {}
 }

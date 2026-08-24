@@ -245,6 +245,8 @@ export interface ConfigStatus {
   codex?: { configured: boolean; runtimeReady: boolean; modelCount: number; consentVersion: string };
   /** Per-user Claude Code subscription connection for the hosted web engine. */
   anthropic?: { configured: boolean; runtimeReady: boolean; modelCount: number };
+  /** Account-wide engine selected when a hosted subscription connects. */
+  defaultEngine?: { instanceId: string; model: string; effort?: "none" | "low" | "medium" | "high" | "xhigh" };
   /** Voice (ElevenLabs). `configured` = a key is saved; `ready` = a key AND
    * a voice, which is what it takes to actually speak. The key itself is
    * never echoed back. */
@@ -259,7 +261,7 @@ export interface ConfigStatus {
 
 export type ConfigStatusFrame = Pick<
   ConfigStatus,
-  "hosted" | "xai" | "composio" | "cfComputer" | "vps" | "rooms" | "localVm" | "opencodeGo" | "codex" | "anthropic" | "tts" | "imageGen" | "profile" | "features"
+  "hosted" | "xai" | "composio" | "cfComputer" | "vps" | "rooms" | "localVm" | "opencodeGo" | "codex" | "anthropic" | "defaultEngine" | "tts" | "imageGen" | "profile" | "features"
 >;
 
 export function configStatusFromFrame(frame: ConfigStatusFrame): ConfigStatus {
@@ -274,6 +276,7 @@ export function configStatusFromFrame(frame: ConfigStatusFrame): ConfigStatus {
     opencodeGo: frame.opencodeGo,
     codex: frame.codex,
     anthropic: frame.anthropic,
+    defaultEngine: frame.defaultEngine,
     tts: frame.tts,
     imageGen: frame.imageGen,
     profile: frame.profile,

@@ -1,9 +1,9 @@
-// MagicBot Cloudflare Computer service.
+// MagicBots Cloudflare Computer service.
 //
 // Each bot maps to one @cloudflare/computer Workspace Durable Object. The
 // Workspace owns a durable SQLite-backed filesystem and lazily attaches a
 // full Linux container for command execution. The WebComputer entrypoint is
-// consumed through a private service binding by the hosted MagicBot Worker.
+// consumed through a private service binding by the hosted MagicBots Worker.
 import { DurableObject, WorkerEntrypoint } from "cloudflare:workers";
 import {
   type DurableObjectStorageLike,

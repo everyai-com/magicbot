@@ -83,7 +83,7 @@ function DevicesRow() {
   return (
     <Card
       title="Your devices"
-      subtitle="Sign in with the same MagicBot account on your phone, tablet, and computers. Each device keeps its own secure session and shares the same bots and conversations."
+      subtitle="Sign in with the same MagicBots account on your phone, tablet, and computers. Each device keeps its own secure session and shares the same bots and conversations."
     >
       <a
         href="/logout"
@@ -140,8 +140,8 @@ function WebAppRow() {
       title="Web app"
       subtitle={
         webApp.installed
-          ? "MagicBot is installed and opens in its own window."
-          : "Install MagicBot for one-click access, an app window, and a cached shell when the network drops."
+          ? "MagicBots is installed and opens in its own window."
+          : "Install MagicBots for one-click access, an app window, and a cached shell when the network drops."
       }
     >
       {webApp.installed ? (
@@ -154,7 +154,7 @@ function WebAppRow() {
             disabled={!webApp.installable}
             className="rounded-lg border border-hairline/40 px-3 py-1.5 text-[13px] text-ink hover:bg-control disabled:cursor-not-allowed disabled:opacity-45"
           >
-            Install MagicBot
+            Install MagicBots
           </button>
           {!webApp.installable && (
             <span className="text-[12px] text-ink-secondary">
@@ -451,7 +451,7 @@ export function SettingsModal() {
             {section === "connections" && (
               <Card
                 title="Connections"
-                subtitle="Connected apps and optional service keys are shared by this MagicBot server across desktop and web."
+                subtitle="Connected apps and optional service keys are shared by this MagicBots account across desktop and web."
               >
                 <div className="flex flex-col gap-4">
                   {state.config?.composio.mode === "managed" ? (

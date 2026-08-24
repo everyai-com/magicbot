@@ -1,7 +1,7 @@
 {
-  "name": "MagicBot",
-  "short_name": "MagicBot",
-  "description": "Run and collaborate with your team of AI agents from the web.",
+  "name": "MagicBots",
+  "short_name": "MagicBots",
+  "description": "Create, connect, and collaborate with your team of AI agents from anywhere.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

@@ -17,10 +17,14 @@ export function CodexSubscription() {
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const codex = state.config?.codex;
+  const isDefault = state.config?.defaultEngine?.instanceId === "codex-subscription";
 
   const refresh = async () => {
     const config: ConfigStatus = await api("/api/config");
     dispatch({ type: "configStatus", config });
+    if (config.defaultEngine) {
+      for (const bot of state.bots) dispatch({ type: "botPatched", bot: { ...bot, modelSelection: config.defaultEngine } });
+    }
     await refreshInstances();
   };
 
@@ -132,11 +136,11 @@ export function CodexSubscription() {
             </div>
             <div className="flex shrink-0 items-center gap-1.5 text-[11px] font-medium text-ink-secondary">
               <span className={`size-1.5 rounded-full ${codex?.runtimeReady ? "bg-success" : codex?.configured ? "bg-warning" : "bg-hairline"}`} />
-              {codex?.runtimeReady ? "Ready" : codex?.configured ? "Setup needed" : "Not connected"}
+              {isDefault ? "Default" : codex?.runtimeReady ? "Ready" : codex?.configured ? "Setup needed" : "Not connected"}
             </div>
           </div>
           <p className="mt-2 max-w-[58ch] text-[12.5px] leading-relaxed text-ink-secondary">
-            Use the Codex access included with your ChatGPT plan. MagicBot runs the official Codex CLI inside your private Cloudflare Computer—no API key or separate API billing.
+            Use the Codex access included with your ChatGPT plan. MagicBots runs the official Codex CLI inside your private Cloudflare Computer—no API key or separate API billing.
           </p>
 
           {codex?.configured && (
@@ -193,7 +197,7 @@ export function CodexSubscription() {
           {error && <div role="alert" className="mt-2 text-[12px] leading-relaxed text-warning">{error}</div>}
         </div>
       </div>
-      <div className="border-t border-hairline/30 bg-panel/35 px-4 py-2 text-[10.5px] text-ink-secondary">Subscription limits and workspace policies still apply.</div>
+      <div className="border-t border-hairline/30 bg-panel/35 px-4 py-2 text-[10.5px] text-ink-secondary">Once ready, this subscription becomes the default for every bot. Subscription limits still apply.</div>
     </section>
   );
 }

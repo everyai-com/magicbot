@@ -1,6 +1,6 @@
-# MagicBot Web
+# MagicBots Web
 
-The hosted MagicBot entry point runs entirely on Cloudflare:
+The hosted MagicBots entry point runs entirely on Cloudflare:
 
 - Worker static assets serve the existing React interface.
 - D1 stores accounts, sessions, bot tasks, rooms, memory, routines, webhooks, and isolated transcripts.

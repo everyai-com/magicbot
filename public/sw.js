@@ -1,4 +1,4 @@
-const CACHE_NAME = "magicbot-shell-v1";
+const CACHE_NAME = "magicbots-shell-v2";
 const APP_SHELL = ["/", "/app-icon.svg", "/icon-192.png", "/icon-512.png", "/manifest.webmanifest"];
 
 self.addEventListener("install", (event) => {

@@ -102,7 +102,7 @@ export function CallTargetButton({
     : !capabilities.dictation.available
       ? "This browser does not provide speech recognition. Try Chrome, Edge, or the desktop app."
       : !speechInput.available()
-        ? "The speech service is unavailable. Reload the page or restart OpenMausBot."
+        ? "The speech service is unavailable. Reload the page or restart MagicBots."
         : !configured
           ? "Add an ElevenLabs API key so the bot can speak during calls."
           : !voiceReady

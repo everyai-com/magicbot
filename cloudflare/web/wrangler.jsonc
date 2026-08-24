@@ -2,6 +2,13 @@
   "$schema": "../../node_modules/wrangler/config-schema.json",
   "name": "magicbot-web",
   "main": "src/index.ts",
+  "workers_dev": true,
+  "routes": [
+    {
+      "pattern": "bots.magicteams.ai",
+      "custom_domain": true
+    }
+  ],
   "compatibility_date": "2026-08-01",
   "compatibility_flags": ["nodejs_compat"],
   "upload_source_maps": true,

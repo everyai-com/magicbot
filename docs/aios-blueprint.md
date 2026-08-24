@@ -1,6 +1,6 @@
-# MagicBot — AIOS Blueprint
+# MagicBots — AIOS Blueprint
 
-MagicBot keeps OpenMausBot's **UI concept** (a Telegram-style roster where every
+MagicBots keeps OpenMausBot's **UI concept** (a Telegram-style roster where every
 chat is a real agent) and its clean **TS driver/event core**, but rebuilds the
 *substance* on the AIOS blueprint. Decided 2026-08-12.
 

@@ -16,10 +16,14 @@ export function ClaudeApiConnection() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const anthropic = state.config?.anthropic;
+  const isDefault = state.config?.defaultEngine?.instanceId === "claude-subscription";
 
   const refresh = async () => {
     const config: ConfigStatus = await api("/api/config");
     dispatch({ type: "configStatus", config });
+    if (config.defaultEngine) {
+      for (const bot of state.bots) dispatch({ type: "botPatched", bot: { ...bot, modelSelection: config.defaultEngine } });
+    }
     await refreshInstances();
   };
 
@@ -105,11 +109,11 @@ export function ClaudeApiConnection() {
             </div>
             <div className="flex shrink-0 items-center gap-1.5 text-[11px] font-medium text-ink-secondary">
               <span className={`size-1.5 rounded-full ${anthropic?.runtimeReady ? "bg-success" : anthropic?.configured ? "bg-warning" : "bg-hairline"}`} />
-              {anthropic?.runtimeReady ? "Ready" : anthropic?.configured ? "Reconnect" : "Not connected"}
+              {isDefault ? "Default" : anthropic?.runtimeReady ? "Ready" : anthropic?.configured ? "Reconnect" : "Not connected"}
             </div>
           </div>
           <p className="mt-2 max-w-[58ch] text-[12.5px] leading-relaxed text-ink-secondary">
-            Use Claude Code access from the subscription you already have. Sign in once with Claude; MagicBot encrypts the connection in Cloudflare and never asks for an API key.
+            Use Claude Code access from the subscription you already have. Sign in once with Claude; MagicBots encrypts the connection in Cloudflare and never asks for an API key.
           </p>
 
           {anthropic?.configured && (
@@ -168,7 +172,7 @@ export function ClaudeApiConnection() {
           {error && <div role="alert" className="mt-2 text-[12px] leading-relaxed text-danger">{error}</div>}
         </div>
       </div>
-      <div className="border-t border-hairline/30 bg-panel/35 px-4 py-2 text-[10.5px] text-ink-secondary">Subscription limits and organization policies still apply.</div>
+      <div className="border-t border-hairline/30 bg-panel/35 px-4 py-2 text-[10.5px] text-ink-secondary">Once connected, this subscription becomes the default for every bot. Subscription limits still apply.</div>
     </section>
   );
 }

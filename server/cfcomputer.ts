@@ -1,4 +1,4 @@
-// Harness client for the MagicBot cloud computer (cf-computer/ Worker).
+// Harness client for the MagicBots cloud computer (cf-computer/ Worker).
 // The hosted sibling of box.ts: same shape (run a command, read/write files,
 // and persist files), backed by an official @cloudflare/computer Workspace
 // and Linux runtime per bot. Selected when cfg.cfComputer.url + token are set.

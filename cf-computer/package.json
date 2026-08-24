@@ -2,7 +2,7 @@
   "name": "magicbot-cf-computer",
   "private": true,
   "version": "0.1.0",
-  "description": "Official @cloudflare/computer workspace and Linux runtime for every MagicBot bot.",
+  "description": "Official @cloudflare/computer workspace and Linux runtime for every MagicBots bot.",
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
