@@ -46,7 +46,7 @@ beforeAll(async () => {
         session_id: "trs_test",
         mcp: { type: "http", url: "https://app.composio.dev/tool_router/v3/trs_test/mcp" },
         config: {
-          user_id: "openmausbot_existing",
+          user_id: "magicbot_existing",
           multi_account: {
             enable: true,
             max_accounts_per_toolkit: 5,
@@ -60,7 +60,7 @@ beforeAll(async () => {
       return res.end(JSON.stringify({
         session_id: "trs_legacy",
         mcp: { type: "http", url: "https://app.composio.dev/tool_router/v3/trs_legacy/mcp" },
-        config: { user_id: "openmausbot_legacy" },
+        config: { user_id: "magicbot_legacy" },
       }));
     }
     if (req.method === "GET" && url.pathname.endsWith("/toolkits")) {
@@ -136,14 +136,14 @@ describe.sequential("Composio Sessions", () => {
   });
 
   it("creates one stable per-installation session and reuses it", async () => {
-    const created = await prepareProjectSession("ak_test", { userId: "openmausbot_existing" });
+    const created = await prepareProjectSession("ak_test", { userId: "magicbot_existing" });
     expect(created).toEqual({
       apiKey: "ak_test",
-      userId: "openmausbot_existing",
+      userId: "magicbot_existing",
       sessionId: "trs_test",
     });
     expect(calls.filter((call) => call.method === "POST" && call.path.endsWith("/session")).at(-1)?.body).toEqual({
-      user_id: "openmausbot_existing",
+      user_id: "magicbot_existing",
       manage_connections: {
         enable: true,
         enable_wait_for_connections: true,
@@ -159,7 +159,7 @@ describe.sequential("Composio Sessions", () => {
     const reused = await prepareProjectSession("ak_test", created);
     expect(reused).toEqual({
       apiKey: "ak_test",
-      userId: "openmausbot_existing",
+      userId: "magicbot_existing",
       sessionId: "trs_test",
     });
   });
@@ -172,11 +172,11 @@ describe.sequential("Composio Sessions", () => {
     });
     expect(upgraded).toEqual({
       apiKey: "ak_test",
-      userId: "openmausbot_legacy",
+      userId: "magicbot_legacy",
       sessionId: "trs_test",
     });
     expect(calls.filter((call) => call.method === "POST" && call.path.endsWith("/session")).at(-1)?.body).toMatchObject({
-      user_id: "openmausbot_legacy",
+      user_id: "magicbot_legacy",
       multi_account: {
         enable: true,
         max_accounts_per_toolkit: 5,
@@ -193,7 +193,7 @@ describe.sequential("Composio Sessions", () => {
 
   it("mounts the Session MCP endpoint with the project key header", async () => {
     const cfg: AppConfig = {
-      composio: { apiKey: "ak_test", userId: "openmausbot_existing", sessionId: "trs_test" },
+      composio: { apiKey: "ak_test", userId: "magicbot_existing", sessionId: "trs_test" },
     };
     const integration = await mcpIntegration(cfg, {
       harnessUrl: "http://127.0.0.1:8799",
@@ -217,7 +217,7 @@ describe.sequential("Composio Sessions", () => {
 
   it("reports connection state, creates auth links and revokes disconnects", async () => {
     const cfg: AppConfig = {
-      composio: { apiKey: "ak_test", userId: "openmausbot_existing", sessionId: "trs_test" },
+      composio: { apiKey: "ak_test", userId: "magicbot_existing", sessionId: "trs_test" },
     };
     await expect(connectionStatus(cfg, ["github", "gmail", "slack", "notion", "linear"])).resolves.toEqual({
       github: {
@@ -269,7 +269,7 @@ describe.sequential("Composio Sessions", () => {
 
   it("enumerates connected services independently of catalog position", async () => {
     const cfg: AppConfig = {
-      composio: { apiKey: "ak_test", userId: "openmausbot_existing", sessionId: "trs_test" },
+      composio: { apiKey: "ak_test", userId: "magicbot_existing", sessionId: "trs_test" },
     };
     const callCount = calls.length;
 
@@ -312,7 +312,7 @@ describe.sequential("Composio Sessions", () => {
 
   it("falls back to complete Session toolkit state without connected-account read permission", async () => {
     const cfg: AppConfig = {
-      composio: { apiKey: "ak_test", userId: "openmausbot_existing", sessionId: "trs_test" },
+      composio: { apiKey: "ak_test", userId: "magicbot_existing", sessionId: "trs_test" },
     };
     connectedAccountsUnavailable = true;
     try {
@@ -337,7 +337,7 @@ describe.sequential("Composio Sessions", () => {
 
   it("falls back to session toolkit state when connected-account items is malformed", async () => {
     const cfg: AppConfig = {
-      composio: { apiKey: "ak_test", userId: "openmausbot_existing", sessionId: "trs_test" },
+      composio: { apiKey: "ak_test", userId: "magicbot_existing", sessionId: "trs_test" },
     };
     malformedConnectedAccounts = true;
     try {

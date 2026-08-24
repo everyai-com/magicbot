@@ -1,5 +1,5 @@
 // Voice, wired to config. The ElevenLabs API lives in elevenlabs.ts; this
-// file is only the part that reads ~/.openmausbot/config.json and decides
+// file is only the part that reads ~/.magicbot/config.json and decides
 // whether there is a voice at all.
 import type { AppConfig } from "../config.ts";
 import * as elevenlabs from "./elevenlabs.ts";

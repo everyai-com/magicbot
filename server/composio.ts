@@ -243,7 +243,7 @@ export async function prepareProjectSession(
     if (existing && supportsMultiAccount(existing)) {
       return {
         apiKey: trimmed,
-        userId: existing.config?.user_id ?? current.userId ?? `openmausbot_${randomUUID()}`,
+        userId: existing.config?.user_id ?? current.userId ?? `magicbot_${randomUUID()}`,
         sessionId: existing.session_id,
       };
     }
@@ -253,7 +253,7 @@ export async function prepareProjectSession(
     priorUserId = existing?.config?.user_id ?? priorUserId;
   }
 
-  const userId = priorUserId ?? `openmausbot_${randomUUID()}`;
+  const userId = priorUserId ?? `magicbot_${randomUUID()}`;
   const res = await fetch(`${apiBase()}/tool_router/session`, {
     method: "POST",
     headers: projectHeaders(trimmed, true),

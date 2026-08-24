@@ -1,12 +1,12 @@
 # Ubuntu Desktop
 
-OpenMausBot has an Ubuntu 24.04 LTS x86_64 desktop beta. The Electron package embeds the harness server, so
+MagicBot has an Ubuntu 24.04 LTS x86_64 desktop beta. The Electron package embeds the harness server, so
 installed builds do not require Node, pnpm, Swift, or a terminal at runtime. For giving a bot the same kind
 of Linux desktop on your own server instead of this machine, see [byo-vps.md](byo-vps.md).
 
 ## What works
 
-- The native Electron window and embedded OpenMausBot server on GNOME Xorg and GNOME Wayland.
+- The native Electron window and embedded MagicBot server on GNOME Xorg and GNOME Wayland.
 - Local Claude, Codex, Grok, Gemini, and other configured agent CLIs.
 - Chat, streaming turns, approvals, bot-to-bot communication, and local data storage.
 - Composio connected apps and Box cloud computers.
@@ -18,21 +18,21 @@ of Linux desktop on your own server instead of this machine, see [byo-vps.md](by
 
 The local preview does **not** give the bot control of this computer by itself. Local control is a separate,
 off-by-default beta. Automatic Wayland helper installation, Linux dictation, and ARM64 remain unavailable and
-fail closed; follow their progress in [issue #29](https://github.com/milind-soni/OpenMausBot/issues/29). Bundled
-CUA supply-chain work is tracked in [issue #113](https://github.com/milind-soni/OpenMausBot/issues/113). Xorg is tracked in
-[issue #79](https://github.com/milind-soni/OpenMausBot/issues/79), and guarded GNOME/Wayland support in
-[issue #109](https://github.com/milind-soni/OpenMausBot/issues/109).
+fail closed; follow their progress in [issue #29](https://github.com/everyai-com/magicbot/issues/29). Bundled
+CUA supply-chain work is tracked in [issue #113](https://github.com/everyai-com/magicbot/issues/113). Xorg is tracked in
+[issue #79](https://github.com/everyai-com/magicbot/issues/79), and guarded GNOME/Wayland support in
+[issue #109](https://github.com/everyai-com/magicbot/issues/109).
 
 ## Download packages
 
 Choose one Ubuntu 24.04 x86_64 package from the latest release:
 
-- [Debian package (`OpenMausBot-amd64.deb`)](https://github.com/milind-soni/openmausbot-releases/releases/latest/download/OpenMausBot-amd64.deb) — recommended; APT installs its desktop dependencies.
-- [Portable AppImage (`OpenMausBot.AppImage`)](https://github.com/milind-soni/openmausbot-releases/releases/latest/download/OpenMausBot.AppImage) — does not install system files.
-- [SHA-256 checksums](https://github.com/milind-soni/openmausbot-releases/releases/latest/download/SHA256SUMS-ubuntu-x64.txt)
+- [Debian package (`MagicBot-amd64.deb`)](https://github.com/everyai-com/magicbot/releases/latest/download/MagicBot-amd64.deb) — recommended; APT installs its desktop dependencies.
+- [Portable AppImage (`MagicBot.AppImage`)](https://github.com/everyai-com/magicbot/releases/latest/download/MagicBot.AppImage) — does not install system files.
+- [SHA-256 checksums](https://github.com/everyai-com/magicbot/releases/latest/download/SHA256SUMS-ubuntu-x64.txt)
 
 Versioned packages and previous releases remain available on the
-[releases page](https://github.com/milind-soni/openmausbot-releases/releases).
+[releases page](https://github.com/everyai-com/magicbot/releases).
 
 ## Build packages
 
@@ -43,8 +43,8 @@ Requirements for building from source:
 - pnpm 10.33.0 (Corepack can install the version declared by the project)
 
 ```sh
-git clone https://github.com/milind-soni/OpenMausBot.git
-cd OpenMausBot
+git clone https://github.com/everyai-com/magicbot.git
+cd MagicBot
 corepack enable
 pnpm install --frozen-lockfile
 pnpm package:linux
@@ -52,8 +52,8 @@ pnpm package:linux
 
 The build creates:
 
-- `release/OpenMausBot-<version>-amd64.deb`
-- `release/OpenMausBot-<version>-x86_64.AppImage`
+- `release/MagicBot-<version>-amd64.deb`
+- `release/MagicBot-<version>-x86_64.AppImage`
 
 The AppImage uses a static runtime and does not require the legacy `libfuse2` package.
 
@@ -62,26 +62,26 @@ The AppImage uses a static runtime and does not require the legacy `libfuse2` pa
 Install a downloaded Debian package with APT so its desktop dependencies are resolved:
 
 ```sh
-sudo apt install ./OpenMausBot-amd64.deb
+sudo apt install ./MagicBot-amd64.deb
 ```
 
-Then open **OpenMausBot** from the GNOME application launcher. To remove it:
+Then open **MagicBot** from the GNOME application launcher. To remove it:
 
 ```sh
-sudo apt remove openmausbot
+sudo apt remove magicbot
 ```
 
 The portable AppImage does not install system files:
 
 ```sh
-chmod +x release/OpenMausBot-*-x86_64.AppImage
-./release/OpenMausBot-*-x86_64.AppImage
+chmod +x release/MagicBot-*-x86_64.AppImage
+./release/MagicBot-*-x86_64.AppImage
 ```
 
-For a downloaded release AppImage, use `OpenMausBot.AppImage` in place of the versioned path above.
+For a downloaded release AppImage, use `MagicBot.AppImage` in place of the versioned path above.
 
-Application data remains local in `~/.openmausbot`. Electron browser data and window state use the normal XDG
-configuration directory (`~/.config/openmausbot` unless the environment overrides it).
+Application data remains local in `~/.magicbot`. Electron browser data and window state use the normal XDG
+configuration directory (`~/.config/magicbot` unless the environment overrides it).
 
 ## Develop the desktop shell
 
@@ -97,12 +97,12 @@ For a package-shaped build without creating `.deb` or AppImage artifacts:
 
 ```sh
 pnpm package:linux:dir
-./release/linux-unpacked/openmausbot
+./release/linux-unpacked/magicbot
 ```
 
 ## Agent CLI discovery
 
-Applications launched from GNOME do not inherit the same interactive shell `PATH` as a terminal. OpenMausBot
+Applications launched from GNOME do not inherit the same interactive shell `PATH` as a terminal. MagicBot
 keeps the inherited path and adds existing common locations such as:
 
 - `~/.local/bin`
@@ -118,16 +118,16 @@ It also probes the login shell in the background. If a CLI still is not detected
 path before launching the app from a terminal and verify it there:
 
 ```sh
-OMB_EXTRA_PATH=/your/custom/bin ./release/OpenMausBot-*-x86_64.AppImage
+OMB_EXTRA_PATH=/your/custom/bin ./release/MagicBot-*-x86_64.AppImage
 ```
 
-Restart OpenMausBot after installing or signing in to a CLI.
+Restart MagicBot after installing or signing in to a CLI.
 
 ## Xorg and Wayland
 
 The shell, chat, cloud computers, connected apps, and preview-only capture work in both GNOME session types.
 The Wayland chooser/select/persistent-stream/cancel/end/retry lifecycle has been validated in a real Ubuntu
-24.04 GNOME Wayland session. OpenMausBot detects Wayland before XWayland when both `WAYLAND_DISPLAY` and
+24.04 GNOME Wayland session. MagicBot detects Wayland before XWayland when both `WAYLAND_DISPLAY` and
 `DISPLAY` exist, so capture cannot accidentally bypass portal-mediated behavior.
 
 Open the Computer panel and use the separate **Preview this computer** card. Capture never starts when the app
@@ -138,10 +138,10 @@ or panel opens.
   you press **Stop preview**, close the panel, end sharing from GNOME, or quit the app.
 
 Cancelling or ending Wayland sharing returns to a calm **Try again** state and never reopens the chooser
-automatically. OpenMausBot does not capture screen audio, remember the selected monitor after restart, or
+automatically. MagicBot does not capture screen audio, remember the selected monitor after restart, or
 offer an **Open Settings** action on Linux.
 
-Local computer control is a separate opt-in. On Wayland, OpenMausBot recognizes only GNOME/Mutter and requires
+Local computer control is a separate opt-in. On Wayland, MagicBot recognizes only GNOME/Mutter and requires
 the certified Cua health report to pass AT-SPI, portal capture, and the portal/libei input backend with verified
 WinRects target activation. Other Wayland compositors remain unavailable. XWayland's `DISPLAY` never bypasses
 these checks.
@@ -149,7 +149,7 @@ these checks.
 ## Enable local control
 
 Installed `.deb` and AppImage builds include the certified **Cua Driver 0.19.3** CLI and cursor-theme sidecar.
-You do not need to install Cua separately for GNOME/Xorg. OpenMausBot starts its own private daemon only after
+You do not need to install Cua separately for GNOME/Xorg. MagicBot starts its own private daemon only after
 you enable the beta; it never starts, updates, or stops a global Cua daemon.
 
 The upstream release has no signature or GitHub artifact attestation and is not immutable, so the build uses an
@@ -180,7 +180,7 @@ packaged app otherwise uses only its bundled driver and fails closed if it is mi
 incompatible—it never silently executes `~/.local/bin/cua-driver` or a PATH candidate. Source/dev runs retain the
 validated user-local discovery described by the [official Cua installation guide](https://cua.ai/docs/how-to-guides/driver/install).
 
-GNOME/Wayland still needs the privileged WinRects v8 Shell helper. OpenMausBot does not install or enable a Shell
+GNOME/Wayland still needs the privileged WinRects v8 Shell helper. MagicBot does not install or enable a Shell
 extension silently. If it is not already active, download the same pinned archive, verify it, extract only the helper,
 review its installer, and run it explicitly:
 
@@ -206,7 +206,7 @@ Sign out and back in once, then verify that GNOME loaded exactly the expected he
 gnome-extensions info winrects@cua
 ```
 
-The output must include `Version: 8`, `Enabled: Yes`, and `State: ACTIVE`. OpenMausBot never installs or enables
+The output must include `Version: 8`, `Enabled: Yes`, and `State: ACTIVE`. MagicBot never installs or enables
 this GNOME extension silently. The helper exposes window identity, geometry, capture, cursor, and verified target
 activation to Cua; foreground pointer or keyboard delivery remains scoped by GNOME's Remote Desktop portal and
 may ask for session consent.
@@ -222,18 +222,18 @@ Linux **Auto** never falls back to the user's desktop. **This computer** is avai
 provider advertises an interactive approval channel. Claude `bypassPermissions`, ACP full-auto, Codex's current
 app-server adapter, non-GNOME/headless sessions, missing diagnostics, and stale/crashed runtimes fail closed.
 
-OpenMausBot starts one private embedded daemon with a private socket for its own app generation. It never touches
+MagicBot starts one private embedded daemon with a private socket for its own app generation. It never touches
 Cua's default/global daemon. On GNOME/Wayland, the app also rechecks the prompt-free health contract while the
 runtime is active and revokes readiness if the helper or backend disappears. Disabling local control or quitting
 stops the owned daemon and active proxies.
 
 The driver uses Cua's `standard` permission mode. Cua routine actions are promptless at the driver layer, while
-OpenMausBot requires its own **Allow** or **Deny** decision before every local action. Bot Auto mode, persistent
+MagicBot requires its own **Allow** or **Deny** decision before every local action. Bot Auto mode, persistent
 **Always allow** grants, and cloud-computer approvals cannot authorize the local desktop in this beta.
 
-Cua Driver has content-free telemetry and an update check enabled by default. OpenMausBot disables both for every
+Cua Driver has content-free telemetry and an update check enabled by default. MagicBot disables both for every
 Cua process it owns and does not change any separately installed Cua preferences. Driver updates arrive only with an
-OpenMausBot application release; rolling back the app rolls back the paired driver. Review the upstream behavior in
+MagicBot application release; rolling back the app rolls back the paired driver. Review the upstream behavior in
 the [official telemetry documentation](https://cua.ai/docs/reference/cua-driver/telemetry).
 
 ## Validate a package change
@@ -264,7 +264,7 @@ Xorg and GNOME Wayland sessions; the CI lanes are not a substitute for that evid
 
 ### An agent CLI is missing
 
-Run the CLI directly in a terminal, finish its sign-in flow, then restart OpenMausBot. If it lives outside the
+Run the CLI directly in a terminal, finish its sign-in flow, then restart MagicBot. If it lives outside the
 common directories above, use `OMB_EXTRA_PATH` while testing and report the install location so it can be
 considered for automatic discovery.
 
@@ -281,7 +281,7 @@ installation, run the bundled executable directly in a terminal launched inside 
 
 ```sh
 echo "$XDG_SESSION_TYPE"  # x11 or wayland
-driver=/opt/OpenMausBot/resources/cua-linux-x64/cua-driver
+driver=/opt/MagicBot/resources/cua-linux-x64/cua-driver
 export CUA_DRIVER_RS_UPDATE_CHECK=false
 export CUA_DRIVER_RS_TELEMETRY_ENABLED=false
 "$driver" --version      # must be 0.19.3 for this beta
@@ -300,15 +300,15 @@ gnome-extensions info winrects@cua
 CUA_DRIVER_RS_UPDATE_CHECK=false \
 CUA_DRIVER_RS_TELEMETRY_ENABLED=false \
 CUA_DRIVER_RS_ENABLE_WAYLAND=1 \
-  /opt/OpenMausBot/resources/cua-linux-x64/cua-driver doctor --json
+  /opt/MagicBot/resources/cua-linux-x64/cua-driver doctor --json
 ```
 
 If the helper is installed but not `ACTIVE`, sign out and back in once. If the app reports a portal error, confirm
-that `xdg-desktop-portal` and `xdg-desktop-portal-gnome` are running in the user session. OpenMausBot's readiness
+that `xdg-desktop-portal` and `xdg-desktop-portal-gnome` are running in the user session. MagicBot's readiness
 probe never opens a consent prompt; GNOME may prompt when the first approved foreground input action starts.
 
 Repair any display, session bus, or AT-SPI diagnostic before choosing **Try again**. If the path shown in the app
-is unexpected, close OpenMausBot and launch it with an absolute `CUA_DRIVER_PATH`. An invalid explicit override
+is unexpected, close MagicBot and launch it with an absolute `CUA_DRIVER_PATH`. An invalid explicit override
 fails without silently selecting another executable. For `unsafe-driver-permissions`, use the bounded
 permission-hardening commands in **Enable local control**; do not make the driver executable or its
 directories world-writable.
@@ -324,8 +324,8 @@ open a new chooser. Cancelling or stopping sharing never causes an automatic sec
 Confirm the executable bit and architecture:
 
 ```sh
-chmod +x OpenMausBot-*-x86_64.AppImage
-file OpenMausBot-*-x86_64.AppImage
+chmod +x MagicBot-*-x86_64.AppImage
+file MagicBot-*-x86_64.AppImage
 ```
 
 Run it from a terminal once to collect the startup output. Do not install `libfuse2` just for this AppImage; the

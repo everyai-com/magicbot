@@ -134,7 +134,7 @@ export function CompanionSection() {
     return (
       <Card
         title="Companion"
-        subtitle="The companion runs as its own process, which only the desktop app can start. Open OpenMausBot on this computer to turn it on."
+        subtitle="The companion runs as its own process, which only the desktop app can start. Open MagicBot on this computer to turn it on."
       >
         <div />
       </Card>
@@ -226,7 +226,7 @@ export function CompanionSection() {
             You're on a tailnet, but this computer's MagicDNS name couldn't be read from the
             Tailscale app — either MagicDNS is off, or the Tailscale command line tool isn't
             where we looked. iPhones can't connect to a bare tailnet address, so check the
-            OpenMausBot log for which paths were tried.
+            MagicBot log for which paths were tried.
           </div>
         )}
         {state.enabled && !state.tailscale && (
@@ -245,8 +245,8 @@ export function CompanionSection() {
         subtitle={
           state.pairing
             ? pairingLink
-              ? "Scan with your phone's Camera, then confirm in OpenMausMobile. You can also use the code manually."
-              : "Open OpenMausMobile, choose this computer, and enter the code."
+              ? "Scan with your phone's Camera, then confirm in MagicBotMobile. You can also use the code manually."
+              : "Open MagicBotMobile, choose this computer, and enter the code."
             : state.enabled
               ? "Open a short, single-use pairing window for a trusted phone."
               : "This turns on Companion and opens a short, single-use pairing window in one step."

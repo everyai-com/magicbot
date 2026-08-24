@@ -54,7 +54,7 @@ describe.skipIf(process.platform === "win32")("AppImage CUA private staging", ()
     expect(() => stageAppImageCuaBundle({ resourcesPath, temporaryRoot: root })).toThrow(
       "failed integrity validation",
     );
-    expect(fs.readdirSync(root).filter((name) => name.startsWith("openmausbot-cua"))).toEqual([]);
+    expect(fs.readdirSync(root).filter((name) => name.startsWith("magicbot-cua"))).toEqual([]);
   });
 
   it("refuses cleanup outside its exact private stage namespace", () => {

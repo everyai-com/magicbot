@@ -252,7 +252,7 @@ final class SpeechDictation: ObservableObject {
     }
 
     static let speechDeniedMessage =
-        "Dictation needs Speech Recognition access. Enable it in Settings → OpenMausMobile."
+        "Dictation needs Speech Recognition access. Enable it in Settings → MagicBotMobile."
     static let micDeniedMessage =
-        "Dictation needs Microphone access. Enable it in Settings → OpenMausMobile."
+        "Dictation needs Microphone access. Enable it in Settings → MagicBotMobile."
 }

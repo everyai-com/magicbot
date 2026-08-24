@@ -75,7 +75,7 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: failure()
         with:
-          name: openmausbot-ubuntu-smoke-diagnostics
+          name: magicbot-ubuntu-smoke-diagnostics
           path: |
             ${{ runner.temp }}/omb-linux-smoke-*
             ${{ runner.temp }}/omb-linux-smoke-runtime-*
@@ -85,7 +85,7 @@ jobs:
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
-          name: openmausbot-ubuntu-x64
+          name: magicbot-ubuntu-x64
           path: |
             release/*.deb
             release/*.AppImage
@@ -108,8 +108,8 @@ jobs:
         run: |
           cd ios
           xcodebuild \
-            -project OpenMausCompanion.xcodeproj \
-            -scheme OpenMausCompanion \
+            -project MagicBotCompanion.xcodeproj \
+            -scheme MagicBotCompanion \
             -sdk iphonesimulator \
             -destination 'generic/platform=iOS Simulator' \
             CODE_SIGNING_ALLOWED=NO \

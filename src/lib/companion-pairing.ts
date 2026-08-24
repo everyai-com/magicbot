@@ -34,7 +34,7 @@ export function companionPairingLink({ address, port, code, token, name, hosts }
     return null;
   const dialableHost = host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
 
-  const url = new URL("openmausbot://pair");
+  const url = new URL("magicbot://pair");
   url.searchParams.set("address", `${dialableHost}:${port}`);
   // The scanner uses the high-entropy token. The code remains in the link so
   // an older mobile build can still pair during a staggered desktop rollout.

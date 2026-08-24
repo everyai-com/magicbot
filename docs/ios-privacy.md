@@ -1,12 +1,12 @@
-# OpenMausMobile privacy
+# MagicBotMobile privacy
 
-OpenMausMobile is a companion for an OpenMausBot service chosen and operated by the user.
+MagicBotMobile is a companion for a MagicBot service chosen and operated by the user.
 
 ## Data handling
 
 - The app stores the selected computer address in iOS preferences and its pairing token in the iOS Keychain.
 - Messages, approvals, transcript searches, exports, and screen images travel directly between the phone and that computer.
-- OpenMausBot stores transcripts on that computer. The app does not send the developer a cloud copy.
+- MagicBot stores transcripts on that computer. The app does not send the developer a cloud copy.
 - The app contains no advertising, analytics, tracking, or third-party SDKs.
 - The app does not sell personal information.
 
@@ -16,8 +16,8 @@ If optional hosted services are introduced later, this policy and the App Store 
 
 ## Control and deletion
 
-Unpairing removes the connection and pairing token from the phone. Revoking the phone in OpenMausBot's Companion settings prevents that credential from reaching the computer. Transcript deletion is controlled by the OpenMausBot installation that stores it.
+Unpairing removes the connection and pairing token from the phone. Revoking the phone in MagicBot's Companion settings prevents that credential from reaching the computer. Transcript deletion is controlled by the MagicBot installation that stores it.
 
 ## Support
 
-Questions or privacy requests can be opened at [OpenMausBot Support](https://github.com/milind-soni/OpenMausBot/issues).
+Questions or privacy requests can be opened at [MagicBot Support](https://github.com/everyai-com/magicbot/issues).

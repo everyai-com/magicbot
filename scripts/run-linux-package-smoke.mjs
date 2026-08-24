@@ -29,7 +29,7 @@ if (appImages.length !== 1) {
 const [appImage] = appImages;
 
 for (const executable of [
-  path.join(root, "release", "linux-unpacked", "openmausbot"),
+  path.join(root, "release", "linux-unpacked", "magicbot"),
   path.join(root, "release", appImage),
 ]) {
   const runtimeDirectory = mkdtempSync(path.join(tmpdir(), prefixName));

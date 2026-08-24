@@ -142,7 +142,7 @@ public struct PairingInvite: Equatable, Sendable {
     }
 
     public static func parse(_ url: URL) -> PairingInvite? {
-        guard url.scheme?.lowercased() == "openmausbot",
+        guard url.scheme?.lowercased() == "magicbot",
               url.host?.lowercased() == "pair",
               let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
         else { return nil }
@@ -309,7 +309,7 @@ public struct CompanionClient: Sendable {
 
     /// Turn a non-2xx into an `APIError` carrying the harness's own message.
     /// Those messages are written for people ("pair this device in
-    /// OpenMausBot → Settings → Companion"), so passing them through beats
+    /// MagicBot → Settings → Companion"), so passing them through beats
     /// inventing a worse one here.
     static func check(_ response: URLResponse, _ data: Data) throws {
         guard let http = response as? HTTPURLResponse else { return }

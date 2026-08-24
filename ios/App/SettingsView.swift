@@ -40,7 +40,7 @@ struct SettingsView: View {
             } header: {
                 Text("Notifications")
             } footer: {
-                Text("Approvals and finished work appear while OpenMausMobile is connected, including frames replayed after a short background pause. Closed-app push needs the separate APNs relay release.")
+                Text("Approvals and finished work appear while MagicBotMobile is connected, including frames replayed after a short background pause. Closed-app push needs the separate APNs relay release.")
             }
 
             Section {
@@ -63,7 +63,7 @@ struct SettingsView: View {
             Section {
                 Button("Unpair this phone", role: .destructive) { confirmingSignOut = true }
             } footer: {
-                Text("Removes the pairing from this phone only. To stop it reaching the computer at all, remove the device in OpenMausBot → Settings → Companion.")
+                Text("Removes the pairing from this phone only. To stop it reaching the computer at all, remove the device in MagicBot → Settings → Companion.")
             }
 
             Section("Not here") {
