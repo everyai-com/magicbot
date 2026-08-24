@@ -998,7 +998,22 @@ function webhookCredential(request: Request, webhook: WebhookRecord, secret: str
 
 function sameOrigin(request: Request): boolean {
   const origin = request.headers.get("origin");
-  return !origin || origin === new URL(request.url).origin;
+  const fetchSite = request.headers.get("sec-fetch-site")?.toLowerCase();
+
+  // Fetch Metadata is set by browsers from information that page scripts cannot
+  // alter. It also survives privacy modes and proxies that hide or rewrite Origin.
+  if (fetchSite === "cross-site" || fetchSite === "same-site") return false;
+  if (!origin || origin === "null") return !fetchSite || fetchSite === "same-origin" || fetchSite === "none";
+
+  try {
+    if (new URL(origin).origin === new URL(request.url).origin) return true;
+  } catch {
+    return false;
+  }
+
+  // A proxy can change the URL visible to the Worker while the browser still
+  // correctly identifies the form submission as same-origin.
+  return fetchSite === "same-origin";
 }
 
 async function handleWebhook(request: Request, env: Env, endpointId: string): Promise<Response> {
@@ -2204,7 +2219,7 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
       return redirect("/", { "set-cookie": sessionCookie(session) });
     }
     if ((url.pathname === "/login" || url.pathname === "/signup") && request.method === "POST") {
-      if (!sameOrigin(request)) return loginPage("Cross-origin request refused", url.pathname === "/signup" ? "signup" : "login");
+      if (!sameOrigin(request)) return loginPage("Cross-origin request refused", url.pathname === "/signup" ? "signup" : "login", 403);
       const body = await requestBody(request);
       const email = (body.email ?? "").trim().toLowerCase();
       const password = body.password ?? "";
