@@ -276,7 +276,7 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
         .then((status) => {
           if (!alive) return;
           if (status.configured) {
-            setBoxState("cloudflare");
+            setBoxState(status.running === false ? "archived" : "cloudflare");
             setPhase("ready");
           } else if (autoLocal) {
             setPhase("local");
@@ -744,7 +744,9 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
               <span className="text-[12px]">
                 {phase === "ready"
                   ? cloudBackend === "cloudflare"
-                    ? "Ready for shell, code, and file tasks. This cloud computer has no visual desktop."
+                    ? boxState === "archived"
+                      ? "Sleeping. Its persistent workspace is safe; the next shell, code, or file task wakes it automatically."
+                      : "Ready for shell, code, and file tasks. This cloud computer has no visual desktop."
                     : "Waiting for the first frame…"
                   : phase === "vm"
                     ? "Capturing the Local VM screen…"
@@ -914,9 +916,9 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
           </button>
         )}
         {/* Cloud-only actions */}
-        {phase === "ready" && cloudBackend !== "cloudflare" && (
+        {phase === "ready" && (
           <div className="mt-3 flex gap-2">
-            {!control.held && !control.helpReason && (
+            {cloudBackend !== "cloudflare" && !control.held && !control.helpReason && (
               <button
                 onClick={() => controlAction("take")}
                 disabled={controlPending || pending === "join"}
@@ -927,7 +929,7 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
                 Take control
               </button>
             )}
-            {(cloudBackend === "vps" || boxState !== "archived") && (
+            {(cloudBackend === "cloudflare" ? boxState !== "archived" : cloudBackend === "vps" || boxState !== "archived") && (
               <button
                 onClick={() => run("sleep")}
                 disabled={pending === "sleep"}

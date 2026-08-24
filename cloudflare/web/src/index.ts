@@ -1,3 +1,14 @@
+import {
+  createCodexFetch,
+  ensureFreshTokens,
+  exchangeDeviceAuthorization,
+  listCodexModels,
+  pollDeviceCode,
+  requestDeviceCode,
+  resolveConfig,
+  type ChatGPTTokens,
+} from "@opencoredev/loginwithchatgpt-core";
+
 interface Env {
   DB: D1Database;
   AI: Ai;
@@ -8,10 +19,12 @@ interface Env {
     request(userId: string, apiKey: string, path: string, method?: string, body?: string, mcpSession?: string): Promise<{ status: number; body: string; contentType?: string; mcpSession?: string }>;
   };
   COMPUTER: {
+    status(botId: string): Promise<{ running: boolean; exit: unknown }>;
     exec(botId: string, command: string): Promise<{ ok: boolean; stdout: string; stderr: string; exitCode: number }>;
     run(botId: string, code: string, language?: "python" | "javascript" | "typescript"): Promise<unknown>;
     writeFile(botId: string, path: string, content: string): Promise<unknown>;
     readFile(botId: string, path: string): Promise<unknown>;
+    sleep(botId: string): Promise<unknown>;
     destroy(botId: string): Promise<unknown>;
   };
 }
@@ -112,7 +125,7 @@ interface Bot {
   unread: boolean;
   busy: boolean;
   activity: "idle";
-  modelSelection: { instanceId: string; model: string };
+  modelSelection: { instanceId: string; model: string; effort?: "none" | "low" | "medium" | "high" | "xhigh" };
   computer: "cloud";
   cloudBackend: "cloudflare";
   createdAt: number;
@@ -127,6 +140,18 @@ const SESSION_AGE = 60 * 60 * 24 * 30;
 const MODEL = "@cf/moonshotai/kimi-k2.6";
 const IMAGE_MODEL = "@cf/black-forest-labs/flux-1-schnell";
 const VOICE_MODEL = "@cf/deepgram/aura-2-en";
+const CODEX_CREDENTIAL = "codex_subscription";
+const CODEX_PENDING_SECRET = "codex_pending_secret";
+const CODEX_MODELS_CACHE = "codex_models";
+const CODEX_RUNTIME_READY = "codex_runtime_ready";
+const CODEX_CONSENT_VERSION = "2026-08-24";
+const CLAUDE_CREDENTIAL = "claude_code_subscription";
+const CLAUDE_PENDING = "claude_code_pending";
+const CLAUDE_RUNTIME_READY = "claude_code_runtime_ready";
+const CLAUDE_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
+const CLAUDE_REDIRECT = "https://console.anthropic.com/oauth/code/callback";
+const CLAUDE_TOKEN_URL = "https://platform.claude.com/v1/oauth/token";
+const CLAUDE_MODELS = ["claude-sonnet-5", "claude-opus-5", "claude-haiku-4-5-20251001"];
 const encoder = new TextEncoder();
 
 function json(value: unknown, status = 200, headers: HeadersInit = {}): Response {
@@ -229,6 +254,111 @@ async function credentialValue(env: Env, userId: string, kind: string): Promise<
 async function credentialConfigured(env: Env, userId: string, kind: string): Promise<boolean> {
   return Boolean(await env.DB.prepare("SELECT 1 AS present FROM user_credentials WHERE user_id = ? AND kind = ?")
     .bind(userId, kind).first());
+}
+
+async function codexTokens(env: Env, userId: string): Promise<ChatGPTTokens | null> {
+  const raw = await credentialValue(env, userId, CODEX_CREDENTIAL);
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as ChatGPTTokens;
+    return parsed.accessToken ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+const codexConfig = resolveConfig({});
+
+async function freshCodexTokens(env: Env, userId: string): Promise<ChatGPTTokens> {
+  const current = await codexTokens(env, userId);
+  const fresh = await ensureFreshTokens(codexConfig, current ?? undefined, {
+    onRefresh: (tokens) => saveCredential(env, userId, CODEX_CREDENTIAL, JSON.stringify(tokens)),
+  });
+  if (!fresh.accountId) throw new Error("ChatGPT account id is missing; reconnect Codex");
+  return fresh;
+}
+
+async function discoverCodexModels(env: Env, userId: string, live = true): Promise<string[]> {
+  if (live) {
+    try {
+      const models = await listCodexModels({
+        config: codexConfig,
+        getAuth: async () => {
+          const tokens = await freshCodexTokens(env, userId);
+          return { accessToken: tokens.accessToken, accountId: tokens.accountId! };
+        },
+      });
+      if (models.length > 0) {
+        await saveCredential(env, userId, CODEX_MODELS_CACHE, JSON.stringify(models));
+        return models;
+      }
+    } catch { /* use the last verified account catalog */ }
+  }
+  const cached = await credentialValue(env, userId, CODEX_MODELS_CACHE);
+  if (!cached) return [];
+  try {
+    const parsed = JSON.parse(cached);
+    return Array.isArray(parsed) ? parsed.filter((value): value is string => typeof value === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+type ClaudePending = { verifier: string; state: string; authorizeUrl: string; expiresAt: number };
+type ClaudeCredential = { accessToken: string; refreshToken?: string; expiresAt?: number };
+
+function randomUrlSafe(bytes: number): string {
+  return base64Bytes(crypto.getRandomValues(new Uint8Array(bytes)));
+}
+
+async function pkceChallenge(verifier: string): Promise<string> {
+  return base64Bytes(new Uint8Array(await crypto.subtle.digest("SHA-256", encoder.encode(verifier))));
+}
+
+function claudeExpiry(expiresIn?: number): number | undefined {
+  return expiresIn ? Date.now() + expiresIn * 1000 - 5 * 60 * 1000 : undefined;
+}
+
+async function claudeCredential(env: Env, userId: string): Promise<ClaudeCredential | null> {
+  const raw = await credentialValue(env, userId, CLAUDE_CREDENTIAL);
+  if (!raw) return null;
+  if (raw.startsWith("sk-ant-oat")) return { accessToken: raw };
+  try {
+    const parsed = JSON.parse(raw) as ClaudeCredential;
+    return parsed.accessToken ? parsed : null;
+  } catch { return null; }
+}
+
+async function freshClaudeCredential(env: Env, userId: string): Promise<ClaudeCredential> {
+  const current = await claudeCredential(env, userId);
+  if (!current) throw new Error("Connect Claude in App Settings → Engines");
+  if (!current.expiresAt || current.expiresAt > Date.now()) return current;
+  if (!current.refreshToken) throw new Error("Claude connection expired; reconnect Claude");
+  const response = await fetch(CLAUDE_TOKEN_URL, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ grant_type: "refresh_token", client_id: CLAUDE_CLIENT_ID, refresh_token: current.refreshToken }),
+  });
+  if (!response.ok) throw new Error("Claude connection expired; reconnect Claude");
+  const body = await response.json<{ access_token?: string; refresh_token?: string; expires_in?: number }>();
+  if (!body.access_token) throw new Error("Claude connection expired; reconnect Claude");
+  const fresh = { accessToken: body.access_token, refreshToken: body.refresh_token ?? current.refreshToken, expiresAt: claudeExpiry(body.expires_in) };
+  await saveCredential(env, userId, CLAUDE_CREDENTIAL, JSON.stringify(fresh));
+  return fresh;
+}
+
+async function claudeRequest(env: Env, userId: string, body: Record<string, unknown>): Promise<Response> {
+  const credential = await freshClaudeCredential(env, userId);
+  return fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${credential.accessToken}`,
+      "anthropic-version": "2023-06-01",
+      "anthropic-beta": "claude-code-20250219,oauth-2025-04-20",
+      "content-type": "application/json",
+    },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(120_000),
+  });
 }
 
 function constantTimeEqual(a: string, b: string): boolean {
@@ -491,7 +621,259 @@ async function modelContentForPrompt(env: Env, userId: string, prompt: string): 
   return images.length > 0 ? [{ type: "text", text }, ...images] : text;
 }
 
+type CodexOutputItem = {
+  id?: string;
+  type?: string;
+  name?: string;
+  arguments?: string;
+  call_id?: string;
+  content?: Array<{ type?: string; text?: string }>;
+};
+
+type CodexCompleted = {
+  output?: CodexOutputItem[];
+  usage?: { input_tokens?: number; output_tokens?: number };
+};
+
+async function readCodexResponse(response: Response): Promise<{ completed: CodexCompleted | null; text: string }> {
+  const raw = await response.text();
+  let completed: CodexCompleted | null = null;
+  let deltaText = "";
+  for (const line of raw.split("\n")) {
+    if (!line.startsWith("data:")) continue;
+    const payload = line.slice(5).trim();
+    if (!payload || payload === "[DONE]") continue;
+    try {
+      const event = JSON.parse(payload) as { type?: string; delta?: string; response?: CodexCompleted };
+      if (event.type === "response.output_text.delta" && typeof event.delta === "string") deltaText += event.delta;
+      if (event.type === "response.completed" && event.response) completed = event.response;
+    } catch { /* SSE keepalives and partial lines are ignored */ }
+  }
+  const finalText = (completed?.output ?? [])
+    .filter((item) => item.type === "message")
+    .flatMap((item) => item.content ?? [])
+    .map((block) => block.text ?? "")
+    .join("");
+  return { completed, text: finalText || deltaText };
+}
+
+async function verifyCodexRuntime(env: Env, userId: string, model: string): Promise<boolean> {
+  try {
+    const tokens = await freshCodexTokens(env, userId);
+    const codexFetch = createCodexFetch({
+      config: codexConfig,
+      getAuth: () => ({ accessToken: tokens.accessToken, accountId: tokens.accountId! }),
+      reasoningEffort: "low",
+      textVerbosity: "low",
+    });
+    const response = await codexFetch(`${codexConfig.codexBaseUrl}/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json", accept: "text/event-stream", session_id: crypto.randomUUID() },
+      body: JSON.stringify({
+        model,
+        instructions: "This is a connection check.",
+        input: [{ role: "user", content: [{ type: "input_text", text: "Reply exactly CONNECTED." }] }],
+        tools: [], tool_choice: "none", parallel_tool_calls: false, stream: true,
+      }),
+    });
+    if (!response.ok) throw new Error(`probe ${response.status}`);
+    const parsed = await readCodexResponse(response);
+    const ready = Boolean(parsed.completed && parsed.text.trim());
+    await saveCredential(env, userId, CODEX_RUNTIME_READY, ready ? "true" : "");
+    return ready;
+  } catch {
+    await saveCredential(env, userId, CODEX_RUNTIME_READY, "");
+    return false;
+  }
+}
+
+function codexPromptContent(content: string | ModelContentPart[]): unknown {
+  if (typeof content === "string") return [{ type: "input_text", text: content }];
+  return content.map((part) => part.type === "text"
+    ? { type: "input_text", text: part.text }
+    : { type: "input_image", image_url: part.image_url.url });
+}
+
+async function codexReply(env: Env, userId: string, bot: Bot, text: string): Promise<string> {
+  const tokens = await freshCodexTokens(env, userId);
+  const codexFetch = createCodexFetch({
+    config: codexConfig,
+    getAuth: () => ({ accessToken: tokens.accessToken, accountId: tokens.accountId! }),
+    reasoningEffort: bot.modelSelection.effort === "none" ? "none" : (bot.modelSelection.effort as "low" | "medium" | "high" | "xhigh" | undefined),
+  });
+  const input: Array<Record<string, unknown>> = bot.messages
+    .filter((message) => message.kind === "text")
+    .slice(-24)
+    .map((message) => ({
+      role: message.role === "bot" ? "assistant" : "user",
+      content: [{ type: message.role === "bot" ? "output_text" : "input_text", text: message.text }],
+    }));
+  input.push({ role: "user", content: codexPromptContent(await modelContentForPrompt(env, userId, text)) });
+
+  const tools: Array<Record<string, unknown>> = [{
+    type: "function", name: "computer_exec",
+    description: "Run a shell command in this bot's private persistent Cloudflare Linux computer.",
+    parameters: { type: "object", properties: { command: { type: "string" } }, required: ["command"] },
+  }, {
+    type: "function", name: "generate_image",
+    description: "Generate an image and save it to the user's MagicBot files.",
+    parameters: { type: "object", properties: { prompt: { type: "string" } }, required: ["prompt"] },
+  }];
+  let connectorSession = "";
+  const connectorToolNames = new Set<string>();
+  if (bot.composio !== false) {
+    try {
+      const connected = await connectorTools(env, userId);
+      connectorSession = connected.session;
+      for (const tool of connected.tools) {
+        if (typeof tool.name !== "string") continue;
+        tools.push({ type: "function", ...tool });
+        connectorToolNames.add(tool.name);
+      }
+    } catch { /* connected apps remain optional */ }
+  }
+
+  for (let step = 0; step < 5; step += 1) {
+    const response = await codexFetch(`${codexConfig.codexBaseUrl}/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json", accept: "text/event-stream", session_id: crypto.randomUUID() },
+      body: JSON.stringify({
+        model: bot.modelSelection.model,
+        instructions: `You are ${bot.name}, ${bot.title || "a capable AI assistant"}. ${bot.description || "Be practical, clear, and proactive."}`,
+        input, tools, tool_choice: "auto", parallel_tool_calls: false, stream: true,
+      }),
+    });
+    if (!response.ok) throw new Error(`Codex returned ${response.status}; reconnect or try again later`);
+    const parsed = await readCodexResponse(response);
+    if (!parsed.completed) throw new Error("Codex response ended before completion");
+    const calls = (parsed.completed.output ?? []).filter((item) => item.type === "function_call" && item.name && item.call_id);
+    if (calls.length === 0) return parsed.text || "Codex completed without a text reply.";
+    input.push(...(parsed.completed.output ?? []) as Array<Record<string, unknown>>);
+    for (const call of calls.slice(0, 3)) {
+      let args: Record<string, unknown> = {};
+      try { args = JSON.parse(call.arguments ?? "{}"); } catch { args = {}; }
+      let result: unknown;
+      if (call.name === "computer_exec" && typeof args.command === "string") {
+        result = await env.COMPUTER.exec(bot.id, args.command.slice(0, 20_000))
+          .catch((error) => ({ ok: false, error: error instanceof Error ? error.message : String(error) }));
+      } else if (call.name === "generate_image" && typeof args.prompt === "string") {
+        result = await generatedImage(env, userId, args.prompt.slice(0, 2_000))
+          .then((url) => ({ ok: true, url, instruction: `Embed with Markdown: ![generated image](${url})` }))
+          .catch((error) => ({ ok: false, error: error instanceof Error ? error.message : String(error) }));
+      } else if (call.name && connectorToolNames.has(call.name)) {
+        result = await mcpRequest(env, userId, connectorSession, "tools/call", { name: call.name, arguments: args })
+          .then((called) => { connectorSession = called.session; return called.payload.result ?? called.payload; })
+          .catch((error) => ({ isError: true, error: error instanceof Error ? error.message : String(error) }));
+      } else result = { ok: false, error: "Invalid tool call" };
+      input.push({ type: "function_call_output", call_id: call.call_id, output: JSON.stringify(result).slice(0, 24_000) });
+    }
+  }
+  return "I reached the computer-action limit for this turn. Ask me to continue and I'll pick up from here.";
+}
+
+type AnthropicContentBlock = {
+  type: "text" | "tool_use";
+  text?: string;
+  id?: string;
+  name?: string;
+  input?: Record<string, unknown>;
+};
+
+function anthropicPromptContent(content: string | ModelContentPart[]): Array<Record<string, unknown>> {
+  if (typeof content === "string") return [{ type: "text", text: content }];
+  const blocks: Array<Record<string, unknown>> = [];
+  for (const part of content) {
+    if (part.type === "text") {
+      blocks.push({ type: "text", text: part.text });
+      continue;
+    }
+    const match = part.image_url.url.match(/^data:([^;,]+);base64,(.+)$/s);
+    if (!match) blocks.push({ type: "text", text: "[Image attachment could not be encoded for Claude.]" });
+    else blocks.push({ type: "image", source: { type: "base64", media_type: match[1], data: match[2] } });
+  }
+  return blocks;
+}
+
+async function anthropicReply(env: Env, userId: string, bot: Bot, text: string): Promise<string> {
+  const messages: Array<Record<string, unknown>> = bot.messages
+    .filter((message) => message.kind === "text")
+    .slice(-24)
+    .map((message) => ({ role: message.role === "bot" ? "assistant" : "user", content: message.text }));
+  messages.push({ role: "user", content: anthropicPromptContent(await modelContentForPrompt(env, userId, text)) });
+
+  const tools: Array<Record<string, unknown>> = [{
+    name: "computer_exec",
+    description: "Run a shell command in this bot's private persistent Cloudflare Linux computer.",
+    input_schema: { type: "object", properties: { command: { type: "string" } }, required: ["command"] },
+  }, {
+    name: "generate_image",
+    description: "Generate an image and save it to the user's MagicBot files.",
+    input_schema: { type: "object", properties: { prompt: { type: "string" } }, required: ["prompt"] },
+  }];
+  let connectorSession = "";
+  const connectorToolNames = new Set<string>();
+  if (bot.composio !== false) {
+    try {
+      const connected = await connectorTools(env, userId);
+      connectorSession = connected.session;
+      for (const tool of connected.tools) {
+        if (typeof tool.name !== "string") continue;
+        tools.push({ name: tool.name, description: tool.description, input_schema: tool.parameters });
+        connectorToolNames.add(tool.name);
+      }
+    } catch { /* connected apps remain optional */ }
+  }
+
+  for (let step = 0; step < 5; step += 1) {
+    const response = await claudeRequest(env, userId, {
+      model: bot.modelSelection.model,
+      max_tokens: bot.modelSelection.model.includes("opus") || bot.modelSelection.model.includes("sonnet") ? 12_000 : 4096,
+      system: [
+        { type: "text", text: "You are Claude Code, Anthropic's official CLI for Claude." },
+        { type: "text", text: `You are ${bot.name}, ${bot.title || "a capable AI assistant"}. ${bot.description || "Be practical, clear, and proactive."}` },
+      ],
+      messages, tools,
+    });
+    if (!response.ok) {
+      const detail = response.status === 401 || response.status === 403 ? "the Claude subscription needs to be reconnected" : `Anthropic returned ${response.status}`;
+      throw new Error(`Claude could not answer because ${detail}.`);
+    }
+    const body = await response.json<{ content?: AnthropicContentBlock[] }>();
+    const content = body.content ?? [];
+    const calls = content.filter((block) => block.type === "tool_use" && block.id && block.name);
+    if (calls.length === 0) {
+      const answer = content.filter((block) => block.type === "text").map((block) => block.text ?? "").join("");
+      return answer || "Claude completed without a text reply.";
+    }
+    messages.push({ role: "assistant", content });
+    const results: Array<Record<string, unknown>> = [];
+    for (const [callIndex, call] of calls.entries()) {
+      const args = call.input ?? {};
+      let result: unknown;
+      if (callIndex >= 3) {
+        result = { ok: false, error: "Only three tool actions can run in one step" };
+      } else if (call.name === "computer_exec" && typeof args.command === "string") {
+        result = await env.COMPUTER.exec(bot.id, args.command.slice(0, 20_000))
+          .catch((error) => ({ ok: false, error: error instanceof Error ? error.message : String(error) }));
+      } else if (call.name === "generate_image" && typeof args.prompt === "string") {
+        result = await generatedImage(env, userId, args.prompt.slice(0, 2_000))
+          .then((url) => ({ ok: true, url, instruction: `Embed with Markdown: ![generated image](${url})` }))
+          .catch((error) => ({ ok: false, error: error instanceof Error ? error.message : String(error) }));
+      } else if (call.name && connectorToolNames.has(call.name)) {
+        result = await mcpRequest(env, userId, connectorSession, "tools/call", { name: call.name, arguments: args })
+          .then((called) => { connectorSession = called.session; return called.payload.result ?? called.payload; })
+          .catch((error) => ({ isError: true, error: error instanceof Error ? error.message : String(error) }));
+      } else result = { ok: false, error: "Invalid tool call" };
+      results.push({ type: "tool_result", tool_use_id: call.id, content: JSON.stringify(result).slice(0, 24_000) });
+    }
+    messages.push({ role: "user", content: results });
+  }
+  return "I reached the computer-action limit for this turn. Ask me to continue and I'll pick up from here.";
+}
+
 async function aiReply(env: Env, userId: string, bot: Bot, text: string): Promise<string> {
+  if (bot.modelSelection.instanceId === "codex-subscription") return codexReply(env, userId, bot, text);
+  if (bot.modelSelection.instanceId === "claude-subscription" || bot.modelSelection.instanceId === "anthropic-api") return anthropicReply(env, userId, bot, text);
   const history = bot.messages.filter((message) => message.kind === "text").slice(-24).map((message) => ({
     role: message.role === "bot" ? "assistant" : "user",
     content: message.text,
@@ -794,13 +1176,206 @@ async function api(request: Request, env: Env, user: User, path: string): Promis
   if (request.method !== "GET" && !sameOrigin(request)) return json({ error: "Cross-origin request refused" }, 403);
   if (path === "/api/auth/me" && request.method === "GET") return json({ user });
   if (path === "/api/health") return json({ app: "magicbot-web", cloud: "cloudflare" });
-  if (path === "/api/instances") return json({ instances: [{
-    instanceId: "cloudflare-ai", driverKind: "cloudflareAi", displayName: "Cloudflare AI",
-    snapshot: { state: "available", authenticated: true, billing: "metered" },
-    models: { default: MODEL, options: [{ id: MODEL, label: "Kimi K2.6" }] },
-    capabilities: { computerMcp: true, agentsMcp: false, composioMcp: await credentialConfigured(env, user.id, "composio"), images: true, queueing: false },
-    access: "custom",
-  }] });
+  if (path === "/api/codex/login" && request.method === "POST") {
+    const body: { consentVersion?: string } = await request.json<{ consentVersion?: string }>().catch(() => ({}));
+    if (body.consentVersion !== CODEX_CONSENT_VERSION) return json({ error: "Review and accept the current Codex connection notice" }, 400);
+    if (!await withinRateLimit(env, `codex-login:${user.id}`, 5, 60 * 60)) return json({ error: "Too many connection attempts. Please try again later." }, 429);
+    try {
+      const device = await requestDeviceCode(codexConfig);
+      await saveCredential(env, user.id, CODEX_PENDING_SECRET, device.deviceAuthId);
+      await env.DB.prepare(
+        `INSERT INTO codex_auth_pending
+          (user_id, device_auth_id, user_code, verification_url, poll_interval, expires_at, last_polled_at, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, 0, ?)
+         ON CONFLICT(user_id) DO UPDATE SET device_auth_id = excluded.device_auth_id,
+           user_code = excluded.user_code, verification_url = excluded.verification_url,
+           poll_interval = excluded.poll_interval, expires_at = excluded.expires_at,
+           last_polled_at = 0, created_at = excluded.created_at`,
+      ).bind(user.id, "encrypted", device.userCode, device.verificationUrl, device.interval, device.expiresAt, Date.now()).run();
+      return json({ status: "pending", userCode: device.userCode, verificationUrl: device.verificationUrl, interval: device.interval, expiresAt: device.expiresAt, consentVersion: CODEX_CONSENT_VERSION });
+    } catch {
+      return json({ error: "Could not start ChatGPT sign-in. Please try again." }, 502);
+    }
+  }
+  if (path === "/api/codex/login" && request.method === "DELETE") {
+    await Promise.all([
+      env.DB.prepare("DELETE FROM codex_auth_pending WHERE user_id = ?").bind(user.id).run(),
+      saveCredential(env, user.id, CODEX_PENDING_SECRET, ""),
+    ]);
+    return json({ ok: true });
+  }
+  if (path === "/api/codex/poll" && request.method === "POST") {
+    const row = await env.DB.prepare(
+      "SELECT device_auth_id, user_code, verification_url, poll_interval, expires_at, last_polled_at FROM codex_auth_pending WHERE user_id = ?",
+    ).bind(user.id).first<{ device_auth_id: string; user_code: string; verification_url: string; poll_interval: number; expires_at: number; last_polled_at: number }>();
+    if (!row) return json({ error: "No Codex connection is waiting for approval" }, 404);
+    if (row.expires_at <= Date.now()) {
+      await Promise.all([
+        env.DB.prepare("DELETE FROM codex_auth_pending WHERE user_id = ?").bind(user.id).run(),
+        saveCredential(env, user.id, CODEX_PENDING_SECRET, ""),
+      ]);
+      return json({ error: "That sign-in code expired. Start again for a new code." }, 410);
+    }
+    if (row.last_polled_at + row.poll_interval * 1000 > Date.now()) {
+      return json({ status: "pending", interval: row.poll_interval, expiresAt: row.expires_at });
+    }
+    await env.DB.prepare("UPDATE codex_auth_pending SET last_polled_at = ? WHERE user_id = ?").bind(Date.now(), user.id).run();
+    try {
+      const deviceAuthId = await credentialValue(env, user.id, CODEX_PENDING_SECRET);
+      if (!deviceAuthId) return json({ error: "That sign-in attempt is no longer available. Start again." }, 410);
+      const polled = await pollDeviceCode(codexConfig, { deviceAuthId, userCode: row.user_code });
+      if (polled.status === "pending") return json({ status: "pending", interval: row.poll_interval, expiresAt: row.expires_at });
+      const tokens = await exchangeDeviceAuthorization(codexConfig, polled);
+      await saveCredential(env, user.id, CODEX_CREDENTIAL, JSON.stringify(tokens));
+      await Promise.all([
+        env.DB.prepare("DELETE FROM codex_auth_pending WHERE user_id = ?").bind(user.id).run(),
+        saveCredential(env, user.id, CODEX_PENDING_SECRET, ""),
+      ]);
+      const models = await discoverCodexModels(env, user.id, true);
+      const runtimeReady = models.length > 0 && await verifyCodexRuntime(env, user.id, models[0]);
+      return json({
+        status: "connected", runtimeReady, models,
+        warning: runtimeReady ? null : "ChatGPT is connected, but Cloudflare could not reach Codex inference. You can retry the check later.",
+      });
+    } catch {
+      return json({ error: "ChatGPT authorization could not be completed. Start again or retry shortly." }, 502);
+    }
+  }
+  if (path === "/api/codex/check" && request.method === "POST") {
+    if (!await credentialConfigured(env, user.id, CODEX_CREDENTIAL)) return json({ error: "Connect ChatGPT first" }, 400);
+    const models = await discoverCodexModels(env, user.id, true);
+    const runtimeReady = models.length > 0 && await verifyCodexRuntime(env, user.id, models[0]);
+    return json({ runtimeReady, models, warning: runtimeReady ? null : "ChatGPT is connected, but hosted Codex inference is not reachable from Cloudflare right now." });
+  }
+  if (path === "/api/codex/status" && request.method === "GET") {
+    const [configured, ready, models, pending] = await Promise.all([
+      credentialConfigured(env, user.id, CODEX_CREDENTIAL),
+      credentialValue(env, user.id, CODEX_RUNTIME_READY),
+      discoverCodexModels(env, user.id, false),
+      env.DB.prepare("SELECT user_code, verification_url, poll_interval, expires_at FROM codex_auth_pending WHERE user_id = ? AND expires_at > ?")
+        .bind(user.id, Date.now()).first<{ user_code: string; verification_url: string; poll_interval: number; expires_at: number }>(),
+    ]);
+    return json({
+      configured, runtimeReady: ready === "true", modelCount: models.length, consentVersion: CODEX_CONSENT_VERSION,
+      pending: pending ? { userCode: pending.user_code, verificationUrl: pending.verification_url, interval: pending.poll_interval, expiresAt: pending.expires_at } : null,
+    });
+  }
+  if (path === "/api/codex" && request.method === "DELETE") {
+    await Promise.all([
+      saveCredential(env, user.id, CODEX_CREDENTIAL, ""),
+      saveCredential(env, user.id, CODEX_MODELS_CACHE, ""),
+      saveCredential(env, user.id, CODEX_RUNTIME_READY, ""),
+      saveCredential(env, user.id, CODEX_PENDING_SECRET, ""),
+      env.DB.prepare("DELETE FROM codex_auth_pending WHERE user_id = ?").bind(user.id).run(),
+    ]);
+    return json({ ok: true });
+  }
+  if (path === "/api/claude/login" && request.method === "POST") {
+    if (!await withinRateLimit(env, `claude-login:${user.id}`, 10, 60 * 60)) return json({ error: "Too many connection attempts. Please try again later." }, 429);
+    const verifier = randomUrlSafe(64);
+    const state = randomUrlSafe(32);
+    const params = new URLSearchParams({
+      code: "true", client_id: CLAUDE_CLIENT_ID, response_type: "code", redirect_uri: CLAUDE_REDIRECT,
+      scope: "user:inference", code_challenge: await pkceChallenge(verifier), code_challenge_method: "S256", state,
+    });
+    const pending: ClaudePending = {
+      verifier, state, authorizeUrl: `https://claude.ai/oauth/authorize?${params}`, expiresAt: Date.now() + 10 * 60 * 1000,
+    };
+    await saveCredential(env, user.id, CLAUDE_PENDING, JSON.stringify(pending));
+    return json({ authorizeUrl: pending.authorizeUrl, expiresAt: pending.expiresAt });
+  }
+  if (path === "/api/claude/complete" && request.method === "POST") {
+    const body = await request.json<{ code?: string }>().catch(() => ({}));
+    const pasted = body.code?.trim() ?? "";
+    if (!pasted || pasted.length > 512) return json({ error: "Paste the one-time code shown by Claude" }, 400);
+    const rawPending = await credentialValue(env, user.id, CLAUDE_PENDING);
+    if (!rawPending) return json({ error: "Start Claude sign-in again first" }, 400);
+    try {
+      const pending = JSON.parse(rawPending) as ClaudePending;
+      if (pending.expiresAt <= Date.now()) throw new Error("That Claude sign-in expired. Start again.");
+      const [code, state] = pasted.split("#", 2);
+      if (!code || !state || !constantTimeEqual(state, pending.state)) throw new Error("Paste the complete code from the newest Claude sign-in tab, including the part after #");
+      const response = await fetch(CLAUDE_TOKEN_URL, {
+        method: "POST", headers: { "content-type": "application/json", accept: "application/json" },
+        body: JSON.stringify({
+          grant_type: "authorization_code", client_id: CLAUDE_CLIENT_ID, code, state,
+          redirect_uri: CLAUDE_REDIRECT, code_verifier: pending.verifier,
+        }),
+      });
+      if (!response.ok) throw new Error(response.status === 400
+        ? "Claude rejected that one-time code. Start again and use the newest code."
+        : "Claude sign-in could not finish. Nothing was saved; try again.");
+      const tokens = await response.json<{ access_token?: string; refresh_token?: string; expires_in?: number }>();
+      if (!tokens.access_token) throw new Error("Claude did not return a connection token. Start again.");
+      const credential: ClaudeCredential = {
+        accessToken: tokens.access_token, refreshToken: tokens.refresh_token, expiresAt: claudeExpiry(tokens.expires_in),
+      };
+      await Promise.all([
+        saveCredential(env, user.id, CLAUDE_CREDENTIAL, JSON.stringify(credential)),
+        saveCredential(env, user.id, CLAUDE_RUNTIME_READY, "true"),
+        saveCredential(env, user.id, CLAUDE_PENDING, ""),
+      ]);
+      return json({ status: "connected", configured: true, runtimeReady: true, models: CLAUDE_MODELS });
+    } catch (error) {
+      return json({ error: error instanceof Error ? error.message : "Claude authorization failed" }, 400);
+    }
+  }
+  if (path === "/api/claude/status" && request.method === "GET") {
+    return json({ status: "idle" });
+  }
+  if (path === "/api/claude/login" && request.method === "DELETE") {
+    await saveCredential(env, user.id, CLAUDE_PENDING, "");
+    return json({ ok: true });
+  }
+  if (path === "/api/claude" && request.method === "DELETE") {
+    await Promise.all([
+      saveCredential(env, user.id, CLAUDE_CREDENTIAL, ""),
+      saveCredential(env, user.id, CLAUDE_PENDING, ""),
+      saveCredential(env, user.id, CLAUDE_RUNTIME_READY, ""),
+    ]);
+    return json({ ok: true });
+  }
+  if (path === "/api/instances") {
+    const composio = await credentialConfigured(env, user.id, "composio");
+    const instances: Array<Record<string, unknown>> = [{
+      instanceId: "cloudflare-ai", driverKind: "cloudflareAi", displayName: "Cloudflare AI",
+      snapshot: { state: "available", authenticated: true, billing: "metered" },
+      models: { default: MODEL, options: [{ id: MODEL, label: "Kimi K2.6" }] },
+      capabilities: { computerMcp: true, agentsMcp: false, composioMcp: composio, images: true, queueing: false },
+      access: "subscription",
+    }];
+    if (await credentialConfigured(env, user.id, CODEX_CREDENTIAL)) {
+      const [models, ready] = await Promise.all([
+        discoverCodexModels(env, user.id, false), credentialValue(env, user.id, CODEX_RUNTIME_READY),
+      ]);
+      const runtimeReady = ready === "true" && models.length > 0;
+      instances.push({
+        instanceId: "codex-subscription", driverKind: "codex", displayName: "Codex",
+        snapshot: {
+          state: runtimeReady ? "available" : "unavailable", authenticated: true, billing: "subscription",
+          reason: runtimeReady ? undefined : "ChatGPT is connected, but hosted Codex inference is not reachable from Cloudflare yet.",
+        },
+        models: { default: models[0] ?? "", options: models.map((id) => ({ id, label: id.replaceAll("-", " ").replace(/\b\w/g, (letter) => letter.toUpperCase()) })) },
+        capabilities: { computerMcp: true, agentsMcp: false, composioMcp: composio, images: true, effortLevels: ["low", "medium", "high", "xhigh"], queueing: false },
+        access: "subscription",
+      });
+    }
+    if (await credentialConfigured(env, user.id, CLAUDE_CREDENTIAL)) {
+      const ready = await credentialValue(env, user.id, CLAUDE_RUNTIME_READY);
+      const runtimeReady = ready === "true";
+      instances.push({
+        instanceId: "claude-subscription", driverKind: "claudeAgent", displayName: "Claude Code",
+        snapshot: {
+          state: runtimeReady ? "available" : "unavailable", authenticated: true, billing: "subscription",
+          reason: runtimeReady ? undefined : "Reconnect the Claude subscription.",
+        },
+        models: { default: CLAUDE_MODELS[0], options: CLAUDE_MODELS.map((id) => ({ id, label: id.replaceAll("-", " ").replace(/\b\w/g, (letter) => letter.toUpperCase()) })) },
+        capabilities: { computerMcp: true, agentsMcp: false, composioMcp: composio, images: true, queueing: false },
+        access: "subscription",
+      });
+    }
+    return json({ instances });
+  }
   if (path === "/api/config") {
     if (request.method === "PUT") {
       const body = await request.json<{ profile?: { name?: string; email?: string }; composio?: { apiKey?: string } }>();
@@ -819,10 +1394,16 @@ async function api(request: Request, env: Env, user: User, path: string): Promis
         await saveCredential(env, user.id, "composio", key);
       }
     }
-    const composioConfigured = await credentialConfigured(env, user.id, "composio");
+    const [composioConfigured, codexConfigured, codexReady, codexModels, anthropicConfigured, anthropicReady] = await Promise.all([
+      credentialConfigured(env, user.id, "composio"), credentialConfigured(env, user.id, CODEX_CREDENTIAL),
+      credentialValue(env, user.id, CODEX_RUNTIME_READY), discoverCodexModels(env, user.id, false),
+      credentialConfigured(env, user.id, CLAUDE_CREDENTIAL), credentialValue(env, user.id, CLAUDE_RUNTIME_READY),
+    ]);
     return json({
       hosted: true,
       xai: { configured: false }, composio: { configured: composioConfigured, mode: composioConfigured ? "managed" : "unavailable" },
+      codex: { configured: codexConfigured, runtimeReady: codexReady === "true", modelCount: codexModels.length, consentVersion: CODEX_CONSENT_VERSION },
+      anthropic: { configured: anthropicConfigured, runtimeReady: anthropicReady === "true", modelCount: anthropicConfigured ? CLAUDE_MODELS.length : 0 },
       cfComputer: { configured: true, url: "https://magicbot-cf-computer.everyai-com.workers.dev" },
       vps: { configured: false, sshAlias: "" }, rooms: { turnTimeoutMinutes: 5 },
       localVm: { mode: "shared", maxInstances: 0 }, tts: { configured: true, ready: true, voice: "luna", provider: "cloudflare" },
@@ -1398,14 +1979,15 @@ async function api(request: Request, env: Env, user: User, path: string): Promis
     // Bot IDs are globally random UUIDs and fit the Sandbox 63-character key limit.
     const sandboxId = bot.id;
     if (action === "status" && request.method === "GET") {
-      return json({ backend: "cloudflare", configured: true, ready: true, container: "cloudflare", box: true, headless: true });
+      const state = await env.COMPUTER.status(sandboxId);
+      return json({ backend: "cloudflare-computer", configured: true, ready: true, running: state.running, container: state.running ? "cloudflare" : "sleeping", box: false, headless: true, persistentWorkspace: true });
     }
     if (action === "control") {
       const body: { action?: string } = request.method === "POST" ? await request.json<{ action?: string }>().catch(() => ({})) : {};
       return json({ held: body.action === "take", helpReason: null });
     }
     if (action === "provision" && request.method === "POST") {
-      return json({ backend: "cloudflare", configured: true, ready: true, container: "cloudflare", headless: true });
+      return json({ backend: "cloudflare-computer", configured: true, ready: true, container: "cloudflare", headless: true, persistentWorkspace: true });
     }
     if (action === "exec" && request.method === "POST") {
       const body = await request.json<{ command?: string }>();
@@ -1428,9 +2010,13 @@ async function api(request: Request, env: Env, user: User, path: string): Promis
       if (!body.path || body.content === undefined) return json({ error: "Path and content required" }, 400);
       return json(await env.COMPUTER.writeFile(sandboxId, body.path.slice(0, 1000), body.content.slice(0, 1_000_000)));
     }
-    if ((action === "sleep" || action === "remove") && request.method === "POST") {
+    if (action === "sleep" && request.method === "POST") {
+      await env.COMPUTER.sleep(sandboxId);
+      return json({ ok: true, container: "sleeping", persistentWorkspace: true });
+    }
+    if (action === "remove" && request.method === "POST") {
       await env.COMPUTER.destroy(sandboxId);
-      return json({ ok: true, container: "archived" });
+      return json({ ok: true, container: "removed", persistentWorkspace: false });
     }
     if ((action === "join" || action === "screenshot") && request.method === "POST") {
       return json({ error: "This Cloudflare computer is headless; use chat or the shell tools instead." }, 409);

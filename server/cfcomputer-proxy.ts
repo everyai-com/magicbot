@@ -1,9 +1,8 @@
 // cfcomputer-proxy — a minimal MCP stdio server the claude CLI spawns
 // (same pattern and dedicated-entry-file rationale as computer-proxy.ts).
 // It gives the agent its bot's Cloudflare cloud computer (the cf-computer/
-// Worker: one Sandbox container per bot) as headless tools — shell, code
-// runs, files, and HTTP service exposure. No display: Tier 2 (the visual
-// desktop) stays on Box until the noVNC image + wildcard domain land.
+// Worker: one official @cloudflare/computer Workspace and Linux runtime per
+// bot) as headless tools — shell, code, and durable files.
 //
 // stdout is the MCP channel — never console.log here.
 const base = (process.env.OMB_CF_COMPUTER_URL ?? "").replace(/\/+$/, "");
@@ -32,7 +31,7 @@ const TOOLS = [
   {
     name: "computer_exec",
     description:
-      "Run a shell command on the bot's cloud computer (a persistent Linux container — its disk survives between turns). Returns stdout/stderr/exit code. No display: this computer is headless, so use CLI tools (curl, python, git…), not GUI apps.",
+      "Run a shell command on the bot's Cloudflare Computer. Its Workspace files survive Linux runtime restarts. Returns stdout/stderr/exit code. This computer is headless, so use CLI tools (curl, python, git…), not GUI apps.",
     inputSchema: { type: "object", properties: { command: { type: "string" } }, required: ["command"] },
   },
   {
@@ -61,12 +60,6 @@ const TOOLS = [
     name: "read_file",
     description: "Read a text file from the cloud computer.",
     inputSchema: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
-  },
-  {
-    name: "expose_port",
-    description:
-      "Expose an HTTP service listening on a port of the cloud computer and get a public preview URL for it. Start the service first (e.g. with computer_exec, backgrounded).",
-    inputSchema: { type: "object", properties: { port: { type: "number" } }, required: ["port"] },
   },
 ];
 
@@ -106,17 +99,10 @@ async function call(id: unknown, name: string, args: any) {
     const path = String(args.path ?? "");
     if (!path) return text(id, "read_file needs a path", true);
     const out = await callWorker("readFile", { path });
-    // the Worker relays the Sandbox SDK's readFile result verbatim, which
-    // nests the text one level down ({content: {success, path, content}})
+    // Accept the old Sandbox response as well as the current Workspace shape.
     const inner = out.content?.content ?? out.content;
     const content = typeof inner === "string" ? inner : JSON.stringify(inner);
     return text(id, content.slice(0, 100_000));
-  }
-  if (name === "expose_port") {
-    const port = Math.round(Number(args.port));
-    if (!Number.isFinite(port) || port < 1 || port > 65535) return text(id, "expose_port needs a port 1-65535", true);
-    const out = await callWorker("expose", { port });
-    return text(id, `service on port ${port} is public at ${out.url}`);
   }
   return text(id, `unknown tool ${name}`, true);
 }

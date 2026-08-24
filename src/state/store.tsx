@@ -241,6 +241,10 @@ export interface ConfigStatus {
   rooms: { turnTimeoutMinutes: number };
   localVm: { mode: "shared" | "per-bot"; maxInstances: number };
   opencodeGo?: { configured: boolean };
+  /** Per-user ChatGPT subscription connection used by the hosted Codex engine. */
+  codex?: { configured: boolean; runtimeReady: boolean; modelCount: number; consentVersion: string };
+  /** Per-user Claude Code subscription connection for the hosted web engine. */
+  anthropic?: { configured: boolean; runtimeReady: boolean; modelCount: number };
   /** Voice (ElevenLabs). `configured` = a key is saved; `ready` = a key AND
    * a voice, which is what it takes to actually speak. The key itself is
    * never echoed back. */
@@ -255,7 +259,7 @@ export interface ConfigStatus {
 
 export type ConfigStatusFrame = Pick<
   ConfigStatus,
-  "hosted" | "xai" | "composio" | "cfComputer" | "vps" | "rooms" | "localVm" | "opencodeGo" | "tts" | "imageGen" | "profile" | "features"
+  "hosted" | "xai" | "composio" | "cfComputer" | "vps" | "rooms" | "localVm" | "opencodeGo" | "codex" | "anthropic" | "tts" | "imageGen" | "profile" | "features"
 >;
 
 export function configStatusFromFrame(frame: ConfigStatusFrame): ConfigStatus {
@@ -268,6 +272,8 @@ export function configStatusFromFrame(frame: ConfigStatusFrame): ConfigStatus {
     rooms: frame.rooms,
     localVm: frame.localVm,
     opencodeGo: frame.opencodeGo,
+    codex: frame.codex,
+    anthropic: frame.anthropic,
     tts: frame.tts,
     imageGen: frame.imageGen,
     profile: frame.profile,

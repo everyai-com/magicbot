@@ -12,6 +12,8 @@ import { EngineGroupLabel } from "./EngineGroupLabel";
 import { ProviderMark } from "./ProviderIcons";
 import { splitEngineRail } from "@/lib/engine-rail";
 import { cn } from "@/lib/cn";
+import { CodexSubscription } from "./CodexSubscription";
+import { ClaudeApiConnection } from "./ClaudeApiConnection";
 
 interface ProbeResult {
   ok: boolean;
@@ -282,6 +284,34 @@ function EngineRow({ instance }: { instance: InstanceInfo }) {
 
 export function EnginesSettings() {
   const { state } = useStore();
+  if (!window.ogb) {
+    const cloudflare = state.instances.find((instance) => instance.instanceId === "cloudflare-ai");
+    return (
+      <div className="flex flex-col gap-3">
+        <CodexSubscription />
+        <ClaudeApiConnection />
+        <div className="rounded-xl border border-hairline/40 bg-inset p-3">
+          <div className="flex items-center gap-3">
+            <div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-control text-ink">
+              <ProviderMark driverKind="cloudflareAi" size={17} />
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2 text-[13px] font-medium text-ink">
+                Cloudflare AI
+                <span className="text-[11px] font-normal text-success">Built in</span>
+              </div>
+              <div className="mt-0.5 text-[12px] text-ink-secondary">
+                {cloudflare?.models.options.map((model) => model.label).join(", ") || "Available automatically on the hosted web app."}
+              </div>
+            </div>
+          </div>
+        </div>
+        <div className="text-[12px] leading-relaxed text-ink-secondary">
+          Connected engines appear in each bot’s model picker after their account check succeeds. CLI paths only apply to the desktop app.
+        </div>
+      </div>
+    );
+  }
   // every KNOWN-driver instance has cliDefault; unknown-driver shadows have
   // neither unless an override was set. Including them keeps a Reset-able row
   // (and a Set CLI… path) for engines the running build doesn't recognize.

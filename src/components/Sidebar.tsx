@@ -1396,11 +1396,16 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
         <div className="flex items-center gap-2 rounded-lg bg-raised/70 px-3 py-2">
           <Search size={16} className="text-ink-secondary" />
           <input
+            type="search"
+            name="magicbot-sidebar-search"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={(e) => e.key === "Escape" && setQuery("")}
             placeholder="Search"
             aria-label="Search bots and messages"
+            autoComplete="off"
+            data-1p-ignore="true"
+            data-lpignore="true"
             className="w-full bg-transparent text-[14px] text-ink placeholder:text-ink-secondary focus:outline-none"
           />
         </div>
