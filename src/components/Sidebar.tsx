@@ -1174,7 +1174,6 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
   };
 
   const macInset = capabilities.windowChrome === "mac-inset";
-  const browser = capabilities.host.label === "Browser";
   // SAFETY: Electron's documented -webkit-app-region CSS property is not in
   // React's CSSProperties type, but the renderer accepts it as an inline style.
   const windowDragStyle = macInset
@@ -1255,13 +1254,11 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
       >
         {macInset ? (
           <div className={density === "icons" ? "h-5 w-full" : "w-14"} />
-        ) : browser ? (
-          <div className="flex items-center gap-2">
-            <span className="size-3 rounded-full bg-[#ff5f57]" />
-            <span className="size-3 rounded-full bg-[#febc2e]" />
-            <span className="size-3 rounded-full bg-[#28c840]" />
+        ) : (
+          <div className={cn("truncate text-[15px] font-semibold tracking-[-0.01em] text-ink", density === "icons" && "hidden")}>
+            MagicTeams
           </div>
-        ) : <div />}
+        )}
         <div
           className={cn("relative flex items-center", density === "icons" ? "flex-col gap-1" : "gap-1")}
           style={windowNoDragStyle}
@@ -1270,12 +1267,12 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
             type="button"
             onClick={toggleCollapsed}
             aria-label={density === "icons" ? "Expand sidebar" : "Collapse sidebar to avatars"}
-            className="flex size-10 items-center justify-center rounded-md text-ink-secondary hover:bg-raised hover:text-ink"
+            className="flex size-10 items-center justify-center rounded-md text-ink-secondary hover:bg-raised hover:text-ink max-md:hidden"
             title={density === "icons" ? "Expand sidebar" : "Collapse to avatars"}
           >
             {density === "icons" ? <PanelLeftOpen size={20} /> : <PanelLeftClose size={20} />}
           </button>
-          <div className="relative">
+          <div className="relative max-md:hidden">
             <button
               type="button"
               onClick={() => setDensityOpen((value) => !value)}
@@ -1315,6 +1312,14 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
               </>
             )}
           </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close bot list"
+            className="flex size-10 items-center justify-center rounded-md text-ink-secondary hover:bg-raised hover:text-ink md:hidden"
+          >
+            <X size={20} />
+          </button>
           <button
             ref={importReturnRef}
             onClick={() => setPlusOpen((o) => !o)}

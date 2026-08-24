@@ -34,6 +34,10 @@ const SECTIONS: Array<{
   { id: "usage", label: "Usage", icon: Coins, keywords: ["tokens", "cost", "billing"] },
 ];
 
+const HOSTED_SECTIONS = SECTIONS.filter(
+  ({ id }) => id === "general" || id === "connections" || id === "engines",
+);
+
 function sectionMatches(section: (typeof SECTIONS)[number], query: string): boolean {
   if (!query) return true;
   return [section.label, ...section.keywords].some((part) => part.toLowerCase().includes(query));
@@ -302,18 +306,20 @@ function DiagnosticsRow() {
 
 export function SettingsModal() {
   const { state, dispatch } = useStore();
+  const hosted = state.config?.hosted === true;
+  const sections = hosted ? HOSTED_SECTIONS : SECTIONS;
   const section = state.appSettingsSection;
   const dialogRef = useRef<HTMLDivElement>(null);
   const [query, setQuery] = useState("");
   const q = query.trim().toLowerCase();
-  const visibleSections = SECTIONS.filter((entry) => sectionMatches(entry, q));
+  const visibleSections = sections.filter((entry) => sectionMatches(entry, q));
 
   useEffect(() => {
-    const visible = SECTIONS.filter((entry) => sectionMatches(entry, q));
+    const visible = sections.filter((entry) => sectionMatches(entry, q));
     if (visible.some((entry) => entry.id === section)) return;
     const first = visible[0];
     if (first) dispatch({ type: "toggleAppSettings", open: true, section: first.id });
-  }, [dispatch, q, section]);
+  }, [dispatch, q, section, sections]);
 
   useEffect(() => {
     const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -416,7 +422,7 @@ export function SettingsModal() {
         <div className="flex min-w-0 flex-1 flex-col">
           <div className="flex items-center justify-between px-4 py-3 sm:px-5">
             <span className="text-[15px] font-semibold text-ink">
-              {SECTIONS.find((s) => s.id === section)?.label}
+              {sections.find((s) => s.id === section)?.label}
             </span>
             <button
               onClick={() => dispatch({ type: "toggleAppSettings", open: false })}
@@ -437,11 +443,13 @@ export function SettingsModal() {
                 <Card title="Skin" subtitle="Applies instantly and is remembered on this machine.">
                   <SkinPicker />
                 </Card>
-                <Card title="Team turns" subtitle="Set one maximum duration for every bot turn in a team.">
-                  <RoomTurnTimeoutSettings />
-                </Card>
+                {!hosted && (
+                  <Card title="Team turns" subtitle="Set one maximum duration for every bot turn in a team.">
+                    <RoomTurnTimeoutSettings />
+                  </Card>
+                )}
                 <WebAppRow />
-                <ExperimentalFeaturesRow />
+                {!hosted && <ExperimentalFeaturesRow />}
                 <UpdatesRow />
                 <DiagnosticsRow />
                 <AnalyticsRow />
@@ -459,16 +467,22 @@ export function SettingsModal() {
                       Connected apps service is ready
                     </div>
                   ) : null}
-                  {window.ogb?.transcription && <TranscriptionSettings />}
-                  <CloudflareConnection />
-                  <VpsConnection />
-                  <ApiKeyRow section="opencodeGo" />
-                  <details className="rounded-lg border border-hairline/40 bg-inset px-3 py-2">
-                    <summary className="cursor-pointer text-[13px] text-ink-secondary">Self-host connected apps</summary>
-                    <div className="mt-3">
-                      <ApiKeyRow section="composio" />
-                    </div>
-                  </details>
+                  {hosted ? (
+                    <ApiKeyRow section="composio" />
+                  ) : (
+                    <>
+                      {window.ogb?.transcription && <TranscriptionSettings />}
+                      <CloudflareConnection />
+                      <VpsConnection />
+                      <ApiKeyRow section="opencodeGo" />
+                      <details className="rounded-lg border border-hairline/40 bg-inset px-3 py-2">
+                        <summary className="cursor-pointer text-[13px] text-ink-secondary">Self-host connected apps</summary>
+                        <div className="mt-3">
+                          <ApiKeyRow section="composio" />
+                        </div>
+                      </details>
+                    </>
+                  )}
                 </div>
               </Card>
             )}
