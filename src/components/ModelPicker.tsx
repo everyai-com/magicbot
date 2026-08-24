@@ -218,6 +218,7 @@ export function ModelPicker({
       }}
       aria-expanded={open}
       aria-haspopup="dialog"
+      aria-label={`Choose model. Current: ${active?.displayName ?? "AI provider"} · ${modelLabel(active, selection.model)}`}
       className={cn(
         "flex items-center gap-1.5 rounded-full border border-hairline/40 bg-control/60 py-1 pl-2 pr-2.5 text-[13px] text-ink hover:bg-raised-hover",
         // in a narrow chat header fold to a rounded square with just the

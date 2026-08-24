@@ -1038,7 +1038,7 @@ export function ChatView({ bot }: { bot: Bot }) {
           <TaskPicker bot={bot} />
           <UsageChip bot={bot} />
           <WorkingFolderChip bot={bot} />
-          {!state.config?.hosted && <ModelPicker bot={bot} />}
+          <ModelPicker bot={bot} />
           <CallButton bot={bot} />
           <button
             onClick={() => dispatch({ type: "toggleComputer" })}
