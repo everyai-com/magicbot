@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Check, Copy, ExternalLink, Loader2, Unplug } from "lucide-react";
+import { Check, Copy, ExternalLink, Loader2, RefreshCw, Unplug } from "lucide-react";
 import { api, useStore, type ConfigStatus } from "@/state/store";
 import { ProviderMark } from "./ProviderIcons";
 
@@ -104,25 +104,52 @@ export function CodexSubscription() {
     }
   };
 
+  const check = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await api("/api/codex/check", { method: "POST", body: "{}" });
+      if (!result.runtimeReady) setError(result.warning || "Codex could not finish its cloud runtime check. Try again shortly.");
+      await refresh();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
-    <div className="rounded-xl border border-hairline/40 bg-inset p-3">
-      <div className="flex items-start gap-3">
-        <div className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg bg-control text-ink">
-          <ProviderMark driverKind="codex" size={17} />
+    <section className="overflow-hidden rounded-2xl border border-hairline/45 bg-inset/70">
+      <div className="flex items-start gap-3.5 px-4 pb-3 pt-4">
+        <div className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-control text-ink shadow-sm">
+          <ProviderMark driverKind="codex" size={19} />
         </div>
         <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-[13px] font-medium text-ink">Codex with ChatGPT</span>
-            <span className="rounded bg-warning/10 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-warning">Cloudflare blocked</span>
-            {codex?.runtimeReady ? <span className="text-[11px] text-success">Ready</span> : codex?.configured ? <span className="text-[11px] text-ink-secondary">Account connected</span> : null}
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <div className="text-[14px] font-semibold tracking-[-0.01em] text-ink">Codex</div>
+              <div className="mt-0.5 text-[11.5px] text-ink-secondary">Your ChatGPT subscription</div>
+            </div>
+            <div className="flex shrink-0 items-center gap-1.5 text-[11px] font-medium text-ink-secondary">
+              <span className={`size-1.5 rounded-full ${codex?.runtimeReady ? "bg-success" : codex?.configured ? "bg-warning" : "bg-hairline"}`} />
+              {codex?.runtimeReady ? "Ready" : codex?.configured ? "Setup needed" : "Not connected"}
+            </div>
           </div>
-          <p className="mt-1 text-[12px] leading-relaxed text-ink-secondary">
-            Your ChatGPT account can be connected and stored encrypted, but ChatGPT currently blocks Codex inference from Cloudflare Workers. This engine will not appear in bot model pickers until that upstream restriction changes.
+          <p className="mt-2 max-w-[58ch] text-[12.5px] leading-relaxed text-ink-secondary">
+            Use the Codex access included with your ChatGPT plan. MagicBot runs the official Codex CLI inside your private Cloudflare Computer—no API key or separate API billing.
           </p>
 
+          {codex?.configured && (
+            <div className="mt-3 grid grid-cols-2 gap-px overflow-hidden rounded-lg bg-hairline/30 text-[11px] sm:grid-cols-3">
+              <div className="bg-panel/70 px-2.5 py-2"><span className="text-ink-secondary">Account</span><div className="mt-0.5 font-medium text-ink">Connected</div></div>
+              <div className="bg-panel/70 px-2.5 py-2"><span className="text-ink-secondary">Models</span><div className="mt-0.5 font-medium tabular-nums text-ink">{codex.modelCount || "Checking"}</div></div>
+              <div className="col-span-2 bg-panel/70 px-2.5 py-2 sm:col-span-1"><span className="text-ink-secondary">Runs on</span><div className="mt-0.5 font-medium text-ink">Cloudflare Computer</div></div>
+            </div>
+          )}
+
           {pending ? (
-            <div className="mt-3 rounded-lg border border-accent/25 bg-accent/5 p-3">
-              <div className="text-[11px] text-ink-secondary">Enter this one-time code on the ChatGPT page</div>
+            <div className="mt-3 rounded-xl border border-accent/25 bg-accent/5 p-3.5">
+              <div className="text-[11.5px] font-medium text-ink">Enter this one-time code in ChatGPT</div>
               <div className="mt-2 flex flex-wrap items-center gap-2">
                 <code className="rounded-md bg-panel px-3 py-1.5 text-[16px] font-semibold tracking-widest text-ink">{pending.userCode}</code>
                 <button
@@ -143,16 +170,21 @@ export function CodexSubscription() {
               </div>
             </div>
           ) : (
-            <div className="mt-3 flex flex-wrap gap-2">
+            <div className="mt-3.5 flex flex-wrap items-center gap-2">
               {!codex?.configured ? (
-                <button type="button" onClick={() => void start()} disabled={busy} className="flex items-center gap-1.5 rounded-lg bg-ink px-3 py-1.5 text-[12px] font-medium text-panel disabled:opacity-50">
-                  {busy && <Loader2 size={12} className="animate-spin" />} Connect ChatGPT
+                <button type="button" onClick={() => void start()} disabled={busy} className="flex items-center gap-1.5 rounded-lg bg-ink px-3.5 py-2 text-[12px] font-medium text-panel transition hover:opacity-90 active:scale-[0.98] disabled:opacity-50">
+                  {busy && <Loader2 size={12} className="animate-spin" />} Use ChatGPT subscription
                 </button>
               ) : !codex.runtimeReady ? (
-                <button type="button" onClick={() => void start()} disabled={busy} className="rounded-lg border border-hairline/40 px-3 py-1.5 text-[12px] text-ink-secondary hover:text-ink">Reconnect account</button>
+                <>
+                  <button type="button" onClick={() => void check()} disabled={busy} className="flex items-center gap-1.5 rounded-lg bg-ink px-3.5 py-2 text-[12px] font-medium text-panel transition hover:opacity-90 active:scale-[0.98] disabled:opacity-50">
+                    {busy ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />} Finish setup
+                  </button>
+                  <button type="button" onClick={() => void start()} disabled={busy} className="rounded-lg px-2.5 py-2 text-[12px] text-ink-secondary transition hover:bg-control hover:text-ink">Reconnect</button>
+                </>
               ) : null}
               {codex?.configured && (
-                <button type="button" onClick={() => void disconnect()} disabled={busy} className="flex items-center gap-1.5 rounded-lg border border-hairline/40 px-3 py-1.5 text-[12px] text-danger hover:bg-danger/5 disabled:opacity-50">
+                <button type="button" onClick={() => void disconnect()} disabled={busy} className="ml-auto flex items-center gap-1.5 rounded-lg px-2.5 py-2 text-[12px] text-ink-secondary transition hover:bg-danger/5 hover:text-danger disabled:opacity-50">
                   <Unplug size={12} /> Disconnect
                 </button>
               )}
@@ -161,6 +193,7 @@ export function CodexSubscription() {
           {error && <div role="alert" className="mt-2 text-[12px] leading-relaxed text-warning">{error}</div>}
         </div>
       </div>
-    </div>
+      <div className="border-t border-hairline/30 bg-panel/35 px-4 py-2 text-[10.5px] text-ink-secondary">Subscription limits and workspace policies still apply.</div>
+    </section>
   );
 }

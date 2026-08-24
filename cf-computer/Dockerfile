@@ -14,7 +14,14 @@ RUN apt-get update \
       > /etc/apt/sources.list.d/nodesource.list \
  && apt-get update \
  && apt-get install -y --no-install-recommends nodejs \
+ && npm install -g @openai/codex@0.149.1 \
+ && npm cache clean --force \
  && rm -rf /var/lib/apt/lists/*
+
+RUN npm install -g @openai/codex-linux-x64@npm:@openai/codex@0.149.1-linux-x64 \
+ && ln -s ../../../codex-linux-x64 /usr/lib/node_modules/@openai/codex/node_modules/@openai/codex-linux-x64 \
+ && codex --version \
+ && npm cache clean --force
 
 COPY --from=computerd /usr/local/bin/computerd /usr/local/bin/computerd
 

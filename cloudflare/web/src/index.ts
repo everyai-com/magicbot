@@ -1,5 +1,4 @@
 import {
-  createCodexFetch,
   ensureFreshTokens,
   exchangeDeviceAuthorization,
   listCodexModels,
@@ -26,6 +25,7 @@ interface Env {
     readFile(botId: string, path: string): Promise<unknown>;
     sleep(botId: string): Promise<unknown>;
     destroy(botId: string): Promise<unknown>;
+    codex(botId: string, authJson: string, prompt: string, model: string, effort?: "low" | "medium" | "high" | "xhigh"): Promise<{ ok: boolean; text: string; stderr: string; exitCode: number; runtime: string }>;
   };
 }
 
@@ -145,6 +145,7 @@ const CODEX_PENDING_SECRET = "codex_pending_secret";
 const CODEX_MODELS_CACHE = "codex_models";
 const CODEX_RUNTIME_READY = "codex_runtime_ready";
 const CODEX_CONSENT_VERSION = "2026-08-24";
+const CODEX_FALLBACK_MODELS = ["gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol"];
 const CLAUDE_CREDENTIAL = "claude_code_subscription";
 const CLAUDE_PENDING = "claude_code_pending";
 const CLAUDE_RUNTIME_READY = "claude_code_runtime_ready";
@@ -278,6 +279,20 @@ async function freshCodexTokens(env: Env, userId: string): Promise<ChatGPTTokens
   return fresh;
 }
 
+function codexAuthJson(tokens: ChatGPTTokens): string {
+  return JSON.stringify({
+    auth_mode: "chatgpt",
+    OPENAI_API_KEY: null,
+    tokens: {
+      access_token: tokens.accessToken,
+      refresh_token: tokens.refreshToken,
+      id_token: tokens.idToken,
+      account_id: tokens.accountId,
+    },
+    last_refresh: new Date().toISOString(),
+  });
+}
+
 async function discoverCodexModels(env: Env, userId: string, live = true): Promise<string[]> {
   if (live) {
     try {
@@ -295,12 +310,13 @@ async function discoverCodexModels(env: Env, userId: string, live = true): Promi
     } catch { /* use the last verified account catalog */ }
   }
   const cached = await credentialValue(env, userId, CODEX_MODELS_CACHE);
-  if (!cached) return [];
+  if (!cached) return [...CODEX_FALLBACK_MODELS];
   try {
     const parsed = JSON.parse(cached);
-    return Array.isArray(parsed) ? parsed.filter((value): value is string => typeof value === "string") : [];
+    const models = Array.isArray(parsed) ? parsed.filter((value): value is string => typeof value === "string") : [];
+    return models.length > 0 ? models : [...CODEX_FALLBACK_MODELS];
   } catch {
-    return [];
+    return [...CODEX_FALLBACK_MODELS];
   }
 }
 
@@ -621,154 +637,56 @@ async function modelContentForPrompt(env: Env, userId: string, prompt: string): 
   return images.length > 0 ? [{ type: "text", text }, ...images] : text;
 }
 
-type CodexOutputItem = {
-  id?: string;
-  type?: string;
-  name?: string;
-  arguments?: string;
-  call_id?: string;
-  content?: Array<{ type?: string; text?: string }>;
-};
-
-type CodexCompleted = {
-  output?: CodexOutputItem[];
-  usage?: { input_tokens?: number; output_tokens?: number };
-};
-
-async function readCodexResponse(response: Response): Promise<{ completed: CodexCompleted | null; text: string }> {
-  const raw = await response.text();
-  let completed: CodexCompleted | null = null;
-  let deltaText = "";
-  for (const line of raw.split("\n")) {
-    if (!line.startsWith("data:")) continue;
-    const payload = line.slice(5).trim();
-    if (!payload || payload === "[DONE]") continue;
-    try {
-      const event = JSON.parse(payload) as { type?: string; delta?: string; response?: CodexCompleted };
-      if (event.type === "response.output_text.delta" && typeof event.delta === "string") deltaText += event.delta;
-      if (event.type === "response.completed" && event.response) completed = event.response;
-    } catch { /* SSE keepalives and partial lines are ignored */ }
-  }
-  const finalText = (completed?.output ?? [])
-    .filter((item) => item.type === "message")
-    .flatMap((item) => item.content ?? [])
-    .map((block) => block.text ?? "")
-    .join("");
-  return { completed, text: finalText || deltaText };
-}
-
 async function verifyCodexRuntime(env: Env, userId: string, model: string): Promise<boolean> {
   try {
     const tokens = await freshCodexTokens(env, userId);
-    const codexFetch = createCodexFetch({
-      config: codexConfig,
-      getAuth: () => ({ accessToken: tokens.accessToken, accountId: tokens.accountId! }),
-      reasoningEffort: "low",
-      textVerbosity: "low",
-    });
-    const response = await codexFetch(`${codexConfig.codexBaseUrl}/responses`, {
-      method: "POST",
-      headers: { "content-type": "application/json", accept: "text/event-stream", session_id: crypto.randomUUID() },
-      body: JSON.stringify({
-        model,
-        instructions: "This is a connection check.",
-        input: [{ role: "user", content: [{ type: "input_text", text: "Reply exactly CONNECTED." }] }],
-        tools: [], tool_choice: "none", parallel_tool_calls: false, stream: true,
-      }),
-    });
-    if (!response.ok) throw new Error(`probe ${response.status}`);
-    const parsed = await readCodexResponse(response);
-    const ready = Boolean(parsed.completed && parsed.text.trim());
+    const result = await env.COMPUTER.codex(
+      `codex-check-${userId}`,
+      codexAuthJson(tokens),
+      "Reply exactly CONNECTED.",
+      model,
+      "low",
+    );
+    const ready = result.ok && result.text.trim().replace(/[.!]+$/, "") === "CONNECTED";
+    if (!ready) {
+      console.error("Hosted Codex check failed", {
+        runtime: result.runtime,
+        exitCode: result.exitCode,
+        stderr: result.stderr.slice(-2_000),
+        output: result.text.slice(0, 500),
+      });
+    }
     await saveCredential(env, userId, CODEX_RUNTIME_READY, ready ? "true" : "");
     return ready;
-  } catch {
+  } catch (error) {
+    console.error("Hosted Codex check threw", error instanceof Error ? error.message : String(error));
     await saveCredential(env, userId, CODEX_RUNTIME_READY, "");
     return false;
   }
 }
 
-function codexPromptContent(content: string | ModelContentPart[]): unknown {
-  if (typeof content === "string") return [{ type: "input_text", text: content }];
-  return content.map((part) => part.type === "text"
-    ? { type: "input_text", text: part.text }
-    : { type: "input_image", image_url: part.image_url.url });
-}
-
 async function codexReply(env: Env, userId: string, bot: Bot, text: string): Promise<string> {
   const tokens = await freshCodexTokens(env, userId);
-  const codexFetch = createCodexFetch({
-    config: codexConfig,
-    getAuth: () => ({ accessToken: tokens.accessToken, accountId: tokens.accountId! }),
-    reasoningEffort: bot.modelSelection.effort === "none" ? "none" : (bot.modelSelection.effort as "low" | "medium" | "high" | "xhigh" | undefined),
-  });
-  const input: Array<Record<string, unknown>> = bot.messages
+  const history = bot.messages
     .filter((message) => message.kind === "text")
     .slice(-24)
-    .map((message) => ({
-      role: message.role === "bot" ? "assistant" : "user",
-      content: [{ type: message.role === "bot" ? "output_text" : "input_text", text: message.text }],
-    }));
-  input.push({ role: "user", content: codexPromptContent(await modelContentForPrompt(env, userId, text)) });
-
-  const tools: Array<Record<string, unknown>> = [{
-    type: "function", name: "computer_exec",
-    description: "Run a shell command in this bot's private persistent Cloudflare Linux computer.",
-    parameters: { type: "object", properties: { command: { type: "string" } }, required: ["command"] },
-  }, {
-    type: "function", name: "generate_image",
-    description: "Generate an image and save it to the user's MagicBot files.",
-    parameters: { type: "object", properties: { prompt: { type: "string" } }, required: ["prompt"] },
-  }];
-  let connectorSession = "";
-  const connectorToolNames = new Set<string>();
-  if (bot.composio !== false) {
-    try {
-      const connected = await connectorTools(env, userId);
-      connectorSession = connected.session;
-      for (const tool of connected.tools) {
-        if (typeof tool.name !== "string") continue;
-        tools.push({ type: "function", ...tool });
-        connectorToolNames.add(tool.name);
-      }
-    } catch { /* connected apps remain optional */ }
-  }
-
-  for (let step = 0; step < 5; step += 1) {
-    const response = await codexFetch(`${codexConfig.codexBaseUrl}/responses`, {
-      method: "POST",
-      headers: { "content-type": "application/json", accept: "text/event-stream", session_id: crypto.randomUUID() },
-      body: JSON.stringify({
-        model: bot.modelSelection.model,
-        instructions: `You are ${bot.name}, ${bot.title || "a capable AI assistant"}. ${bot.description || "Be practical, clear, and proactive."}`,
-        input, tools, tool_choice: "auto", parallel_tool_calls: false, stream: true,
-      }),
-    });
-    if (!response.ok) throw new Error(`Codex returned ${response.status}; reconnect or try again later`);
-    const parsed = await readCodexResponse(response);
-    if (!parsed.completed) throw new Error("Codex response ended before completion");
-    const calls = (parsed.completed.output ?? []).filter((item) => item.type === "function_call" && item.name && item.call_id);
-    if (calls.length === 0) return parsed.text || "Codex completed without a text reply.";
-    input.push(...(parsed.completed.output ?? []) as Array<Record<string, unknown>>);
-    for (const call of calls.slice(0, 3)) {
-      let args: Record<string, unknown> = {};
-      try { args = JSON.parse(call.arguments ?? "{}"); } catch { args = {}; }
-      let result: unknown;
-      if (call.name === "computer_exec" && typeof args.command === "string") {
-        result = await env.COMPUTER.exec(bot.id, args.command.slice(0, 20_000))
-          .catch((error) => ({ ok: false, error: error instanceof Error ? error.message : String(error) }));
-      } else if (call.name === "generate_image" && typeof args.prompt === "string") {
-        result = await generatedImage(env, userId, args.prompt.slice(0, 2_000))
-          .then((url) => ({ ok: true, url, instruction: `Embed with Markdown: ![generated image](${url})` }))
-          .catch((error) => ({ ok: false, error: error instanceof Error ? error.message : String(error) }));
-      } else if (call.name && connectorToolNames.has(call.name)) {
-        result = await mcpRequest(env, userId, connectorSession, "tools/call", { name: call.name, arguments: args })
-          .then((called) => { connectorSession = called.session; return called.payload.result ?? called.payload; })
-          .catch((error) => ({ isError: true, error: error instanceof Error ? error.message : String(error) }));
-      } else result = { ok: false, error: "Invalid tool call" };
-      input.push({ type: "function_call_output", call_id: call.call_id, output: JSON.stringify(result).slice(0, 24_000) });
-    }
-  }
-  return "I reached the computer-action limit for this turn. Ask me to continue and I'll pick up from here.";
+    .map((message) => `${message.role === "bot" ? "Assistant" : "User"}: ${message.text}`)
+    .join("\n\n");
+  const current = await modelContentForPrompt(env, userId, text);
+  const currentText = typeof current === "string"
+    ? current
+    : current.map((part) => part.type === "text" ? part.text : "[An image attachment is available in the MagicBot conversation but is not mounted in this runtime.]").join("\n");
+  const prompt = [
+    `You are ${bot.name}, ${bot.title || "a capable AI assistant"}.`,
+    bot.description || "Be practical, clear, and proactive.",
+    "You are running inside this bot's private persistent Cloudflare Linux computer at /workspace. You may inspect and modify that workspace when the request needs it. Return a helpful final answer for the user; do not describe internal authentication or runtime setup.",
+    history ? `Conversation so far:\n${history}` : "",
+    `Current user request:\n${currentText}`,
+  ].filter(Boolean).join("\n\n");
+  const effort = bot.modelSelection.effort === "none" ? "low" : (bot.modelSelection.effort ?? "medium");
+  const result = await env.COMPUTER.codex(bot.id, codexAuthJson(tokens), prompt, bot.modelSelection.model, effort);
+  if (!result.ok || !result.text) throw new Error("Codex could not answer from the cloud computer. Reconnect ChatGPT or try again.");
+  return result.text;
 }
 
 type AnthropicContentBlock = {

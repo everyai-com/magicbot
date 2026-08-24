@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Check, ExternalLink, Loader2, Unplug, X } from "lucide-react";
+import { ExternalLink, Loader2, Unplug, X } from "lucide-react";
 import { api, useStore, type ConfigStatus } from "@/state/store";
 import { ProviderMark } from "./ProviderIcons";
 
@@ -88,23 +88,36 @@ export function ClaudeApiConnection() {
   };
 
   return (
-    <div className="rounded-xl border border-hairline/40 bg-inset p-3">
-      <div className="flex items-start gap-3">
-        <div className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg bg-control text-ink">
-          <ProviderMark driverKind="claudeAgent" size={17} />
+    <section className="overflow-hidden rounded-2xl border border-hairline/45 bg-inset/70">
+      <div className="flex items-start gap-3.5 px-4 pb-3 pt-4">
+        <div className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-control text-ink shadow-sm">
+          <ProviderMark driverKind="claudeAgent" size={19} />
         </div>
         <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-[13px] font-medium text-ink">Claude Code subscription</span>
-            <span className="rounded bg-accent/10 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-accent">Claude OAuth</span>
-            {anthropic?.runtimeReady && <span className="flex items-center gap-1 text-[11px] text-success"><Check size={11} /> Ready · {anthropic.modelCount} models</span>}
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <div className="text-[14px] font-semibold tracking-[-0.01em] text-ink">Claude Code</div>
+              <div className="mt-0.5 text-[11.5px] text-ink-secondary">Your Claude subscription</div>
+            </div>
+            <div className="flex shrink-0 items-center gap-1.5 text-[11px] font-medium text-ink-secondary">
+              <span className={`size-1.5 rounded-full ${anthropic?.runtimeReady ? "bg-success" : anthropic?.configured ? "bg-warning" : "bg-hairline"}`} />
+              {anthropic?.runtimeReady ? "Ready" : anthropic?.configured ? "Reconnect" : "Not connected"}
+            </div>
           </div>
-          <p className="mt-1 text-[12px] leading-relaxed text-ink-secondary">
-            Sign in with the current Claude Code OAuth flow used by the working AIOS stack. MagicBot encrypts the connection tokens in Cloudflare; no API key is needed.
+          <p className="mt-2 max-w-[58ch] text-[12.5px] leading-relaxed text-ink-secondary">
+            Use Claude Code access from the subscription you already have. Sign in once with Claude; MagicBot encrypts the connection in Cloudflare and never asks for an API key.
           </p>
 
+          {anthropic?.configured && (
+            <div className="mt-3 grid grid-cols-2 gap-px overflow-hidden rounded-lg bg-hairline/30 text-[11px] sm:grid-cols-3">
+              <div className="bg-panel/70 px-2.5 py-2"><span className="text-ink-secondary">Account</span><div className="mt-0.5 font-medium text-ink">Connected</div></div>
+              <div className="bg-panel/70 px-2.5 py-2"><span className="text-ink-secondary">Models</span><div className="mt-0.5 font-medium tabular-nums text-ink">{anthropic.modelCount || "Checking"}</div></div>
+              <div className="col-span-2 bg-panel/70 px-2.5 py-2 sm:col-span-1"><span className="text-ink-secondary">Access</span><div className="mt-0.5 font-medium text-ink">Claude OAuth</div></div>
+            </div>
+          )}
+
           {pending ? (
-            <div className="mt-3 rounded-lg border border-accent/25 bg-accent/5 p-3">
+            <div className="mt-3 rounded-xl border border-accent/25 bg-accent/5 p-3.5">
               <div className="flex items-center justify-between gap-2">
                 <span className="text-[11px] text-ink-secondary">Approve in Claude, then paste the complete one-time code shown there.</span>
                 <button type="button" onClick={() => void cancel()} disabled={busy} aria-label="Cancel Claude sign-in" className="rounded p-1 text-ink-secondary hover:bg-control hover:text-ink"><X size={13} /></button>
@@ -129,13 +142,13 @@ export function ClaudeApiConnection() {
               </div>
             </div>
           ) : (
-            <div className="mt-3 flex flex-wrap gap-2">
+            <div className="mt-3.5 flex flex-wrap items-center gap-2">
               {!anthropic?.configured ? (
-                <button type="button" onClick={() => void start()} disabled={busy} className="flex items-center gap-1.5 rounded-lg bg-ink px-3 py-1.5 text-[12px] font-medium text-panel disabled:opacity-50">
-                  {busy && <Loader2 size={12} className="animate-spin" />} Connect Claude
+                <button type="button" onClick={() => void start()} disabled={busy} className="flex items-center gap-1.5 rounded-lg bg-ink px-3.5 py-2 text-[12px] font-medium text-panel transition hover:opacity-90 active:scale-[0.98] disabled:opacity-50">
+                  {busy && <Loader2 size={12} className="animate-spin" />} Use Claude subscription
                 </button>
               ) : (
-                <button type="button" onClick={() => void disconnect()} disabled={busy} className="flex items-center gap-1.5 rounded-lg border border-hairline/40 px-3 py-1.5 text-[12px] text-danger hover:bg-danger/5 disabled:opacity-50">
+                <button type="button" onClick={() => void disconnect()} disabled={busy} className="ml-auto flex items-center gap-1.5 rounded-lg px-2.5 py-2 text-[12px] text-ink-secondary transition hover:bg-danger/5 hover:text-danger disabled:opacity-50">
                   <Unplug size={12} /> Disconnect
                 </button>
               )}
@@ -144,6 +157,7 @@ export function ClaudeApiConnection() {
           {error && <div role="alert" className="mt-2 text-[12px] leading-relaxed text-danger">{error}</div>}
         </div>
       </div>
-    </div>
+      <div className="border-t border-hairline/30 bg-panel/35 px-4 py-2 text-[10.5px] text-ink-secondary">Subscription limits and organization policies still apply.</div>
+    </section>
   );
 }

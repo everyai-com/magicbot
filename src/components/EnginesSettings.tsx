@@ -298,27 +298,40 @@ export function EnginesSettings() {
   if (hosted) {
     const cloudflare = state.instances.find((instance) => instance.instanceId === "cloudflare-ai");
     return (
-      <div className="flex flex-col gap-3">
-        <CodexSubscription />
-        <ClaudeApiConnection />
-        <div className="rounded-xl border border-hairline/40 bg-inset p-3">
+      <div className="flex flex-col gap-5">
+        <div>
+          <h3 className="text-[15px] font-semibold tracking-[-0.015em] text-ink">Use subscriptions you already have</h3>
+          <p className="mt-1 max-w-[62ch] text-[12.5px] leading-relaxed text-ink-secondary">
+            Connect once, then choose Codex or Claude from any bot’s model menu. Credentials stay encrypted and API keys are not required.
+          </p>
+        </div>
+        <div className="flex flex-col gap-3">
+          <CodexSubscription />
+          <ClaudeApiConnection />
+        </div>
+        <div className="flex items-center gap-3 pt-1 text-[10.5px] font-medium tracking-wide text-ink-secondary">
+          <span className="h-px flex-1 bg-hairline/30" />
+          ALWAYS AVAILABLE
+          <span className="h-px flex-1 bg-hairline/30" />
+        </div>
+        <div className="rounded-xl bg-control/55 px-3.5 py-3">
           <div className="flex items-center gap-3">
-            <div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-control text-ink">
+            <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-panel/70 text-ink">
               <ProviderMark driverKind="cloudflareAi" size={17} />
             </div>
             <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-2 text-[13px] font-medium text-ink">
+              <div className="flex items-center gap-2 text-[13px] font-semibold text-ink">
                 Cloudflare AI
-                <span className="text-[11px] font-normal text-success">Built in</span>
+                <span className="text-[10.5px] font-normal text-success">Ready</span>
               </div>
-              <div className="mt-0.5 text-[12px] text-ink-secondary">
+              <div className="mt-0.5 text-[11.5px] text-ink-secondary">
                 {cloudflare?.models.options.map((model) => model.label).join(", ") || "Available automatically on the hosted web app."}
               </div>
             </div>
           </div>
         </div>
-        <div className="text-[12px] leading-relaxed text-ink-secondary">
-          Connected engines appear in each bot’s model picker after their account check succeeds. CLI paths only apply to the desktop app.
+        <div className="text-[11.5px] leading-relaxed text-ink-secondary">
+          Connected engines appear in model menus after the connection check succeeds. Your provider’s subscription limits still apply.
         </div>
       </div>
     );

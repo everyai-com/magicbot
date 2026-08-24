@@ -11,6 +11,7 @@ import {
   type WorkspaceClient,
   type WorkspaceOptions,
   WorkspaceProxy,
+  shellQuote,
   withWorkspace,
 } from "@cloudflare/computer";
 import {
@@ -193,6 +194,67 @@ async function sleepComputer(env: Env, botId: string) {
   return { ok: true };
 }
 
+type CodexEffort = "low" | "medium" | "high" | "xhigh";
+
+function codexAuthFile(raw: string): string {
+  if (!raw || raw.length > 64_000) throw new Error("Codex connection is invalid");
+  const parsed = JSON.parse(raw) as {
+    auth_mode?: unknown;
+    tokens?: { access_token?: unknown; account_id?: unknown };
+  };
+  if (parsed.auth_mode !== "chatgpt" || typeof parsed.tokens?.access_token !== "string" || typeof parsed.tokens.account_id !== "string") {
+    throw new Error("Codex connection is incomplete");
+  }
+  return raw;
+}
+
+async function runCodex(
+  env: Env,
+  botId: string,
+  authJson: string,
+  prompt: string,
+  model: string,
+  effort: CodexEffort = "medium",
+) {
+  const auth = codexAuthFile(authJson);
+  if (!prompt.trim() || prompt.length > 120_000) throw new Error("Codex prompt is invalid");
+  if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,99}$/.test(model)) throw new Error("Codex model is invalid");
+  if (!["low", "medium", "high", "xhigh"].includes(effort)) throw new Error("Codex effort is invalid");
+
+  return useWorkspace(env, botId, async (ws) => {
+    const command = [
+      "set -eu",
+      'auth_dir="$(mktemp -d)"',
+      'trap \'rm -rf "$auth_dir"\' EXIT',
+      'export CODEX_HOME="$auth_dir/codex"',
+      'mkdir -p "$CODEX_HOME"',
+      "node -e 'const fs=require(\"fs\");fs.writeFileSync(process.env.CODEX_HOME+\"/auth.json\",process.env.MAGICBOT_CODEX_AUTH,{mode:0o600})'",
+      "unset MAGICBOT_CODEX_AUTH",
+      `codex exec --json --ephemeral --ignore-user-config --ignore-rules --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox -C /workspace -m ${shellQuote(model)} -c ${shellQuote(`model_reasoning_effort=${effort}`)} -o \"$auth_dir/last-message\" - > \"$auth_dir/events.jsonl\"`,
+      'cat "$auth_dir/last-message"',
+    ].join("; ");
+    const handle = await ws.runtime.exec(command, {
+      cwd: "/workspace",
+      encoding: "utf8",
+      env: { MAGICBOT_CODEX_AUTH: auth },
+      stdin: prompt,
+      timeoutMs: 180_000,
+    });
+    try {
+      const result = await handle.result();
+      return {
+        ok: result.exitCode === 0 && Boolean(result.stdout?.trim()),
+        text: result.stdout?.trim() ?? "",
+        stderr: result.stderr?.slice(-8_000) ?? "",
+        exitCode: result.exitCode,
+        runtime: "codex-cli-cloudflare-computer",
+      };
+    } finally {
+      handle[Symbol.dispose]?.();
+    }
+  });
+}
+
 /** Private service-binding API used by the hosted web Worker. */
 export class WebComputer extends WorkerEntrypoint<Env> {
   async status(botId: string) {
@@ -224,6 +286,10 @@ export class WebComputer extends WorkerEntrypoint<Env> {
 
   sleep(botId: string) {
     return sleepComputer(this.env, botId);
+  }
+
+  codex(botId: string, authJson: string, prompt: string, model: string, effort?: CodexEffort) {
+    return runCodex(this.env, botId, authJson, prompt, model, effort);
   }
 }
 
