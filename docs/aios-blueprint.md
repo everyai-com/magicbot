@@ -8,8 +8,12 @@ chat is a real agent) and its clean **TS driver/event core**, but rebuilds the
 > sync, upstream landed ~654 commits that include first-class implementations of
 > organs 1 and 2. We deleted our `server/organs/` transplants rather than ship
 > two competing memory/routine/delegation systems — see *Organ status* below for
-> where each capability now lives. The blueprint's *direction* is unchanged; the
-> parts upstream now covers are simply no longer ours to build.
+> where each capability now lives. The parts upstream now covers are simply no
+> longer ours to build.
+>
+> The **Target** also flipped in the same window: this fork is **web-first**, not
+> Mac-app-first as originally written. See *Target* below — it changes which
+> organ is on the critical path (`cf-computer/`), not what the organs are.
 
 ## What we keep vs. rebuild
 
@@ -73,10 +77,35 @@ computer becomes a selectable destination rather than only a verifiable one.
 
 ## Target
 
-**Mac-app-first** (Electron shell + local TS harness) — the simple path that keeps
-subscriptions, and the AIOS blueprint's native shape. The remaining organs live
-in the target-agnostic TS harness, so wrapping the same harness in a Cloudflare
-Durable Object + Container (for a hosted version with cloud computers) is a later
-deployment phase, not a rewrite. Hosted-with-subscriptions requires Containers
-(a Worker/DO alone can't run a CLI); hosted-with-API-keys would be simple but
-violates the no-APIs rule — hence Mac-first.
+**Web-first.** The hosted web app is the product; the Electron shell is a
+secondary target that ships from the same tree. Reversed from the original
+2026-08-12 entry, which called this Mac-app-first — that call is superseded.
+
+The reasoning that pointed at Mac-first was: hosted-with-subscriptions needs
+Containers, because a Worker or Durable Object alone cannot run a CLI, and
+hosted-with-API-keys would violate the no-APIs rule. That constraint is real
+and unchanged — but `cf-computer/` is the answer to it, which moves it from a
+blocker to a dependency. Web-first therefore makes `cf-computer/` the
+load-bearing piece of this blueprint rather than a side quest, and its
+**Remaining wire** above (mounting cfcomputer at the `integrations.localComputer`
+seam) becomes the critical path, not a nice-to-have.
+
+What still holds from the original entry: the organs live in the
+target-agnostic TS harness, so the harness runs unchanged whether it is hosted
+behind a Durable Object or spawned by Electron. Web-first is a change of
+priority, not a rewrite.
+
+### What this means for the upstream sync
+
+The 2026-08-24 sync inherited a lot of desktop weight — Windows and Linux
+packaging workflows, `electron-builder.yml`, the iOS companion, native speech
+and recorder helpers. None of it is on the web-first path, and all of it is
+maintained upstream, so it costs nothing to carry and would cost real conflict
+surface to strip on every future sync. It stays. Treat it as inherited, not as
+roadmap.
+
+Hosted web work in flight lives on `codex/upstream-openmaus-update` (hosted
+chat, hosted engines on Cloudflare Computer, custom domain, browser login).
+That branch merged an *older* upstream and dropped the MagicBot branding, so
+reconciling it with this sync is its own task — see the sync PR for the
+comparison.
