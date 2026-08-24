@@ -1,7 +1,6 @@
 import {
   ensureFreshTokens,
   exchangeDeviceAuthorization,
-  listCodexModels,
   pollDeviceCode,
   requestDeviceCode,
   resolveConfig,
@@ -146,6 +145,15 @@ const CODEX_MODELS_CACHE = "codex_models";
 const CODEX_RUNTIME_READY = "codex_runtime_ready";
 const CODEX_CONSENT_VERSION = "2026-08-24";
 const CODEX_FALLBACK_MODELS = ["gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol"];
+const CODEX_MODEL_LABELS: Record<string, string> = {
+  "gpt-5.6-luna": "GPT-5.6 Luna",
+  "gpt-5.6-terra": "GPT-5.6 Terra",
+  "gpt-5.6-sol": "GPT-5.6 Sol",
+};
+
+function codexModelLabel(model: string): string {
+  return CODEX_MODEL_LABELS[model] ?? model;
+}
 const CLAUDE_CREDENTIAL = "claude_code_subscription";
 const CLAUDE_PENDING = "claude_code_pending";
 const CLAUDE_RUNTIME_READY = "claude_code_runtime_ready";
@@ -293,31 +301,8 @@ function codexAuthJson(tokens: ChatGPTTokens): string {
   });
 }
 
-async function discoverCodexModels(env: Env, userId: string, live = true): Promise<string[]> {
-  if (live) {
-    try {
-      const models = await listCodexModels({
-        config: codexConfig,
-        getAuth: async () => {
-          const tokens = await freshCodexTokens(env, userId);
-          return { accessToken: tokens.accessToken, accountId: tokens.accountId! };
-        },
-      });
-      if (models.length > 0) {
-        await saveCredential(env, userId, CODEX_MODELS_CACHE, JSON.stringify(models));
-        return models;
-      }
-    } catch { /* use the last verified account catalog */ }
-  }
-  const cached = await credentialValue(env, userId, CODEX_MODELS_CACHE);
-  if (!cached) return [...CODEX_FALLBACK_MODELS];
-  try {
-    const parsed = JSON.parse(cached);
-    const models = Array.isArray(parsed) ? parsed.filter((value): value is string => typeof value === "string") : [];
-    return models.length > 0 ? models : [...CODEX_FALLBACK_MODELS];
-  } catch {
-    return [...CODEX_FALLBACK_MODELS];
-  }
+async function discoverCodexModels(_env: Env, _userId: string, _live = true): Promise<string[]> {
+  return [...CODEX_FALLBACK_MODELS];
 }
 
 type ClaudePending = { verifier: string; state: string; authorizeUrl: string; expiresAt: number };
@@ -679,6 +664,7 @@ async function codexReply(env: Env, userId: string, bot: Bot, text: string): Pro
   const prompt = [
     `You are ${bot.name}, ${bot.title || "a capable AI assistant"}.`,
     bot.description || "Be practical, clear, and proactive.",
+    `Your exact runtime model is ${codexModelLabel(bot.modelSelection.model)} (model ID: ${bot.modelSelection.model}). If the user asks which model powers you, state this exact name and ID. Do not shorten it to GPT-5 or claim that the specific model ID is unavailable.`,
     "You are running inside this bot's private persistent Cloudflare Linux computer at /workspace. You may inspect and modify that workspace when the request needs it. Return a helpful final answer for the user; do not describe internal authentication or runtime setup.",
     history ? `Conversation so far:\n${history}` : "",
     `Current user request:\n${currentText}`,
@@ -1273,7 +1259,7 @@ async function api(request: Request, env: Env, user: User, path: string): Promis
           state: runtimeReady ? "available" : "unavailable", authenticated: true, billing: "subscription",
           reason: runtimeReady ? undefined : "ChatGPT is connected, but hosted Codex inference is not reachable from Cloudflare yet.",
         },
-        models: { default: models[0] ?? "", options: models.map((id) => ({ id, label: id.replaceAll("-", " ").replace(/\b\w/g, (letter) => letter.toUpperCase()) })) },
+        models: { default: models[0] ?? "", options: models.map((id) => ({ id, label: codexModelLabel(id) })) },
         capabilities: { computerMcp: true, agentsMcp: false, composioMcp: composio, images: true, effortLevels: ["low", "medium", "high", "xhigh"], queueing: false },
         access: "subscription",
       });
