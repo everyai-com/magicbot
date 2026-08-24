@@ -26,8 +26,18 @@ chat is a real agent) and its clean **TS driver/event core**, but rebuilds the
    record shape unchanged.
 3. **Cost receipt** — surface the `cost` already on `turn.completed` as a per-run
    receipt (outcome-per-credit), per AIOS token-economics direction.
-4. **Governance gate** — a PreToolUse decision layer over the existing permission
-   broker: sensitive actions require approval on unattended runs + an audit trail.
+4. **Governance gate** ✅ — a decision layer over the existing permission broker
+   (`server/organs/governance.ts`). The broker turns risky actions into Allow/Deny
+   cards, which only works when a human is watching; routine- and delegation-fired
+   turns have nobody there. On those the gate classifies every permission ask
+   (payment / credential / delete / destructive shell / external send / external
+   write / unknown) and **denies + holds** the sensitive ones as a pending approval
+   card; approving grants that one fingerprint, once, and re-runs the held prompt.
+   Fail-closed: an action that cannot be proven safe is `unknown` and gets gated,
+   and an unattended turn is never run in `bypassPermissions` — it is downgraded so
+   every ask reaches the gate (AIOS's "a hook a bypassPermissions run cannot
+   escape", at the harness layer). Every gated decision appends to
+   `~/.magicbot/audit-<botId>.ndjson`.
 5. **Local-first connector data** — sync the few things users ask about (inbox,
    calendar) into local snapshots the agent reads instantly; actions stay live.
 6. **Modules** — the AIOS module/skill format so starter kits install into a bot.

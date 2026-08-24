@@ -149,7 +149,9 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
             : isQuestion
               ? "ask_user"
               : "shell";
-        if (config.fullAuto && !isQuestion) {
+        // fullAuto auto-approves — but on a governed (unattended) turn the
+        // governance gate decides instead; let the ask surface.
+        if (config.fullAuto && !isQuestion && !turn.governed) {
           return send({ jsonrpc: "2.0", id: msg.id, result: { decision: legacy ? "approved" : "accept" } });
         }
         const requestId = newId();
@@ -196,6 +198,8 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
           tool,
           summary,
           choices,
+          // raw params for the harness-level governance gate (see organs/governance.ts)
+          raw: { source: "permission.ask", payload: params },
         });
       };
 
