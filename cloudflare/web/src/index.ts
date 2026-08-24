@@ -12,6 +12,7 @@ interface Env {
   AI: Ai;
   ASSETS: Fetcher;
   FILES: R2Bucket;
+  EMAIL: SendEmail;
   CREDENTIAL_KEY: string;
   CONNECTORS: {
     request(userId: string, apiKey: string, path: string, method?: string, body?: string, mcpSession?: string): Promise<{ status: number; body: string; contentType?: string; mcpSession?: string }>;
@@ -136,6 +137,8 @@ interface Bot {
 
 const SESSION_COOKIE = "magicbot_session";
 const SESSION_AGE = 60 * 60 * 24 * 30;
+const PASSWORD_RESET_AGE = 30 * 60;
+const PASSWORD_RESET_SENDER = "noreply@mail.magicteams.ai";
 const MODEL = "@cf/moonshotai/kimi-k2.6";
 const IMAGE_MODEL = "@cf/black-forest-labs/flux-1-schnell";
 const VOICE_MODEL = "@cf/deepgram/aura-2-en";
@@ -413,15 +416,64 @@ function safeNext(value: string | null): string {
   return value?.startsWith("/") && !value.startsWith("//") ? value : "/";
 }
 
+function escapeHtml(value: string): string {
+  return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
+}
+
+const AUTH_HEADERS: HeadersInit = {
+  "content-type": "text/html; charset=utf-8",
+  "cache-control": "no-store",
+  "referrer-policy": "no-referrer",
+  "x-frame-options": "DENY",
+  "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+};
+
+function authPage(title: string, subtitle: string, body: string, status = 200): Response {
+  return new Response(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(title)}</title><style>
+  *{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;background:#090b10;color:#eef1f7;font:15px/1.45 Inter,ui-sans-serif,system-ui,sans-serif}.glow{position:fixed;inset:0;background:radial-gradient(circle at 50% 15%,#7038ff33,transparent 38%),radial-gradient(circle at 10% 90%,#15a6ff18,transparent 34%);pointer-events:none}.card{position:relative;width:min(92vw,420px);padding:34px;border:1px solid #ffffff17;border-radius:24px;background:#141721e8;box-shadow:0 30px 90px #0009;backdrop-filter:blur(18px)}.brand{display:flex;align-items:center;gap:11px;margin-bottom:28px;font-weight:750;letter-spacing:-.02em}.mark{display:grid;place-items:center;width:34px;height:34px;border-radius:11px;background:linear-gradient(135deg,#8b5cff,#4ba9ff);box-shadow:0 8px 26px #744cff66}h1{margin:0 0 7px;font-size:27px;letter-spacing:-.04em}p{margin:0 0 24px;color:#99a2b5}.field{display:grid;gap:7px;margin:14px 0}label{font-size:12px;font-weight:650;color:#bdc4d2}input{width:100%;border:1px solid #ffffff18;border-radius:12px;background:#0c0e14;color:#fff;padding:12px 13px;outline:none}input:focus{border-color:#7a61ff;box-shadow:0 0 0 3px #7555ff22}button{width:100%;margin-top:9px;border:0;border-radius:12px;padding:12px;background:linear-gradient(135deg,#8058ff,#4a9dff);color:white;font-weight:750;cursor:pointer}.error,.success{margin:0 0 16px;border:1px solid #ff657544;border-radius:10px;background:#ff405b14;color:#ff9ca7;padding:10px 12px;font-size:13px}.success{border-color:#57d69a44;background:#29bf7814;color:#8be8ba}.switch{margin:20px 0 0;text-align:center;font-size:13px}.switch a,.forgot a{color:#9d8bff;text-decoration:none;font-weight:700}.forgot{text-align:right;margin:-5px 0 12px;font-size:12px}.fine{margin-top:18px;text-align:center;color:#697185;font-size:11px}</style></head><body><div class="glow"></div><main class="card"><div class="brand"><span class="mark">✦</span> MagicBot</div><h1>${escapeHtml(title)}</h1><p>${escapeHtml(subtitle)}</p>${body}<div class="fine">Protected by secure, HTTP-only sessions on Cloudflare.</div></main></body></html>`, { status, headers: AUTH_HEADERS });
+}
+
 function loginPage(message = "", mode: "login" | "signup" = "login", status = 200): Response {
   const signup = mode === "signup";
   const title = signup ? "Create your MagicBot account" : "Welcome back";
   const switchText = signup ? "Already have an account?" : "New to MagicBot?";
   const switchLink = signup ? "/login" : "/signup";
   const switchLabel = signup ? "Sign in" : "Create account";
-  const escaped = message.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+  const escaped = escapeHtml(message);
   return new Response(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title><style>
-  *{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;background:#090b10;color:#eef1f7;font:15px/1.45 Inter,ui-sans-serif,system-ui,sans-serif}.glow{position:fixed;inset:0;background:radial-gradient(circle at 50% 15%,#7038ff33,transparent 38%),radial-gradient(circle at 10% 90%,#15a6ff18,transparent 34%);pointer-events:none}.card{position:relative;width:min(92vw,420px);padding:34px;border:1px solid #ffffff17;border-radius:24px;background:#141721e8;box-shadow:0 30px 90px #0009;backdrop-filter:blur(18px)}.brand{display:flex;align-items:center;gap:11px;margin-bottom:28px;font-weight:750;letter-spacing:-.02em}.mark{display:grid;place-items:center;width:34px;height:34px;border-radius:11px;background:linear-gradient(135deg,#8b5cff,#4ba9ff);box-shadow:0 8px 26px #744cff66}h1{margin:0 0 7px;font-size:27px;letter-spacing:-.04em}p{margin:0 0 24px;color:#99a2b5}.field{display:grid;gap:7px;margin:14px 0}label{font-size:12px;font-weight:650;color:#bdc4d2}input{width:100%;border:1px solid #ffffff18;border-radius:12px;background:#0c0e14;color:#fff;padding:12px 13px;outline:none}input:focus{border-color:#7a61ff;box-shadow:0 0 0 3px #7555ff22}button{width:100%;margin-top:9px;border:0;border-radius:12px;padding:12px;background:linear-gradient(135deg,#8058ff,#4a9dff);color:white;font-weight:750;cursor:pointer}.error{margin:0 0 16px;border:1px solid #ff657544;border-radius:10px;background:#ff405b14;color:#ff9ca7;padding:10px 12px;font-size:13px}.switch{margin:20px 0 0;text-align:center;font-size:13px}.switch a{color:#9d8bff;text-decoration:none;font-weight:700}.fine{margin-top:18px;text-align:center;color:#697185;font-size:11px}</style></head><body><div class="glow"></div><main class="card"><div class="brand"><span class="mark">✦</span> MagicBot</div><h1>${title}</h1><p>Your AI team, available securely from anywhere.</p>${escaped ? `<div class="error">${escaped}</div>` : ""}<form method="post" action="${signup ? "/signup" : "/login"}">${signup ? '<div class="field"><label for="name">Name</label><input id="name" name="name" autocomplete="name" required maxlength="80"></div>' : ""}<div class="field"><label for="email">Email</label><input id="email" name="email" type="email" autocomplete="email" required maxlength="254"></div><div class="field"><label for="password">Password</label><input id="password" name="password" type="password" autocomplete="${signup ? "new-password" : "current-password"}" minlength="8" required></div><button type="submit">${signup ? "Create account" : "Sign in"}</button></form><p class="switch">${switchText} <a href="${switchLink}">${switchLabel}</a></p><div class="fine">Protected by secure, HTTP-only sessions on Cloudflare.</div></main></body></html>`, { status, headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "x-frame-options": "DENY", "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'" } });
+  *{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;background:#090b10;color:#eef1f7;font:15px/1.45 Inter,ui-sans-serif,system-ui,sans-serif}.glow{position:fixed;inset:0;background:radial-gradient(circle at 50% 15%,#7038ff33,transparent 38%),radial-gradient(circle at 10% 90%,#15a6ff18,transparent 34%);pointer-events:none}.card{position:relative;width:min(92vw,420px);padding:34px;border:1px solid #ffffff17;border-radius:24px;background:#141721e8;box-shadow:0 30px 90px #0009;backdrop-filter:blur(18px)}.brand{display:flex;align-items:center;gap:11px;margin-bottom:28px;font-weight:750;letter-spacing:-.02em}.mark{display:grid;place-items:center;width:34px;height:34px;border-radius:11px;background:linear-gradient(135deg,#8b5cff,#4ba9ff);box-shadow:0 8px 26px #744cff66}h1{margin:0 0 7px;font-size:27px;letter-spacing:-.04em}p{margin:0 0 24px;color:#99a2b5}.field{display:grid;gap:7px;margin:14px 0}label{font-size:12px;font-weight:650;color:#bdc4d2}input{width:100%;border:1px solid #ffffff18;border-radius:12px;background:#0c0e14;color:#fff;padding:12px 13px;outline:none}input:focus{border-color:#7a61ff;box-shadow:0 0 0 3px #7555ff22}button{width:100%;margin-top:9px;border:0;border-radius:12px;padding:12px;background:linear-gradient(135deg,#8058ff,#4a9dff);color:white;font-weight:750;cursor:pointer}.error{margin:0 0 16px;border:1px solid #ff657544;border-radius:10px;background:#ff405b14;color:#ff9ca7;padding:10px 12px;font-size:13px}.switch{margin:20px 0 0;text-align:center;font-size:13px}.switch a,.forgot a{color:#9d8bff;text-decoration:none;font-weight:700}.forgot{text-align:right;margin:-5px 0 12px;font-size:12px}.fine{margin-top:18px;text-align:center;color:#697185;font-size:11px}</style></head><body><div class="glow"></div><main class="card"><div class="brand"><span class="mark">✦</span> MagicBot</div><h1>${title}</h1><p>Your AI team, available securely from anywhere.</p>${escaped ? `<div class="error">${escaped}</div>` : ""}<form method="post" action="${signup ? "/signup" : "/login"}">${signup ? '<div class="field"><label for="name">Name</label><input id="name" name="name" autocomplete="name" required maxlength="80"></div>' : ""}<div class="field"><label for="email">Email</label><input id="email" name="email" type="email" autocomplete="email" required maxlength="254"></div><div class="field"><label for="password">Password</label><input id="password" name="password" type="password" autocomplete="${signup ? "new-password" : "current-password"}" minlength="8" required></div>${signup ? "" : '<div class="forgot"><a href="/forgot-password">Forgot password?</a></div>'}<button type="submit">${signup ? "Create account" : "Sign in"}</button></form><p class="switch">${switchText} <a href="${switchLink}">${switchLabel}</a></p><div class="fine">Protected by secure, HTTP-only sessions on Cloudflare.</div></main></body></html>`, { status, headers: AUTH_HEADERS });
+}
+
+function forgotPasswordPage(sent = false, message = "", status = 200): Response {
+  const notice = message
+    ? `<div class="error">${escapeHtml(message)}</div>`
+    : sent
+      ? '<div class="success">If an account exists for that email, a reset link is on its way. Check your spam folder too.</div>'
+      : "";
+  const form = sent
+    ? '<p class="switch"><a href="/login">Return to sign in</a></p>'
+    : `<form method="post" action="/forgot-password">${notice}<div class="field"><label for="email">Account email</label><input id="email" name="email" type="email" autocomplete="email" required maxlength="254" autofocus></div><button type="submit">Send reset link</button></form><p class="switch"><a href="/login">Back to sign in</a></p>`;
+  return authPage("Reset your password", sent ? "The link expires in 30 minutes and can only be used once." : "Enter the email you use for MagicBot.", sent ? `${notice}${form}` : form, status);
+}
+
+function resetPasswordPage(token: string, message = "", status = 200): Response {
+  const error = message ? `<div class="error">${escapeHtml(message)}</div>` : "";
+  const body = token
+    ? `${error}<form method="post" action="/reset-password"><input type="hidden" name="token" value="${escapeHtml(token)}"><div class="field"><label for="password">New password</label><input id="password" name="password" type="password" autocomplete="new-password" minlength="8" required autofocus></div><div class="field"><label for="confirm">Confirm new password</label><input id="confirm" name="confirm" type="password" autocomplete="new-password" minlength="8" required></div><button type="submit">Set new password</button></form>`
+    : `${error || '<div class="error">This reset link is invalid or has expired.</div>'}<p class="switch"><a href="/forgot-password">Request a new link</a></p>`;
+  return authPage("Choose a new password", token ? "Use at least 8 characters." : "For your security, reset links expire after 30 minutes.", body, status);
+}
+
+async function sendPasswordResetEmail(env: Env, user: User, resetUrl: string): Promise<void> {
+  const safeName = escapeHtml(user.name || "there");
+  const safeUrl = escapeHtml(resetUrl);
+  await env.EMAIL.send({
+    from: { name: "MagicBot", email: PASSWORD_RESET_SENDER },
+    to: { name: user.name || "MagicBot user", email: user.email },
+    subject: "Reset your MagicBot password",
+    text: `Hi ${user.name || "there"},\n\nUse this secure link to reset your MagicBot password:\n${resetUrl}\n\nThe link expires in 30 minutes and can only be used once. If you did not request this, you can ignore this email.`,
+    html: `<p>Hi ${safeName},</p><p>Use the button below to reset your MagicBot password.</p><p><a href="${safeUrl}" style="display:inline-block;padding:12px 18px;border-radius:10px;background:#7657ff;color:#fff;text-decoration:none;font-weight:700">Reset password</a></p><p>This link expires in 30 minutes and can only be used once. If you did not request this, you can ignore this email.</p>`,
+  });
 }
 
 function newBot(name = "SupaMaus"): Bot {
@@ -1189,7 +1241,7 @@ async function api(request: Request, env: Env, user: User, path: string): Promis
     return json({ authorizeUrl: pending.authorizeUrl, expiresAt: pending.expiresAt });
   }
   if (path === "/api/claude/complete" && request.method === "POST") {
-    const body = await request.json<{ code?: string }>().catch(() => ({}));
+    const body: { code?: string } = await request.json<{ code?: string }>().catch(() => ({}));
     const pasted = body.code?.trim() ?? "";
     if (!pasted || pasted.length > 512) return json({ error: "Paste the one-time code shown by Claude" }, 400);
     const rawPending = await credentialValue(env, user.id, CLAUDE_PENDING);
@@ -2084,6 +2136,73 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
     if (hookMatch && request.method === "POST") return handleWebhook(request, env, hookMatch[1]);
     if (url.pathname === "/login" && request.method === "GET") return loginPage();
     if (url.pathname === "/signup" && request.method === "GET") return loginPage("", "signup");
+    if (url.pathname === "/forgot-password" && request.method === "GET") return forgotPasswordPage();
+    if (url.pathname === "/forgot-password" && request.method === "POST") {
+      if (!sameOrigin(request)) return forgotPasswordPage(false, "Cross-origin request refused", 403);
+      const body = await requestBody(request);
+      const email = (body.email ?? "").trim().toLowerCase();
+      const clientAddress = request.headers.get("cf-connecting-ip") ?? "unknown";
+      const addressKey = await sha256(clientAddress);
+      const emailKey = await sha256(email);
+      const validEmail = /^\S+@\S+\.\S+$/.test(email) && email.length <= 254;
+      const allowedByAddress = await withinRateLimit(env, `password-reset-ip:${addressKey}`, 5, 60 * 60);
+      const allowedByAccount = await withinRateLimit(env, `password-reset-email:${emailKey}`, 3, 60 * 60);
+      if (validEmail && allowedByAddress && allowedByAccount) {
+        const user = await env.DB.prepare("SELECT id, email, name FROM users WHERE email = ?")
+          .bind(email).first<User>();
+        if (user) {
+          const token = randomToken();
+          const tokenHash = await sha256(token);
+          await env.DB.batch([
+            env.DB.prepare("DELETE FROM password_reset_tokens WHERE user_id = ? OR expires_at <= ?").bind(user.id, Date.now()),
+            env.DB.prepare("INSERT INTO password_reset_tokens (token_hash, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)")
+              .bind(tokenHash, user.id, Date.now() + PASSWORD_RESET_AGE * 1000, Date.now()),
+          ]);
+          try {
+            await sendPasswordResetEmail(env, user, `${url.origin}/reset-password?token=${encodeURIComponent(token)}`);
+          } catch (error) {
+            await env.DB.prepare("DELETE FROM password_reset_tokens WHERE token_hash = ?").bind(tokenHash).run();
+            console.error(JSON.stringify({
+              event: "password_reset_email_failed",
+              userId: user.id,
+              message: error instanceof Error ? error.message : String(error),
+            }));
+          }
+        }
+      }
+      return forgotPasswordPage(true);
+    }
+    if (url.pathname === "/reset-password" && request.method === "GET") {
+      const token = url.searchParams.get("token") ?? "";
+      if (!/^[A-Za-z0-9_-]{40,64}$/.test(token)) return resetPasswordPage("", "This reset link is invalid or has expired.", 400);
+      const record = await env.DB.prepare("SELECT user_id FROM password_reset_tokens WHERE token_hash = ? AND expires_at > ?")
+        .bind(await sha256(token), Date.now()).first<{ user_id: string }>();
+      return record ? resetPasswordPage(token) : resetPasswordPage("", "This reset link is invalid or has expired.", 400);
+    }
+    if (url.pathname === "/reset-password" && request.method === "POST") {
+      if (!sameOrigin(request)) return resetPasswordPage("", "Cross-origin request refused", 403);
+      const body = await requestBody(request);
+      const token = body.token ?? "";
+      const password = body.password ?? "";
+      const confirm = body.confirm ?? "";
+      if (!/^[A-Za-z0-9_-]{40,64}$/.test(token)) return resetPasswordPage("", "This reset link is invalid or has expired.", 400);
+      if (password.length < 8) return resetPasswordPage(token, "Use a password of at least 8 characters.", 400);
+      if (password !== confirm) return resetPasswordPage(token, "The passwords do not match.", 400);
+      const claimed = await env.DB.prepare(
+        "DELETE FROM password_reset_tokens WHERE token_hash = ? AND expires_at > ? RETURNING user_id",
+      ).bind(await sha256(token), Date.now()).first<{ user_id: string }>();
+      if (!claimed) return resetPasswordPage("", "This reset link is invalid or has expired.", 400);
+      const salt = randomToken(18);
+      const nextPasswordHash = await passwordHash(password, salt);
+      await env.DB.batch([
+        env.DB.prepare("UPDATE users SET password_hash = ?, password_salt = ? WHERE id = ?")
+          .bind(nextPasswordHash, salt, claimed.user_id),
+        env.DB.prepare("DELETE FROM password_reset_tokens WHERE user_id = ?").bind(claimed.user_id),
+        env.DB.prepare("DELETE FROM sessions WHERE user_id = ?").bind(claimed.user_id),
+      ]);
+      const session = await createSession(env, claimed.user_id);
+      return redirect("/", { "set-cookie": sessionCookie(session) });
+    }
     if ((url.pathname === "/login" || url.pathname === "/signup") && request.method === "POST") {
       if (!sameOrigin(request)) return loginPage("Cross-origin request refused", url.pathname === "/signup" ? "signup" : "login");
       const body = await requestBody(request);
@@ -2142,6 +2261,12 @@ function requestFailure(request: Request, error: unknown): Response {
     const mode = url.pathname === "/signup" ? "signup" : "login";
     return loginPage(`MagicBot hit a temporary sign-in problem. Please try again. Reference: ${incident}`, mode, 503);
   }
+  if (url.pathname === "/forgot-password") {
+    return forgotPasswordPage(false, `MagicBot could not start password recovery. Please try again. Reference: ${incident}`, 503);
+  }
+  if (url.pathname === "/reset-password") {
+    return resetPasswordPage("", `MagicBot could not finish the password reset. Please request a new link. Reference: ${incident}`, 503);
+  }
   if (url.pathname.startsWith("/api/")) {
     return json({ error: "MagicBot hit a temporary server problem. Please retry.", reference: incident }, 503);
   }
@@ -2160,6 +2285,9 @@ export default {
     }
   },
   async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext) {
-    ctx.waitUntil(runDueRoutines(env));
+    ctx.waitUntil(Promise.all([
+      runDueRoutines(env),
+      env.DB.prepare("DELETE FROM password_reset_tokens WHERE expires_at <= ?").bind(Date.now()).run(),
+    ]));
   },
 } satisfies ExportedHandler<Env>;
