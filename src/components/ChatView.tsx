@@ -970,14 +970,14 @@ export function ChatView({ bot }: { bot: Bot }) {
       {/* Header */}
       <header
         className={cn(
-          "@container/chathead flex min-h-[68px] items-center justify-between gap-3 border-b border-hairline/30 px-5 py-2.5",
+          "@container/chathead flex min-h-[68px] items-center justify-between gap-3 border-b border-hairline/30 px-5 py-2.5 max-sm:flex-wrap max-sm:items-start max-sm:gap-y-1.5 max-sm:pb-2",
           // Room for the drawer button, which overlays this corner below md.
           "pl-11 md:pl-5",
           isWin && "pr-[148px]",
         )}
         style={drag}
       >
-        <div className="flex min-w-0 flex-1 items-center gap-2.5 rounded-lg px-1 py-1" style={noDrag}>
+        <div className="flex min-w-0 flex-1 items-center gap-2.5 rounded-lg px-1 py-1 max-sm:basis-full" style={noDrag}>
           <button
             onClick={() => dispatch({ type: "toggleSettings", open: true })}
             className="flex size-10 shrink-0 items-center justify-center rounded-lg hover:bg-raised/50"
@@ -1021,7 +1021,7 @@ export function ChatView({ bot }: { bot: Bot }) {
             </div>
           </div>
         </div>
-        <div className="flex shrink-0 items-center gap-1" style={noDrag}>
+        <div className="flex shrink-0 items-center gap-1 max-sm:w-full max-sm:overflow-x-auto max-sm:pb-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden" style={noDrag}>
           {bot.busy && (
             <button
               onClick={() => dispatch({ type: "interrupt", botId: bot.id })}

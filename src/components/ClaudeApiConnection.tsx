@@ -5,6 +5,10 @@ import { ProviderMark } from "./ProviderIcons";
 
 type PendingLogin = { authorizeUrl: string; expiresAt: number };
 
+function looksLikeClaudeCode(value: string) {
+  return /^[\w-]{10,}#[\w-]{6,}$/.test(value.trim());
+}
+
 export function ClaudeApiConnection() {
   const { state, dispatch, refreshInstances } = useStore();
   const [pending, setPending] = useState<PendingLogin | null>(null);
@@ -21,7 +25,7 @@ export function ClaudeApiConnection() {
 
   const start = async () => {
     if (busy) return;
-    const popup = window.open("about:blank", "magicbot-claude-auth");
+    const popup = window.open("about:blank", "magicbot-claude-auth", "popup,width=600,height=760");
     if (popup) {
       popup.document.title = "Opening Claude…";
       popup.document.body.textContent = "Opening secure Claude sign-in…";
@@ -42,12 +46,12 @@ export function ClaudeApiConnection() {
     }
   };
 
-  const complete = async () => {
-    if (!code.trim() || busy) return;
+  const complete = async (nextCode = code) => {
+    if (!nextCode.trim() || busy) return;
     setBusy(true);
     setError(null);
     try {
-      const result = await api("/api/claude/complete", { method: "POST", body: JSON.stringify({ code: code.trim() }) });
+      const result = await api("/api/claude/complete", { method: "POST", body: JSON.stringify({ code: nextCode.trim() }) });
       if (result.status !== "connected") throw new Error("Claude sign-in did not finish. Start again.");
       setPending(null);
       setCode("");
@@ -119,7 +123,7 @@ export function ClaudeApiConnection() {
           {pending ? (
             <div className="mt-3 rounded-xl border border-accent/25 bg-accent/5 p-3.5">
               <div className="flex items-center justify-between gap-2">
-                <span className="text-[11px] text-ink-secondary">Approve in Claude, then paste the complete one-time code shown there.</span>
+                <span className="text-[11px] leading-relaxed text-ink-secondary">Approve in Claude, copy the complete code it shows, then paste it below. A valid code connects immediately.</span>
                 <button type="button" onClick={() => void cancel()} disabled={busy} aria-label="Cancel Claude sign-in" className="rounded p-1 text-ink-secondary hover:bg-control hover:text-ink"><X size={13} /></button>
               </div>
               <a href={pending.authorizeUrl} target="_blank" rel="noopener noreferrer" className="mt-2 inline-flex items-center gap-1 text-[12px] font-medium text-accent hover:underline">
@@ -129,15 +133,22 @@ export function ClaudeApiConnection() {
                 <input
                   value={code}
                   onChange={(event) => setCode(event.target.value)}
+                  onPaste={(event) => {
+                    const pasted = event.clipboardData.getData("text").trim();
+                    if (!looksLikeClaudeCode(pasted)) return;
+                    event.preventDefault();
+                    setCode(pasted);
+                    void complete(pasted);
+                  }}
                   onKeyDown={(event) => event.key === "Enter" && void complete()}
-                  placeholder="Paste the complete Claude login code"
+                  placeholder="Paste code#state from Claude"
                   aria-label="Claude authorization code"
                   autoComplete="off"
                   spellCheck={false}
                   className="min-w-0 flex-1 rounded-lg border border-hairline/40 bg-panel px-3 py-2 font-mono text-[12px] text-ink placeholder:font-sans placeholder:text-ink-secondary focus:border-hairline focus:outline-none"
                 />
                 <button type="button" onClick={() => void complete()} disabled={busy || !code.trim()} className="flex items-center gap-1.5 rounded-lg bg-ink px-3 py-2 text-[12px] font-medium text-panel disabled:opacity-50">
-                  {busy && <Loader2 size={12} className="animate-spin" />} Connect
+                  {busy && <Loader2 size={12} className="animate-spin" />} Finish
                 </button>
               </div>
             </div>

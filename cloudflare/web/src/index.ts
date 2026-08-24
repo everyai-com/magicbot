@@ -159,7 +159,7 @@ const CLAUDE_PENDING = "claude_code_pending";
 const CLAUDE_RUNTIME_READY = "claude_code_runtime_ready";
 const CLAUDE_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
 const CLAUDE_REDIRECT = "https://console.anthropic.com/oauth/code/callback";
-const CLAUDE_TOKEN_URL = "https://platform.claude.com/v1/oauth/token";
+const CLAUDE_TOKEN_URL = "https://console.anthropic.com/v1/oauth/token";
 const CLAUDE_MODELS = ["claude-sonnet-5", "claude-opus-5", "claude-haiku-4-5-20251001"];
 const encoder = new TextEncoder();
 

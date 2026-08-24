@@ -269,6 +269,13 @@ body,
   height: 100%;
 }
 
+/* Follow the actually visible browser height. On mobile, 100% can keep the
+   composer underneath the address bar or on-screen keyboard. */
+#root {
+  height: 100dvh;
+  min-height: 100svh;
+}
+
 body {
   background-color: var(--color-app);
   color: var(--color-ink);
