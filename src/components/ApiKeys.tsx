@@ -45,11 +45,11 @@ const CREDENTIALS: Record<
     optional: true,
   },
   opencodeGo: {
-    label: "OpenCode Go API key",
-    placeholder: "Paste your OpenCode Go API key",
-    description: "Run OpenCode Go models through the maintained OpenCode CLI and ACP.",
-    href: "https://opencode.ai/docs/go/",
-    linkLabel: "Open OpenCode Go setup guide",
+    label: "OpenCode API key",
+    placeholder: "Paste an OpenCode API key",
+    description: "Optional. Existing OpenCode Zen, Go, and other provider connections are detected automatically.",
+    href: "https://opencode.ai/docs/providers/",
+    linkLabel: "Open the OpenCode provider guide",
     optional: true,
   },
 };

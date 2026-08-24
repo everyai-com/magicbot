@@ -59,6 +59,7 @@ import {
   parseConfigPatch,
   roomTurnTimeoutMinutes,
   saveConfig,
+  skillRecorderEnabled,
   syncCredentialEnv,
   withInstanceCli,
   vpsSshAlias,
@@ -2348,6 +2349,7 @@ function configStatus() {
       mode: localVmMode(cfg),
       maxInstances: localVmMaxInstances(cfg),
     },
+    features: { skillRecorder: skillRecorderEnabled(cfg) },
   };
 }
 
@@ -4411,7 +4413,8 @@ const server = createServer(async (req, res) => {
           key !== "imageGen" &&
           key !== "vps" &&
           key !== "rooms" &&
-          key !== "localVm",
+          key !== "localVm" &&
+          key !== "features",
       );
       if (reloadKeys.length > 0) await reloadProviders();
       const status = configStatus();
