@@ -140,7 +140,7 @@ export function CodexSubscription() {
             </div>
           </div>
           <p className="mt-2 max-w-[58ch] text-[12.5px] leading-relaxed text-ink-secondary">
-            Use the Codex access included with your ChatGPT plan. MagicBots runs the official Codex CLI inside your private Cloudflare Computer—no API key or separate API billing.
+            Use the Codex access included with your ChatGPT plan. MagicTeams runs the official Codex CLI inside your private Cloudflare Computer—no API key or separate API billing.
           </p>
 
           {codex?.configured && (

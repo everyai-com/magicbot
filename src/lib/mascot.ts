@@ -122,31 +122,25 @@ export function normalizeState(value: string | null | undefined): MausState | nu
   return LEGACY_STATES[value] ?? null;
 }
 
-/**
- * The states worth offering in the appearance picker.
- *
- * The engine carries 39, but many are transient beats the app drives itself
- * (`sending`, `alerting`, `powering-down`) and make no sense as a bot's resting
- * face. More importantly, states share resting faces: `happy`, `excited` and
- * `playful` all rest on expression 2, and `curious`, `surprised` and `scared`
- * all rest on 3 — they differ in which faces they *drift* to, which a static
- * swatch cannot show. Offering them all gave 15 buttons showing 8 pictures.
- *
- * Across all 39 states there are only 11 distinct resting faces, so this is one
- * state per face, chosen for the clearest name. Every swatch looks different.
- */
-export const PICKABLE_STATES: MausState[] = [
-  "idle", // expression 0
-  "happy", // 2
-  "curious", // 3
-  "drowsy", // 4
-  "working", // 7
-  "thinking", // 8
-  "listening", // 10
-  "sleeping", // 13
-  "suspicious", // 14
-  "proud", // 15
-];
+/** Every visually distinct Circle Bot face available as a lasting identity.
+ * Process-only animations such as sending and loading remain automatic. */
+export const PICKABLE_EXPRESSIONS = [
+  { state: "idle", label: "Neutral" },
+  { state: "happy", label: "Happy" },
+  { state: "excited", label: "Excited" },
+  { state: "curious", label: "Curious" },
+  { state: "thinking", label: "Thinking" },
+  { state: "surprised", label: "Surprised" },
+  { state: "working", label: "Focused" },
+  { state: "shy", label: "Wink" },
+  { state: "drowsy", label: "Tired" },
+  { state: "celebrate", label: "Love" },
+  { state: "confused", label: "Confused" },
+  { state: "alerting", label: "Error" },
+  { state: "sad", label: "Sad" },
+] as const satisfies ReadonlyArray<{ state: MausState; label: string }>;
+
+export const PICKABLE_STATES: MausState[] = PICKABLE_EXPRESSIONS.map(({ state }) => state);
 
 type MascotMessage = {
   kind: string;

@@ -92,9 +92,9 @@ export function CallTargetButton({
       : !supported
         ? "Calls need speech recognition in this browser or the desktop app"
         : !configured
-          ? "Add an ElevenLabs key in an agent profile to make calls"
+          ? "Add an ElevenLabs key in a bot profile to make calls"
           : !voiceReady
-            ? "Pick a voice in an agent profile to make calls"
+            ? "Pick a voice in a bot profile to make calls"
             : `Call ${targetName}`;
 
   const reason = !capabilitiesReady
@@ -102,12 +102,12 @@ export function CallTargetButton({
     : !capabilities.dictation.available
       ? "This browser does not provide speech recognition. Try Chrome, Edge, or the desktop app."
       : !speechInput.available()
-        ? "The speech service is unavailable. Reload the page or restart MagicBots."
+        ? "The speech service is unavailable. Reload the page or restart MagicTeams."
         : !configured
           ? "Add an ElevenLabs API key so the bot can speak during calls."
           : !voiceReady
             ? voices.length > 1
-              ? "Give every channel member an ElevenLabs voice before starting a channel call."
+              ? "Give every team member an ElevenLabs voice before starting a team call."
               : "Choose an ElevenLabs voice before starting a call."
             : "";
 
@@ -489,7 +489,7 @@ function Call({ bot }: { bot: Bot }) {
         <X size={18} />
       </button>
 
-      <MausAvatar color={bot.color} state={mascotState} size={220} animated trackPointer />
+      <MausAvatar color={bot.color} state={mascotState} size={220} animated trackPointer personality={bot.personality} />
 
       <div className="flex flex-col items-center gap-1.5 text-center">
         <div className="text-[20px] font-medium text-ink">{bot.name}</div>

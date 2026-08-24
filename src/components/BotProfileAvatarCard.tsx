@@ -5,7 +5,7 @@ import { api, useStore, type Bot, type ConfigStatus } from "@/state/store";
 import { imageAttachmentFromFile } from "@/lib/composer-attachments";
 import { cn } from "@/lib/cn";
 import {
-  PICKABLE_STATES,
+  PICKABLE_EXPRESSIONS,
   MAUS_COLORS,
   MAUS_COLOR_NAMES,
   type MausMotion,
@@ -17,9 +17,14 @@ import {
   type BotAvatarCrop,
 } from "../../shared/bot-avatar";
 import { BotAvatar, MausAvatar } from "./Avatar";
+import {
+  automaticBotAppearance,
+  BOT_PERSONALITIES,
+  BOT_PERSONALITY_DETAILS,
+} from "../../shared/bot-personality";
 
 type AvatarPatch = Partial<
-  Pick<Bot, "avatarCrop" | "avatarUrl" | "color" | "mascotExpression">
+  Pick<Bot, "avatarCrop" | "avatarUrl" | "color" | "mascotExpression" | "personality">
 >;
 
 const CROP_LABEL = {
@@ -132,10 +137,10 @@ export function BotProfileAvatarCard({
       <div className="flex items-center justify-between border-b border-hairline/40 px-3 py-2.5">
         <span className="rounded-lg bg-control px-3 py-1.5 text-[14px] font-medium text-ink">Avatar</span>
         <button
-          onClick={() => onPatch({ avatarCrop: "mascot", color: "green", mascotExpression: null })}
+          onClick={() => onPatch({ avatarCrop: "mascot", avatarUrl: null, ...automaticBotAppearance(crypto.randomUUID()) })}
           className="rounded-md px-2 py-1.5 text-[13px] text-ink-secondary hover:bg-control hover:text-ink"
         >
-          Reset mascot
+          Shuffle look
         </button>
       </div>
 
@@ -206,23 +211,49 @@ export function BotProfileAvatarCard({
         {crop === "mascot" && (
           <>
             <div className="mb-2 mt-4 text-[12px] font-medium uppercase tracking-[0.08em] text-ink-secondary">
+              Motion personality
+            </div>
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+              {BOT_PERSONALITIES.map((personality) => {
+                const details = BOT_PERSONALITY_DETAILS[personality];
+                const selected = (bot.personality ?? "friendly") === personality;
+                return (
+                  <button
+                    key={personality}
+                    type="button"
+                    aria-pressed={selected}
+                    onClick={() => onPatch({ personality })}
+                    className={cn(
+                      "min-h-[58px] rounded-xl bg-inset px-2.5 py-2 text-left transition-colors hover:bg-control",
+                      selected && "ring-2 ring-accent-border",
+                    )}
+                  >
+                    <span className="block text-[12.5px] font-semibold text-ink">{details.label}</span>
+                    <span className="mt-0.5 block text-[10.5px] leading-tight text-ink-secondary">{details.description}</span>
+                  </button>
+                );
+              })}
+            </div>
+
+            <div className="mb-2 mt-4 text-[12px] font-medium uppercase tracking-[0.08em] text-ink-secondary">
               Expression
             </div>
-            <div className="grid grid-cols-5 gap-2">
-              {PICKABLE_STATES.map((expression) => (
+            <div className="grid grid-cols-4 gap-2 sm:grid-cols-5">
+              {PICKABLE_EXPRESSIONS.map(({ state: expression, label }) => (
                 <button
                   key={expression}
                   type="button"
                   aria-pressed={activeState === expression}
                   onClick={() => onPatch({ mascotExpression: expression })}
                   className={cn(
-                    "flex h-[58px] items-center justify-center rounded-xl bg-inset transition-colors hover:bg-control",
+                    "flex min-h-[72px] flex-col items-center justify-center gap-1 rounded-xl bg-inset px-1 transition-colors hover:bg-control",
                     activeState === expression && "ring-2 ring-accent-border",
                   )}
-                  title={expression}
-                  aria-label={`Use ${expression} expression`}
+                  title={label}
+                  aria-label={`Use ${label.toLowerCase()} expression`}
                 >
-                  <MausAvatar color={bot.color} state={expression} size={42} animated={false} />
+                  <MausAvatar color={bot.color} state={expression} size={40} animated={false} />
+                  <span className="max-w-full truncate text-[10px] font-medium text-ink-secondary">{label}</span>
                 </button>
               ))}
             </div>

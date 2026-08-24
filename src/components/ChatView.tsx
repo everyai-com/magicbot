@@ -1002,7 +1002,7 @@ export function ChatView({ bot }: { bot: Bot }) {
           <button
             onClick={() => dispatch({ type: "toggleSettings", open: true })}
             className="flex size-10 shrink-0 items-center justify-center rounded-lg hover:bg-raised/50"
-            title="Open agent profile"
+            title="Open bot profile"
             aria-label={`Open ${bot.name}'s profile`}
           >
             <BotAvatar
@@ -1042,7 +1042,7 @@ export function ChatView({ bot }: { bot: Bot }) {
             </div>
           </div>
         </div>
-        <div className="flex max-w-[52vw] shrink-0 items-center gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden sm:max-w-none" style={noDrag}>
+        <div className="hidden max-w-[52vw] shrink-0 items-center gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden sm:flex sm:max-w-none" style={noDrag}>
           {bot.busy && (
             <button
               onClick={() => dispatch({ type: "interrupt", botId: bot.id })}
@@ -1057,7 +1057,7 @@ export function ChatView({ bot }: { bot: Bot }) {
             </button>
           )}
           <TaskPicker bot={bot} />
-          <ModelPicker bot={bot} />
+          <ModelPicker bot={bot} className="hidden sm:block" />
           <div className="hidden items-center gap-1 sm:flex">
             <UsageChip bot={bot} />
             <WorkingFolderChip bot={bot} />
@@ -1088,6 +1088,36 @@ export function ChatView({ bot }: { bot: Bot }) {
           </button>
         </div>
       </header>
+
+      {/* Phone controls: keep the active model visible and reachable without
+          squeezing it into the icon-only desktop action row. */}
+      <div className="flex shrink-0 items-center gap-1.5 border-b border-hairline/30 bg-panel/35 px-3 py-2 sm:hidden">
+        <ModelPicker bot={bot} prominent className="min-w-0 flex-1" />
+        <TaskPicker bot={bot} />
+        <CallButton bot={bot} />
+        <button
+          onClick={() => dispatch({ type: "toggleComputer" })}
+          aria-label="Bot's computer"
+          aria-pressed={state.computerOpen}
+          className={cn(
+            "flex size-11 shrink-0 items-center justify-center rounded-xl transition-colors hover:bg-raised",
+            state.computerOpen ? "bg-raised text-accent" : "text-ink-secondary hover:text-ink",
+          )}
+        >
+          <Monitor size={18} />
+        </button>
+        <button
+          onClick={() => dispatch({ type: "toggleInspector" })}
+          aria-label="Inspector"
+          aria-pressed={state.inspectorOpen}
+          className={cn(
+            "flex size-11 shrink-0 items-center justify-center rounded-xl transition-colors hover:bg-raised",
+            state.inspectorOpen ? "bg-raised text-accent" : "text-ink-secondary hover:text-ink",
+          )}
+        >
+          <Bug size={18} />
+        </button>
+      </div>
 
       {/* Error banner */}
       {state.error && (

@@ -134,7 +134,7 @@ export function CompanionSection() {
     return (
       <Card
         title="Companion"
-        subtitle="The companion runs as its own process, which only the desktop app can start. Open MagicBots on this computer to turn it on."
+        subtitle="The companion runs as its own process, which only the desktop app can start. Open MagicTeams on this computer to turn it on."
       >
         <div />
       </Card>
@@ -226,7 +226,7 @@ export function CompanionSection() {
             You're on a tailnet, but this computer's MagicDNS name couldn't be read from the
             Tailscale app — either MagicDNS is off, or the Tailscale command line tool isn't
             where we looked. iPhones can't connect to a bare tailnet address, so check the
-            MagicBots log for which paths were tried.
+            MagicTeams log for which paths were tried.
           </div>
         )}
         {state.enabled && !state.tailscale && (

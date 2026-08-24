@@ -55,6 +55,7 @@ function ClusterLabel({ bot, name, color }: { bot?: Bot; name: string; color: st
       <MausAvatar
         color={(bot?.color ?? color) as Bot["color"]}
         state={normalizeState(bot?.mascotExpression) ?? "happy"}
+        personality={bot?.personality}
         size={16}
         motion="none"
         motionKey={0}
@@ -80,7 +81,7 @@ function PinToggle({ group, message }: { group: Group; message: Message }) {
       }
       aria-label={pinned ? "Unpin message" : "Pin message"}
       className="rounded-md p-1.5 text-ink-secondary opacity-0 transition-opacity hover:bg-raised hover:text-ink focus-visible:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100"
-      title={pinned ? "Unpin this message" : "Pin this message to the top of the channel"}
+      title={pinned ? "Unpin this message" : "Pin this message to the top of the team"}
     >
       {pinned ? <PinOff size={14} /> : <Pin size={14} />}
     </button>
@@ -189,7 +190,7 @@ function DefaultResponderSelect({ group, members }: { group: Group; members: Bot
   const lead = responder.kind === "member" ? members.find((member) => member.id === responder.botId) : undefined;
   const title =
     responder.kind === "everyone"
-      ? "Plain messages go to every channel member; @mentions override this"
+      ? "Plain messages go to every team member; @mentions override this"
       : responder.kind === "mentions"
         ? "Only explicitly @mentioned bots respond"
         : `Plain messages go to ${lead?.name ?? "the lead bot"}; @mentions override this`;
@@ -210,14 +211,14 @@ function DefaultResponderSelect({ group, members }: { group: Group; members: Bot
         onChange={(event) => change(event.target.value)}
         className="h-8 max-w-[190px] appearance-none truncate rounded-full border border-hairline/40 bg-raised/60 py-1 pl-3 pr-7 text-[12.5px] font-medium text-ink outline-none hover:bg-raised focus:border-accent"
       >
-        <optgroup label="Channel lead">
+        <optgroup label="Team lead">
           {members.map((member) => (
             <option key={member.id} value={`member:${member.id}`}>
               Lead: {member.name}
             </option>
           ))}
         </optgroup>
-        <optgroup label="Channel behavior">
+        <optgroup label="Team behavior">
           <option value="everyone">Everyone responds</option>
           <option value="mentions">Only when mentioned</option>
         </optgroup>
@@ -269,14 +270,14 @@ function RoomWorkingFolder({ group }: { group: Group }) {
   return (
     <div className="rounded-xl bg-card p-4">
       <div className="text-[15px] font-medium text-ink">Working folder</div>
-      <div className="mt-0.5 text-[13px] text-ink-secondary">Where every bot in this channel runs its shell and file tools.</div>
+      <div className="mt-0.5 text-[13px] text-ink-secondary">Where every bot in this team runs its shell and file tools.</div>
       {locked ? (
         <div className="mt-3">
           <div className="truncate rounded-lg border border-hairline/40 bg-inset px-3 py-2 font-mono text-[12.5px] text-ink" title={shownCwd}>
             {shownCwd ? shortPath(shownCwd, home) : <span className="text-ink-secondary">Each bot's own folder</span>}
           </div>
           <div className="mt-2 text-[12px] text-ink-secondary">
-            Fixed after this channel's first turn. Create a new channel and choose its folder before sending the first message to work somewhere else.
+            Fixed after this team's first turn. Create a new team and choose its folder before sending the first message to work somewhere else.
           </div>
         </div>
       ) : canPick ? (
@@ -328,7 +329,7 @@ function RoomWorkingFolderChip({ group, onToggle }: { group: Group; onToggle: ()
       <button
         onClick={onToggle}
         className="rounded-md p-1.5 text-ink-secondary hover:bg-raised hover:text-ink"
-        title="Channel working folder"
+        title="Team working folder"
       >
         <Folder size={14} />
       </button>
@@ -486,7 +487,7 @@ function RoomSetup({ group, members }: { group: Group; members: Bot[] }) {
       >
         <label className="block">
           <span className="text-[13px] font-semibold text-ink">Working folder</span>
-          <span className="mt-1 block text-[12px] text-ink-secondary">Where room members run file and shell tools.</span>
+          <span className="mt-1 block text-[12px] text-ink-secondary">Where team members run file and shell tools.</span>
           <div className="mt-2 flex gap-2">
             <input
               value={folder}
@@ -583,6 +584,7 @@ function RoomSetup({ group, members }: { group: Group; members: Bot[] }) {
                           <MausAvatar
                             color={member.color}
                             state={normalizeState(member.mascotExpression) ?? "happy"}
+                            personality={member.personality}
                             size={24}
                             animated={false}
                           />
@@ -626,7 +628,7 @@ function RoomSetup({ group, members }: { group: Group; members: Bot[] }) {
                 </span>
                 Everyone responds
               </span>
-              <span className="ml-6 mt-2 text-[11.5px] text-ink-secondary">All room members</span>
+              <span className="ml-6 mt-2 text-[11.5px] text-ink-secondary">All team members</span>
             </button>
 
             <button
@@ -662,7 +664,7 @@ function RoomSetup({ group, members }: { group: Group; members: Bot[] }) {
         </fieldset>
 
         <label className="block">
-          <span className="text-[13px] font-semibold text-ink">Room instructions</span>
+          <span className="text-[13px] font-semibold text-ink">Team instructions</span>
           <span className="mt-1 block text-[12px] text-ink-secondary">A shared brief every member sees on each turn. You can edit it later.</span>
           <textarea
             value={instructions}
@@ -829,7 +831,7 @@ export function GroupView({ group }: { group: Group }) {
         group.busyBotId === b.id && "ring-2 ring-accent/50 ring-offset-1 ring-offset-app",
       )}
     >
-      <MausAvatar color={b.color} state={normalizeState(b.mascotExpression) ?? "happy"} size={24} animated={false} />
+      <MausAvatar color={b.color} state={normalizeState(b.mascotExpression) ?? "happy"} size={24} animated={false} personality={b.personality} />
       {group.busyBotId === b.id && (
         <span className="absolute -right-0.5 -top-0.5 size-2 rounded-full border border-app bg-accent" />
       )}
@@ -871,7 +873,7 @@ export function GroupView({ group }: { group: Group }) {
               type="button"
               onClick={() => setMembersOpen(true)}
               title="Manage members"
-              aria-label={`Manage members — ${members.length} ${members.length === 1 ? "bot" : "bots"} in this channel`}
+              aria-label={`Manage members — ${members.length} ${members.length === 1 ? "bot" : "bots"} in this team`}
               className="flex items-center gap-1.5 rounded-full py-0.5 pl-1 pr-1.5 hover:bg-raised/60"
             >
               {memberMauses}
@@ -899,7 +901,7 @@ export function GroupView({ group }: { group: Group }) {
                   setBulletinOpen(false);
                 }
               }}
-              placeholder="Channel instructions — every bot in this channel follows them (who does what, tone, goals, a task checklist…)"
+              placeholder="Team instructions — every bot in this team follows them (who does what, tone, goals, a task checklist…)"
               rows={4}
               className="w-full resize-none bg-transparent text-[13px] leading-relaxed text-ink placeholder:text-ink-secondary focus:outline-none"
             />
@@ -908,11 +910,11 @@ export function GroupView({ group }: { group: Group }) {
           <button
             onClick={() => setBulletinOpen(true)}
             className="mb-1 flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left hover:bg-raised/40"
-            title="Channel bulletin — shared instructions for every bot here"
+            title="Team bulletin — shared instructions for every bot here"
           >
             <Pin size={12} className="shrink-0 text-ink-secondary" />
             <span className={cn("truncate text-[12.5px]", group.bulletin ? "text-ink-secondary" : "text-ink-secondary/60")}>
-              {group.bulletin.split("\n")[0] || "Add channel instructions…"}
+              {group.bulletin.split("\n")[0] || "Add team instructions…"}
             </span>
           </button>
         )}
@@ -995,7 +997,7 @@ export function GroupView({ group }: { group: Group }) {
           className="mx-auto flex max-w-[900px] flex-col gap-3 pb-4"
           role="log"
           aria-live="polite"
-          aria-label={`Room ${group.name}`}
+          aria-label={`Team ${group.name}`}
         >
           {group.messages.length === 0 && (
             <div className="flex flex-1 flex-col items-center justify-center gap-3 py-24 text-center">
@@ -1005,6 +1007,7 @@ export function GroupView({ group }: { group: Group }) {
                     key={b.id}
                     color={b.color}
                     state="happy"
+                    personality={b.personality}
                     size={44}
                     motion="none"
                     motionKey={0}

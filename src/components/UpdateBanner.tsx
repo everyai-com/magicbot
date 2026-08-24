@@ -49,7 +49,7 @@ export function UpdateBanner() {
 
   const title =
     s.status === "available"
-      ? `MagicBots ${s.version} is available`
+      ? `MagicTeams ${s.version} is available`
       : s.status === "downloading"
         ? `Downloading ${s.version ?? "update"}…`
         : s.status === "downloaded"
@@ -68,7 +68,7 @@ export function UpdateBanner() {
         : s.status === "downloaded"
           ? "Restart to finish updating."
           : installing
-            ? "MagicBots will reopen in a moment."
+            ? "MagicTeams will reopen in a moment."
             : friendlyError(s.message);
 
   return (

@@ -353,6 +353,253 @@ body {
   0%, 100% { opacity: 0.45; }
   50% { opacity: 1; }
 }
+
+/* Circle Bot character system. Eyes perceive first, the body follows, and the
+   energy ring communicates work without turning the character into a spinner. */
+@keyframes circle-bot-breathe {
+  0%, 100% { transform: translateY(0) scale(1); }
+  47% { transform: translateY(-1.2px) scale(1.012, 1.016); }
+  58% { transform: translateY(-1px) scale(1.009, 1.013); }
+}
+@keyframes circle-bot-work {
+  0%, 100% { transform: translateY(0) rotate(-.6deg); }
+  50% { transform: translateY(-2.4px) rotate(.7deg); }
+}
+@keyframes circle-bot-bounce {
+  0%, 100% { transform: translateY(0) scale(1); }
+  20% { transform: translateY(1px) scale(1.035, .965); }
+  52% { transform: translateY(-7px) scale(.975, 1.025); }
+  78% { transform: translateY(1px) scale(1.045, .955); }
+}
+@keyframes circle-bot-tilt {
+  0%, 100% { transform: rotate(-4deg); }
+  50% { transform: rotate(3deg); }
+}
+@keyframes circle-bot-spin { to { transform: rotate(360deg); } }
+@keyframes circle-bot-ring-travel {
+  to { stroke-dashoffset: -100; transform: rotate(360deg); }
+}
+@keyframes circle-bot-ring-tool {
+  0%, 100% { stroke-dashoffset: 0; opacity: .55; }
+  50% { stroke-dashoffset: -18; opacity: 1; }
+}
+@keyframes circle-bot-ring-ripple {
+  0% { opacity: .55; transform: scale(.92); }
+  70%, 100% { opacity: 0; transform: scale(var(--circle-bot-audio-scale)); }
+}
+@keyframes circle-bot-ring-success {
+  0%, 100% { opacity: .85; transform: scale(1); }
+  35% { opacity: 1; transform: scale(1.07); }
+}
+@keyframes circle-bot-ring-repair {
+  0%, 35% { opacity: .25; transform: rotate(-5deg); }
+  75%, 100% { opacity: .7; transform: rotate(0); }
+}
+@keyframes circle-bot-signal {
+  0%, 100% { opacity: .18; transform: scaleX(.92); }
+  50% { opacity: var(--circle-bot-audio-opacity); transform: scaleX(var(--circle-bot-audio-scale)); }
+}
+@keyframes circle-bot-speed {
+  from { opacity: 0; transform: translateX(8px); }
+  35% { opacity: 1; }
+  to { opacity: 0; transform: translateX(-8px); }
+}
+@keyframes circle-bot-spark {
+  0%, 100% { opacity: .2; transform: scale(.78) rotate(-4deg); }
+  50% { opacity: 1; transform: scale(1.15) rotate(3deg); }
+}
+@keyframes circle-bot-scan {
+  0%, 100% { transform: translate(0, 0); }
+  18% { transform: translate(3px, -1px); }
+  37% { transform: translate(-3px, 0); }
+  57% { transform: translate(2px, 2px); }
+  76% { transform: translate(-1px, -2px); }
+}
+@keyframes circle-bot-read {
+  0%, 12% { transform: translate(0, -2px); }
+  38% { transform: translate(1px, 0); }
+  68% { transform: translate(1px, 3px); }
+  72% { transform: translate(-2px, -2px); }
+  100% { transform: translate(0, -2px); }
+}
+@keyframes circle-bot-code {
+  0%, 100% { transform: translateX(-2px); }
+  25%, 75% { transform: translateX(0); }
+  50% { transform: translateX(2px); }
+}
+@keyframes circle-bot-send-look {
+  0% { transform: translateX(0); }
+  35%, 70% { transform: translateX(4px); }
+  100% { transform: translateX(0); }
+}
+@keyframes circle-bot-notice {
+  0%, 18% { transform: translate(0); }
+  35%, 78% { transform: translate(3px, -3px); }
+  100% { transform: translate(0); }
+}
+@keyframes circle-bot-badge-story {
+  0%, 18% { opacity: 0; transform: translate(-5px, 5px) scale(.3); }
+  38% { opacity: .45; transform: translate(-2px, 2px) scale(.65); }
+  72% { opacity: 1; transform: translate(0) scale(1.12); }
+  100% { opacity: 1; transform: translate(0) scale(1); }
+}
+@keyframes circle-bot-loader {
+  0%, 100% { opacity: .3; transform: scale(.75); }
+  35% { opacity: 1; transform: scale(1.15); }
+}
+@keyframes circle-bot-soft-float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-3px); }
+}
+@keyframes circle-bot-idle-squash {
+  0%, 100% { transform: scale(1); }
+  45% { transform: scale(1.04, .96); }
+}
+@keyframes circle-bot-double-blink {
+  0%, 35%, 70%, 100% { opacity: 1; }
+  18%, 53% { opacity: .65; }
+}
+
+.circle-bot {
+  display: block;
+  overflow: visible;
+  transform-origin: center;
+  -webkit-tap-highlight-color: transparent;
+}
+.circle-bot__body,
+.circle-bot__shadow,
+.circle-bot__attention-follow,
+.circle-bot__eye-motion,
+.circle-bot__face-art,
+.circle-bot__energy,
+.circle-bot__halo,
+.circle-bot__energy-arc,
+.circle-bot__energy-segments,
+.circle-bot__energy-ripple,
+.circle-bot__energy-break,
+.circle-bot__signal,
+.circle-bot__speed,
+.circle-bot__spark,
+.circle-bot__thoughts,
+.circle-bot__badge,
+.circle-bot__question,
+.circle-bot__loader-dots,
+.circle-bot__loader-dots circle {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+.circle-bot__attention-follow {
+  transition: transform .44s cubic-bezier(.22, 1, .36, 1);
+}
+.circle-bot__face-art {
+  transition: transform .14s cubic-bezier(.16, 1.45, .35, 1);
+}
+.circle-bot__body { animation: circle-bot-breathe 4.2s ease-in-out infinite; }
+.circle-bot--personality-calm .circle-bot__body { animation-duration: 6.5s; }
+.circle-bot--personality-energetic .circle-bot__body { animation-duration: 2.85s; }
+.circle-bot--personality-analytical .circle-bot__body { animation-timing-function: cubic-bezier(.4, 0, .2, 1); }
+.circle-bot--personality-creative .circle-bot__body { animation-timing-function: cubic-bezier(.34, 1.56, .64, 1); }
+.circle-bot--personality-curious .circle-bot__eye-motion { transform-origin: center; }
+.circle-bot--personality-friendly .circle-bot__face-art { transition-duration: 220ms; }
+.circle-bot--active .circle-bot__body { animation: circle-bot-work 1.45s ease-in-out infinite; }
+.circle-bot--bouncing .circle-bot__body,
+.circle-bot--excited .circle-bot__body,
+.circle-bot--celebrate .circle-bot__body { animation: circle-bot-bounce .78s cubic-bezier(.22, 1, .36, 1) 1; }
+.circle-bot--curious .circle-bot__body,
+.circle-bot--searching .circle-bot__body,
+.circle-bot--confused .circle-bot__body { animation: circle-bot-tilt 2.7s ease-in-out infinite; }
+.circle-bot--think-4 .circle-bot__body,
+.circle-bot--think-5 .circle-bot__body { animation-duration: 5.8s; }
+.circle-bot--think-5 .circle-bot__eye-motion { animation-duration: 8s !important; }
+.circle-bot--idle-tilt .circle-bot__body { animation: circle-bot-tilt .9s ease-in-out 1; }
+.circle-bot--idle-float .circle-bot__body { animation: circle-bot-soft-float .9s ease-in-out 1; }
+.circle-bot--idle-squash .circle-bot__body { animation: circle-bot-idle-squash .65s ease-out 1; }
+.circle-bot--idle-glance-left .circle-bot__eye-motion { transform: translateX(-3px); }
+.circle-bot--idle-glance-right .circle-bot__eye-motion { transform: translateX(3px); }
+.circle-bot--idle-glance-up .circle-bot__eye-motion { transform: translateY(-2px); }
+.circle-bot--spin { animation: circle-bot-spin var(--circle-bot-spin-ms) cubic-bezier(.2, .8, .2, 1); }
+.circle-bot:active .circle-bot__body { transform: scale(1.045, .955); transition: transform 80ms ease-out; }
+
+.circle-bot--eyes-scan .circle-bot__eye-motion { animation: circle-bot-scan 2.6s ease-in-out infinite; }
+.circle-bot--personality-energetic.circle-bot--eyes-scan .circle-bot__eye-motion { animation-duration: 1.25s; }
+.circle-bot--personality-calm.circle-bot--eyes-scan .circle-bot__eye-motion { animation-duration: 4.2s; }
+.circle-bot--personality-analytical.circle-bot--eyes-scan .circle-bot__eye-motion { animation-timing-function: steps(4, end); }
+.circle-bot--personality-creative.circle-bot--thinking .circle-bot__body { animation: circle-bot-tilt 3.2s ease-in-out infinite; }
+.circle-bot--eyes-read .circle-bot__eye-motion { animation: circle-bot-read 2.5s ease-in-out infinite; }
+.circle-bot--eyes-code .circle-bot__eye-motion { animation: circle-bot-code 1.4s steps(1, end) infinite; }
+.circle-bot--eyes-follow-send .circle-bot__eye-motion { animation: circle-bot-send-look .34s cubic-bezier(.22, 1, .36, 1) 1; }
+.circle-bot--eyes-notice .circle-bot__eye-motion { animation: circle-bot-notice 1.05s cubic-bezier(.22, 1, .36, 1) 1; }
+
+.circle-bot__shadow { fill: var(--circle-bot-dark); opacity: .14; }
+.circle-bot__energy { fill: none; stroke: var(--circle-bot-color); }
+.circle-bot__halo { stroke: var(--circle-bot-color); stroke-width: 8; }
+.circle-bot__energy-arc,
+.circle-bot__energy-segments,
+.circle-bot__energy-ripple,
+.circle-bot__energy-break { fill: none; stroke: var(--circle-bot-light); stroke-linecap: round; }
+.circle-bot__energy-arc {
+  stroke-width: 8;
+  stroke-dasharray: 18 82;
+  animation: circle-bot-ring-travel 2.2s linear infinite;
+}
+.circle-bot--ring-search .circle-bot__energy-arc { stroke-dasharray: 11 89; animation-duration: 1.1s; }
+.circle-bot--ring-progress .circle-bot__energy-arc { stroke-dasharray: 28 72; animation-duration: 1.5s; }
+.circle-bot__energy-segments {
+  stroke-width: 8.5;
+  stroke-dasharray: 9 5;
+  animation: circle-bot-ring-tool 1.35s ease-in-out infinite;
+}
+.circle-bot__energy-ripple {
+  stroke-width: var(--circle-bot-audio-stroke);
+  animation: circle-bot-ring-ripple 1.7s ease-out infinite;
+}
+.circle-bot__energy-ripple--two { animation-delay: .75s; }
+.circle-bot--ring-speak .circle-bot__energy-ripple { animation-duration: 1.05s; }
+.circle-bot--ring-success .circle-bot__halo { animation: circle-bot-ring-success .72s cubic-bezier(.22, 1, .36, 1) 1; }
+.circle-bot--ring-error .circle-bot__halo { opacity: .35; }
+.circle-bot__energy-break { stroke-width: 8; animation: circle-bot-ring-repair 1.5s ease-in-out 1; }
+.circle-bot__face { stroke: color-mix(in oklab, var(--circle-bot-light) 30%, white); stroke-width: 1.5; }
+.circle-bot__ears { fill: white; stroke: var(--circle-bot-color); stroke-width: 4; stroke-linecap: round; }
+.circle-bot__eyes { fill: #171816; stroke: #171816; stroke-width: 3.5; stroke-linecap: round; stroke-linejoin: round; }
+.circle-bot__eyes--stroke,
+.circle-bot__eyes--blink { fill: none; stroke-width: 4; }
+.circle-bot__eyes--blink-double { animation: circle-bot-double-blink .38s ease-in-out 1; }
+.circle-bot__glint { fill: white; stroke: none; }
+.circle-bot__brow { fill: none; stroke-width: 3; }
+.circle-bot__wink { fill: none; stroke-width: 4; }
+.circle-bot__signal,
+.circle-bot__speed,
+.circle-bot__spark,
+.circle-bot__question { fill: none; stroke: var(--circle-bot-color); stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
+.circle-bot__signal { animation: circle-bot-signal 1.1s ease-in-out infinite; }
+.circle-bot__speed { animation: circle-bot-speed .75s ease-out infinite; }
+.circle-bot__spark { animation: circle-bot-spark 1.25s ease-in-out infinite; }
+.circle-bot__thoughts { fill: var(--circle-bot-color); animation: circle-bot-spark 1.7s ease-in-out infinite; }
+.circle-bot__badge circle { fill: var(--circle-bot-color); }
+.circle-bot__badge text { fill: white; font: 700 11px ui-sans-serif, system-ui, sans-serif; }
+.circle-bot__badge { animation: circle-bot-badge-story 1.05s cubic-bezier(.22, 1, .36, 1) 1 both; }
+.circle-bot__question { animation: circle-bot-tilt 1.8s ease-in-out 1; }
+.circle-bot__loader-dots { fill: #171816; }
+.circle-bot__loader-dots circle { animation: circle-bot-loader 1.05s ease-in-out infinite; }
+.circle-bot__loader-dots circle:nth-child(2) { animation-delay: .16s; }
+.circle-bot__loader-dots circle:nth-child(3) { animation-delay: .32s; }
+.circle-bot--loading .circle-bot__eye-motion { opacity: 0; }
+
+/* Tiny list avatars keep the silhouette and expression, but omit detail that
+   would turn into visual noise on mobile. */
+.circle-bot--compact .circle-bot__energy-arc,
+.circle-bot--compact .circle-bot__energy-segments,
+.circle-bot--compact .circle-bot__energy-ripple,
+.circle-bot--compact .circle-bot__energy-break { display: none; }
+.circle-bot--compact .circle-bot__halo { stroke-width: 9; }
+.circle-bot--compact .circle-bot__shadow { opacity: .09; }
+
+.circle-bot--paused * { animation: none !important; }
+@media (prefers-reduced-motion: reduce) {
+  .circle-bot *,
+  .circle-bot__attention-follow,
+  .circle-bot__face-art { animation: none !important; transition: none !important; }
+}
 .thinking-shimmer {
   background: linear-gradient(90deg, var(--color-ink-secondary) 40%, var(--color-ink) 50%, var(--color-ink-secondary) 60%);
   background-size: 200% 100%;

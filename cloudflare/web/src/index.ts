@@ -6,6 +6,7 @@ import {
   resolveConfig,
   type ChatGPTTokens,
 } from "@opencoredev/loginwithchatgpt-core";
+import { automaticBotAppearance } from "../../../shared/bot-personality";
 
 interface Env {
   DB: D1Database;
@@ -122,6 +123,7 @@ interface Bot {
   description: string;
   notifications: boolean;
   color: string;
+  personality?: "calm" | "energetic" | "curious" | "analytical" | "creative" | "friendly";
   unread: boolean;
   busy: boolean;
   activity: "idle";
@@ -431,18 +433,18 @@ const AUTH_HEADERS: HeadersInit = {
 
 function authPage(title: string, subtitle: string, body: string, status = 200): Response {
   return new Response(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(title)}</title><style>
-  *{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;background:#090b10;color:#eef1f7;font:15px/1.45 Inter,ui-sans-serif,system-ui,sans-serif}.glow{position:fixed;inset:0;background:radial-gradient(circle at 50% 15%,#7038ff33,transparent 38%),radial-gradient(circle at 10% 90%,#15a6ff18,transparent 34%);pointer-events:none}.card{position:relative;width:min(92vw,420px);padding:34px;border:1px solid #ffffff17;border-radius:24px;background:#141721e8;box-shadow:0 30px 90px #0009;backdrop-filter:blur(18px)}.brand{display:flex;align-items:center;gap:11px;margin-bottom:28px;font-weight:750;letter-spacing:-.02em}.mark{display:grid;place-items:center;width:34px;height:34px;border-radius:11px;background:linear-gradient(135deg,#8b5cff,#4ba9ff);box-shadow:0 8px 26px #744cff66}h1{margin:0 0 7px;font-size:27px;letter-spacing:-.04em}p{margin:0 0 24px;color:#99a2b5}.field{display:grid;gap:7px;margin:14px 0}label{font-size:12px;font-weight:650;color:#bdc4d2}input{width:100%;border:1px solid #ffffff18;border-radius:12px;background:#0c0e14;color:#fff;padding:12px 13px;outline:none}input:focus{border-color:#7a61ff;box-shadow:0 0 0 3px #7555ff22}button{width:100%;margin-top:9px;border:0;border-radius:12px;padding:12px;background:linear-gradient(135deg,#8058ff,#4a9dff);color:white;font-weight:750;cursor:pointer}.error,.success{margin:0 0 16px;border:1px solid #ff657544;border-radius:10px;background:#ff405b14;color:#ff9ca7;padding:10px 12px;font-size:13px}.success{border-color:#57d69a44;background:#29bf7814;color:#8be8ba}.switch{margin:20px 0 0;text-align:center;font-size:13px}.switch a,.forgot a{color:#9d8bff;text-decoration:none;font-weight:700}.forgot{text-align:right;margin:-5px 0 12px;font-size:12px}.fine{margin-top:18px;text-align:center;color:#697185;font-size:11px}</style></head><body><div class="glow"></div><main class="card"><div class="brand"><span class="mark">✦</span> MagicBots</div><h1>${escapeHtml(title)}</h1><p>${escapeHtml(subtitle)}</p>${body}<div class="fine">Protected by secure, HTTP-only sessions on Cloudflare.</div></main></body></html>`, { status, headers: AUTH_HEADERS });
+  *{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;background:#090b10;color:#eef1f7;font:15px/1.45 Inter,ui-sans-serif,system-ui,sans-serif}.glow{position:fixed;inset:0;background:radial-gradient(circle at 50% 15%,#7038ff33,transparent 38%),radial-gradient(circle at 10% 90%,#15a6ff18,transparent 34%);pointer-events:none}.card{position:relative;width:min(92vw,420px);padding:34px;border:1px solid #ffffff17;border-radius:24px;background:#141721e8;box-shadow:0 30px 90px #0009;backdrop-filter:blur(18px)}.brand{display:flex;align-items:center;gap:11px;margin-bottom:28px;font-weight:750;letter-spacing:-.02em}.mark{display:grid;place-items:center;width:34px;height:34px;border-radius:11px;background:linear-gradient(135deg,#8b5cff,#4ba9ff);box-shadow:0 8px 26px #744cff66}h1{margin:0 0 7px;font-size:27px;letter-spacing:-.04em}p{margin:0 0 24px;color:#99a2b5}.field{display:grid;gap:7px;margin:14px 0}label{font-size:12px;font-weight:650;color:#bdc4d2}input{width:100%;border:1px solid #ffffff18;border-radius:12px;background:#0c0e14;color:#fff;padding:12px 13px;outline:none}input:focus{border-color:#7a61ff;box-shadow:0 0 0 3px #7555ff22}button{width:100%;margin-top:9px;border:0;border-radius:12px;padding:12px;background:linear-gradient(135deg,#8058ff,#4a9dff);color:white;font-weight:750;cursor:pointer}.error,.success{margin:0 0 16px;border:1px solid #ff657544;border-radius:10px;background:#ff405b14;color:#ff9ca7;padding:10px 12px;font-size:13px}.success{border-color:#57d69a44;background:#29bf7814;color:#8be8ba}.switch{margin:20px 0 0;text-align:center;font-size:13px}.switch a,.forgot a{color:#9d8bff;text-decoration:none;font-weight:700}.forgot{text-align:right;margin:-5px 0 12px;font-size:12px}.fine{margin-top:18px;text-align:center;color:#697185;font-size:11px}</style></head><body><div class="glow"></div><main class="card"><div class="brand"><span class="mark">✦</span> MagicTeams</div><h1>${escapeHtml(title)}</h1><p>${escapeHtml(subtitle)}</p>${body}<div class="fine">Protected by secure, HTTP-only sessions on Cloudflare.</div></main></body></html>`, { status, headers: AUTH_HEADERS });
 }
 
 function loginPage(message = "", mode: "login" | "signup" = "login", status = 200): Response {
   const signup = mode === "signup";
-  const title = signup ? "Create your MagicBots account" : "Welcome back";
-  const switchText = signup ? "Already have an account?" : "New to MagicBots?";
+  const title = signup ? "Create your MagicTeams account" : "Welcome back";
+  const switchText = signup ? "Already have an account?" : "New to MagicTeams?";
   const switchLink = signup ? "/login" : "/signup";
   const switchLabel = signup ? "Sign in" : "Create account";
   const escaped = escapeHtml(message);
   return new Response(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title><style>
-  *{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;background:#090b10;color:#eef1f7;font:15px/1.45 Inter,ui-sans-serif,system-ui,sans-serif}.glow{position:fixed;inset:0;background:radial-gradient(circle at 50% 15%,#7038ff33,transparent 38%),radial-gradient(circle at 10% 90%,#15a6ff18,transparent 34%);pointer-events:none}.card{position:relative;width:min(92vw,420px);padding:34px;border:1px solid #ffffff17;border-radius:24px;background:#141721e8;box-shadow:0 30px 90px #0009;backdrop-filter:blur(18px)}.brand{display:flex;align-items:center;gap:11px;margin-bottom:28px;font-weight:750;letter-spacing:-.02em}.mark{display:grid;place-items:center;width:34px;height:34px;border-radius:11px;background:linear-gradient(135deg,#8b5cff,#4ba9ff);box-shadow:0 8px 26px #744cff66}h1{margin:0 0 7px;font-size:27px;letter-spacing:-.04em}p{margin:0 0 24px;color:#99a2b5}.field{display:grid;gap:7px;margin:14px 0}label{font-size:12px;font-weight:650;color:#bdc4d2}input{width:100%;border:1px solid #ffffff18;border-radius:12px;background:#0c0e14;color:#fff;padding:12px 13px;outline:none}input:focus{border-color:#7a61ff;box-shadow:0 0 0 3px #7555ff22}button{width:100%;margin-top:9px;border:0;border-radius:12px;padding:12px;background:linear-gradient(135deg,#8058ff,#4a9dff);color:white;font-weight:750;cursor:pointer}.error{margin:0 0 16px;border:1px solid #ff657544;border-radius:10px;background:#ff405b14;color:#ff9ca7;padding:10px 12px;font-size:13px}.switch{margin:20px 0 0;text-align:center;font-size:13px}.switch a,.forgot a{color:#9d8bff;text-decoration:none;font-weight:700}.forgot{text-align:right;margin:-5px 0 12px;font-size:12px}.fine{margin-top:18px;text-align:center;color:#697185;font-size:11px}</style></head><body><div class="glow"></div><main class="card"><div class="brand"><span class="mark">✦</span> MagicBots</div><h1>${title}</h1><p>Your AI team, available securely from anywhere.</p>${escaped ? `<div class="error">${escaped}</div>` : ""}<form method="post" action="${signup ? "/signup" : "/login"}">${signup ? '<div class="field"><label for="name">Name</label><input id="name" name="name" autocomplete="name" required maxlength="80"></div>' : ""}<div class="field"><label for="email">Email</label><input id="email" name="email" type="email" autocomplete="email" required maxlength="254"></div><div class="field"><label for="password">Password</label><input id="password" name="password" type="password" autocomplete="${signup ? "new-password" : "current-password"}" minlength="8" required></div>${signup ? "" : '<div class="forgot"><a href="/forgot-password">Forgot password?</a></div>'}<button type="submit">${signup ? "Create account" : "Sign in"}</button></form><p class="switch">${switchText} <a href="${switchLink}">${switchLabel}</a></p><div class="fine">Protected by secure, HTTP-only sessions on Cloudflare.</div></main></body></html>`, { status, headers: AUTH_HEADERS });
+  *{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;background:#090b10;color:#eef1f7;font:15px/1.45 Inter,ui-sans-serif,system-ui,sans-serif}.glow{position:fixed;inset:0;background:radial-gradient(circle at 50% 15%,#7038ff33,transparent 38%),radial-gradient(circle at 10% 90%,#15a6ff18,transparent 34%);pointer-events:none}.card{position:relative;width:min(92vw,420px);padding:34px;border:1px solid #ffffff17;border-radius:24px;background:#141721e8;box-shadow:0 30px 90px #0009;backdrop-filter:blur(18px)}.brand{display:flex;align-items:center;gap:11px;margin-bottom:28px;font-weight:750;letter-spacing:-.02em}.mark{display:grid;place-items:center;width:34px;height:34px;border-radius:11px;background:linear-gradient(135deg,#8b5cff,#4ba9ff);box-shadow:0 8px 26px #744cff66}h1{margin:0 0 7px;font-size:27px;letter-spacing:-.04em}p{margin:0 0 24px;color:#99a2b5}.field{display:grid;gap:7px;margin:14px 0}label{font-size:12px;font-weight:650;color:#bdc4d2}input{width:100%;border:1px solid #ffffff18;border-radius:12px;background:#0c0e14;color:#fff;padding:12px 13px;outline:none}input:focus{border-color:#7a61ff;box-shadow:0 0 0 3px #7555ff22}button{width:100%;margin-top:9px;border:0;border-radius:12px;padding:12px;background:linear-gradient(135deg,#8058ff,#4a9dff);color:white;font-weight:750;cursor:pointer}.error{margin:0 0 16px;border:1px solid #ff657544;border-radius:10px;background:#ff405b14;color:#ff9ca7;padding:10px 12px;font-size:13px}.switch{margin:20px 0 0;text-align:center;font-size:13px}.switch a,.forgot a{color:#9d8bff;text-decoration:none;font-weight:700}.forgot{text-align:right;margin:-5px 0 12px;font-size:12px}.fine{margin-top:18px;text-align:center;color:#697185;font-size:11px}</style></head><body><div class="glow"></div><main class="card"><div class="brand"><span class="mark">✦</span> MagicTeams</div><h1>${title}</h1><p>Your AI team, available securely from anywhere.</p>${escaped ? `<div class="error">${escaped}</div>` : ""}<form method="post" action="${signup ? "/signup" : "/login"}">${signup ? '<div class="field"><label for="name">Name</label><input id="name" name="name" autocomplete="name" required maxlength="80"></div>' : ""}<div class="field"><label for="email">Email</label><input id="email" name="email" type="email" autocomplete="email" required maxlength="254"></div><div class="field"><label for="password">Password</label><input id="password" name="password" type="password" autocomplete="${signup ? "new-password" : "current-password"}" minlength="8" required></div>${signup ? "" : '<div class="forgot"><a href="/forgot-password">Forgot password?</a></div>'}<button type="submit">${signup ? "Create account" : "Sign in"}</button></form><p class="switch">${switchText} <a href="${switchLink}">${switchLabel}</a></p><div class="fine">Protected by secure, HTTP-only sessions on Cloudflare.</div></main></body></html>`, { status, headers: AUTH_HEADERS });
 }
 
 function forgotPasswordPage(sent = false, message = "", status = 200): Response {
@@ -454,7 +456,7 @@ function forgotPasswordPage(sent = false, message = "", status = 200): Response 
   const form = sent
     ? '<p class="switch"><a href="/login">Return to sign in</a></p>'
     : `<form method="post" action="/forgot-password">${notice}<div class="field"><label for="email">Account email</label><input id="email" name="email" type="email" autocomplete="email" required maxlength="254" autofocus></div><button type="submit">Send reset link</button></form><p class="switch"><a href="/login">Back to sign in</a></p>`;
-  return authPage("Reset your password", sent ? "The link expires in 30 minutes and can only be used once." : "Enter the email you use for MagicBots.", sent ? `${notice}${form}` : form, status);
+  return authPage("Reset your password", sent ? "The link expires in 30 minutes and can only be used once." : "Enter the email you use for MagicTeams.", sent ? `${notice}${form}` : form, status);
 }
 
 function resetPasswordPage(token: string, message = "", status = 200): Response {
@@ -469,17 +471,17 @@ async function sendPasswordResetEmail(env: Env, user: User, resetUrl: string): P
   const safeName = escapeHtml(user.name || "there");
   const safeUrl = escapeHtml(resetUrl);
   await env.EMAIL.send({
-    from: { name: "MagicBots", email: PASSWORD_RESET_SENDER },
-    to: { name: user.name || "MagicBots user", email: user.email },
-    subject: "Reset your MagicBots password",
-    text: `Hi ${user.name || "there"},\n\nUse this secure link to reset your MagicBots password:\n${resetUrl}\n\nThe link expires in 30 minutes and can only be used once. If you did not request this, you can ignore this email.`,
-    html: `<p>Hi ${safeName},</p><p>Use the button below to reset your MagicBots password.</p><p><a href="${safeUrl}" style="display:inline-block;padding:12px 18px;border-radius:10px;background:#7657ff;color:#fff;text-decoration:none;font-weight:700">Reset password</a></p><p>This link expires in 30 minutes and can only be used once. If you did not request this, you can ignore this email.</p>`,
+    from: { name: "MagicTeams", email: PASSWORD_RESET_SENDER },
+    to: { name: user.name || "MagicTeams user", email: user.email },
+    subject: "Reset your MagicTeams password",
+    text: `Hi ${user.name || "there"},\n\nUse this secure link to reset your MagicTeams password:\n${resetUrl}\n\nThe link expires in 30 minutes and can only be used once. If you did not request this, you can ignore this email.`,
+    html: `<p>Hi ${safeName},</p><p>Use the button below to reset your MagicTeams password.</p><p><a href="${safeUrl}" style="display:inline-block;padding:12px 18px;border-radius:10px;background:#7657ff;color:#fff;text-decoration:none;font-weight:700">Reset password</a></p><p>This link expires in 30 minutes and can only be used once. If you did not request this, you can ignore this email.</p>`,
   });
 }
 
 type HostedModelSelection = Bot["modelSelection"];
 
-function newBot(name = "SupaMaus", modelSelection: HostedModelSelection = { instanceId: "cloudflare-ai", model: MODEL }): Bot {
+function newBot(name = "Nova", modelSelection: HostedModelSelection = { instanceId: "cloudflare-ai", model: MODEL }): Bot {
   const id = crypto.randomUUID();
   const threadId = crypto.randomUUID();
   const createdAt = Date.now();
@@ -487,9 +489,10 @@ function newBot(name = "SupaMaus", modelSelection: HostedModelSelection = { inst
     id: crypto.randomUUID(), role: "bot", kind: "text",
     text: `Hey — I'm ${name}. What should we work on?`, at: createdAt, parentId: null,
   };
+  const appearance = automaticBotAppearance(id);
   return {
-    id, threadId, name, title: "Cloud AI assistant", description: "", notifications: true,
-    color: "violet", unread: false, busy: false, activity: "idle",
+    id, threadId, name, title: "AI bot", description: "", notifications: true,
+    ...appearance, unread: false, busy: false, activity: "idle",
     modelSelection, computer: "cloud",
     cloudBackend: "cloudflare", createdAt,
     tasks: [{ threadId, title: "Main", createdAt }], messages: [greeting], activeLeafId: greeting.id,
@@ -569,13 +572,20 @@ async function saveBot(env: Env, userId: string, bot: Bot): Promise<void> {
 async function loadBot(env: Env, userId: string, botId: string): Promise<Bot | null> {
   const row = await env.DB.prepare("SELECT data FROM bots WHERE id = ? AND user_id = ?")
     .bind(botId, userId).first<{ data: string }>();
-  return row ? JSON.parse(row.data) as Bot : null;
+  if (!row) return null;
+  const bot = JSON.parse(row.data) as Bot;
+  if (!bot.personality) Object.assign(bot, automaticBotAppearance(bot.id));
+  return bot;
 }
 
 async function listBots(env: Env, userId: string): Promise<Bot[]> {
   const rows = await env.DB.prepare("SELECT data FROM bots WHERE user_id = ? ORDER BY updated_at DESC")
     .bind(userId).all<{ data: string }>();
-  return rows.results.map((row) => JSON.parse(row.data) as Bot);
+  return rows.results.map((row) => {
+    const bot = JSON.parse(row.data) as Bot;
+    if (!bot.personality) Object.assign(bot, automaticBotAppearance(bot.id));
+    return bot;
+  });
 }
 
 async function preferredHostedEngine(env: Env, userId: string): Promise<HostedModelSelection> {
@@ -773,7 +783,7 @@ async function codexReply(env: Env, userId: string, bot: Bot, text: string): Pro
   const current = await modelContentForPrompt(env, userId, text);
   const currentText = typeof current === "string"
     ? current
-    : current.map((part) => part.type === "text" ? part.text : "[An image attachment is available in the MagicBots conversation but is not mounted in this runtime.]").join("\n");
+    : current.map((part) => part.type === "text" ? part.text : "[An image attachment is available in the MagicTeams conversation but is not mounted in this runtime.]").join("\n");
   const prompt = [
     `You are ${bot.name}, ${bot.title || "a capable AI assistant"}.`,
     bot.description || "Be practical, clear, and proactive.",
@@ -824,7 +834,7 @@ async function anthropicReply(env: Env, userId: string, bot: Bot, text: string):
     input_schema: { type: "object", properties: { command: { type: "string" } }, required: ["command"] },
   }, {
     name: "generate_image",
-    description: "Generate an image and save it to the user's MagicBots files.",
+    description: "Generate an image and save it to the user's MagicTeams files.",
     input_schema: { type: "object", properties: { prompt: { type: "string" } }, required: ["prompt"] },
   }];
   let connectorSession = "";
@@ -909,7 +919,7 @@ async function aiReply(env: Env, userId: string, bot: Bot, text: string): Promis
     },
   }, {
     name: "generate_image",
-    description: "Generate an image and save it to the user's MagicBots files. Use when the user asks you to create an image, illustration, concept, or avatar.",
+    description: "Generate an image and save it to the user's MagicTeams files. Use when the user asks you to create an image, illustration, concept, or avatar.",
     parameters: {
       type: "object", properties: { prompt: { type: "string", description: "A detailed description of the image to generate" } }, required: ["prompt"],
     },
@@ -1567,7 +1577,7 @@ async function api(request: Request, env: Env, user: User, path: string): Promis
     const createdAt = Date.now();
     const secret = randomToken();
     const webhook: WebhookRecord = {
-      id: crypto.randomUUID(), endpointId: randomToken(12), name: body.name?.trim().slice(0, 120) || "MagicBots webhook",
+      id: crypto.randomUUID(), endpointId: randomToken(12), name: body.name?.trim().slice(0, 120) || "MagicTeams webhook",
       prompt: body.prompt?.trim().slice(0, 20_000) || "Handle this webhook event and report the result.",
       botId: body.botId, runOn: body.runOn === "maus" ? "maus" : "cloud", enabled: body.enabled !== false,
       createdAt, updatedAt: createdAt, deliveryCount: 0, verificationPending: body.verificationPending === true,
@@ -1825,7 +1835,7 @@ async function api(request: Request, env: Env, user: User, path: string): Promis
     });
     const lines = [`# ${title}`, ""];
     for (const message of messages) {
-      const speaker = message.role === "user" ? user.name : (message.from?.name ?? "MagicBots");
+      const speaker = message.role === "user" ? user.name : (message.from?.name ?? "MagicTeams");
       if (message.text) lines.push(`**${speaker}:**`, "", message.text, "");
     }
     return new Response(lines.join("\n"), {
@@ -1857,7 +1867,7 @@ async function api(request: Request, env: Env, user: User, path: string): Promis
     const body: { botIds?: string[]; groupId?: string } = await request.json<{ botIds?: string[]; groupId?: string }>().catch(() => ({}));
     const bots = (await listBots(env, user.id)).filter((bot) => !bot.hidden);
     let memberIds = body.botIds?.filter((id) => bots.some((bot) => bot.id === id)) ?? bots.map((bot) => bot.id);
-    let teamName = `${user.name}'s MagicBots team`;
+    let teamName = `${user.name}'s team`;
     if (body.groupId) {
       const group = await loadRecord<Group>(env, "groups", user.id, body.groupId);
       if (group) { memberIds = group.memberIds; teamName = group.name; }
@@ -1870,12 +1880,12 @@ async function api(request: Request, env: Env, user: User, path: string): Promis
       const stem = key;
       for (let suffix = 2; used.has(key); suffix += 1) key = `${stem}-${suffix}`;
       used.add(key);
-      return [{ key, name: bot.name, title: bot.title, description: bot.description, appearance: { color: bot.color, ...(bot.mascotExpression ? { mascotExpression: bot.mascotExpression } : {}) } }];
+      return [{ key, name: bot.name, title: bot.title, description: bot.description, appearance: { color: bot.color, ...(bot.mascotExpression ? { mascotExpression: bot.mascotExpression } : {}), ...(bot.personality ? { personality: bot.personality } : {}) } }];
     });
     return json({ format: "openmaus.team", version: 2, team: { name: teamName, members } });
   }
   if (path === "/api/teams/import" && request.method === "POST") {
-    const manifest = await request.json<{ team?: { name?: string; members?: Array<{ name?: string; title?: string; description?: string; appearance?: { color?: string; mascotExpression?: string } }> } }>();
+    const manifest = await request.json<{ team?: { name?: string; members?: Array<{ name?: string; title?: string; description?: string; appearance?: { color?: string; mascotExpression?: string; personality?: Bot["personality"] } }> } }>();
     const members = manifest.team?.members ?? [];
     if (members.length === 0 || members.length > 200) return json({ error: "Team must contain 1-200 members" }, 400);
     const mode = new URL(request.url).searchParams.get("mode") ?? "add";
@@ -1897,6 +1907,7 @@ async function api(request: Request, env: Env, user: User, path: string): Promis
       bot.description = member.description?.trim().slice(0, 4000) ?? "";
       if (member.appearance?.color) bot.color = member.appearance.color;
       if (member.appearance?.mascotExpression) bot.mascotExpression = member.appearance.mascotExpression.slice(0, 80);
+      if (member.appearance?.personality) bot.personality = member.appearance.personality;
       bot.composio = false;
       await saveBot(env, user.id, bot);
       imported.push(publicBot(bot));
@@ -1979,7 +1990,7 @@ async function api(request: Request, env: Env, user: User, path: string): Promis
   if (path === "/api/bots" && request.method === "GET") {
     let bots = await listBots(env, user.id);
     if (bots.length === 0) {
-      const bot = newBot("SupaMaus", await preferredHostedEngine(env, user.id));
+      const bot = newBot("Nova", await preferredHostedEngine(env, user.id));
       await saveBot(env, user.id, bot);
       bots = [bot];
     }
@@ -2187,7 +2198,11 @@ async function api(request: Request, env: Env, user: User, path: string): Promis
     }
     if (request.method === "PATCH") {
       const patch = await request.json<Record<string, unknown>>();
-      const allowed = ["name", "title", "description", "notifications", "color", "mascotExpression", "avatarUrl", "avatarCrop", "unread", "modelSelection", "computer", "cloudBackend", "cwd", "autoApprove", "alwaysAllow", "speakReplies", "voice", "pinned", "hidden", "section", "pinnedMessageId", "chiefOfStaff", "approvePeerComms", "composio"];
+      const personalities = new Set(["calm", "energetic", "curious", "analytical", "creative", "friendly"]);
+      if (patch.personality !== undefined && !personalities.has(String(patch.personality))) {
+        return json({ error: "personality is not supported" }, 400);
+      }
+      const allowed = ["name", "title", "description", "notifications", "color", "mascotExpression", "personality", "avatarUrl", "avatarCrop", "unread", "modelSelection", "computer", "cloudBackend", "cwd", "autoApprove", "alwaysAllow", "speakReplies", "voice", "pinned", "hidden", "section", "pinnedMessageId", "chiefOfStaff", "approvePeerComms", "composio"];
       for (const key of allowed) if (key in patch) bot[key] = patch[key];
       await saveBot(env, user.id, bot);
       const { messages: _messages, ...announcement } = bot;
@@ -2291,7 +2306,7 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
       const body = await requestBody(request);
       const email = (body.email ?? "").trim().toLowerCase();
       const password = body.password ?? "";
-      const name = (body.name ?? email.split("@")[0] ?? "MagicBots user").trim().slice(0, 80);
+      const name = (body.name ?? email.split("@")[0] ?? "MagicTeams user").trim().slice(0, 80);
       if (!/^\S+@\S+\.\S+$/.test(email) || password.length < 8) return loginPage("Use a valid email and a password of at least 8 characters.", url.pathname === "/signup" ? "signup" : "login");
       const clientAddress = request.headers.get("cf-connecting-ip") ?? "unknown";
       const addressKey = await sha256(clientAddress);
@@ -2307,8 +2322,8 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
         const id = crypto.randomUUID();
         const salt = randomToken(18);
         await env.DB.prepare("INSERT INTO users (id, email, name, password_hash, password_salt, created_at) VALUES (?, ?, ?, ?, ?, ?)")
-          .bind(id, email, name || "MagicBots user", await passwordHash(password, salt), salt, Date.now()).run();
-        user = { id, email, name: name || "MagicBots user" };
+          .bind(id, email, name || "MagicTeams user", await passwordHash(password, salt), salt, Date.now()).run();
+        user = { id, email, name: name || "MagicTeams user" };
       } else {
         const row = await env.DB.prepare("SELECT id, email, name, password_hash, password_salt FROM users WHERE email = ?")
           .bind(email).first<User & { password_hash: string; password_salt: string }>();
@@ -2342,18 +2357,18 @@ function requestFailure(request: Request, error: unknown): Response {
 
   if ((url.pathname === "/login" || url.pathname === "/signup") && request.method === "POST") {
     const mode = url.pathname === "/signup" ? "signup" : "login";
-    return loginPage(`MagicBots hit a temporary sign-in problem. Please try again. Reference: ${incident}`, mode, 503);
+    return loginPage(`MagicTeams hit a temporary sign-in problem. Please try again. Reference: ${incident}`, mode, 503);
   }
   if (url.pathname === "/forgot-password") {
-    return forgotPasswordPage(false, `MagicBots could not start password recovery. Please try again. Reference: ${incident}`, 503);
+    return forgotPasswordPage(false, `MagicTeams could not start password recovery. Please try again. Reference: ${incident}`, 503);
   }
   if (url.pathname === "/reset-password") {
-    return resetPasswordPage("", `MagicBots could not finish the password reset. Please request a new link. Reference: ${incident}`, 503);
+    return resetPasswordPage("", `MagicTeams could not finish the password reset. Please request a new link. Reference: ${incident}`, 503);
   }
   if (url.pathname.startsWith("/api/")) {
-    return json({ error: "MagicBots hit a temporary server problem. Please retry.", reference: incident }, 503);
+    return json({ error: "MagicTeams hit a temporary server problem. Please retry.", reference: incident }, 503);
   }
-  return new Response(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>MagicBots is recovering</title><style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#090b10;color:#eef1f7;font:15px/1.5 system-ui,sans-serif}.card{width:min(88vw,420px);padding:32px;border:1px solid #ffffff18;border-radius:22px;background:#141721;text-align:center;box-shadow:0 24px 80px #0008}h1{margin:0 0 8px;font-size:24px}p{color:#aab1c0}a{display:inline-block;margin-top:12px;border-radius:11px;background:#7657ff;color:#fff;padding:10px 18px;text-decoration:none;font-weight:700}.ref{margin-top:20px;font:11px ui-monospace,monospace;color:#747d91}</style></head><body><main class="card"><h1>MagicBots hit a temporary problem</h1><p>Your account and bots are safe. Retry the page to reconnect.</p><a href="${url.pathname}${url.search}">Try again</a><div class="ref">Reference ${incident}</div></main></body></html>`, {
+  return new Response(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>MagicTeams is recovering</title><style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#090b10;color:#eef1f7;font:15px/1.5 system-ui,sans-serif}.card{width:min(88vw,420px);padding:32px;border:1px solid #ffffff18;border-radius:22px;background:#141721;text-align:center;box-shadow:0 24px 80px #0008}h1{margin:0 0 8px;font-size:24px}p{color:#aab1c0}a{display:inline-block;margin-top:12px;border-radius:11px;background:#7657ff;color:#fff;padding:10px 18px;text-decoration:none;font-weight:700}.ref{margin-top:20px;font:11px ui-monospace,monospace;color:#747d91}</style></head><body><main class="card"><h1>MagicTeams hit a temporary problem</h1><p>Your account and bots are safe. Retry the page to reconnect.</p><a href="${url.pathname}${url.search}">Try again</a><div class="ref">Reference ${incident}</div></main></body></html>`, {
     status: 503,
     headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "x-frame-options": "DENY" },
   });

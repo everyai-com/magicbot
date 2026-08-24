@@ -298,7 +298,7 @@ function GroupCall({ group, members }: { group: Group; members: Bot[] }) {
       const member = members.find((candidate) => candidate.id === approval.message.from?.botId);
       askedApproval.current = { requestId: approval.requestId, member };
       spokenIds.current.add(approval.message.id);
-      const name = member?.name ?? approval.message.from?.name ?? "A channel member";
+      const name = member?.name ?? approval.message.from?.name ?? "A team member";
       enqueueSpeech(
         name + " wants to " + approval.tool + ". " + approval.detail + ". Should I allow it?",
         member,
@@ -310,7 +310,7 @@ function GroupCall({ group, members }: { group: Group; members: Bot[] }) {
       const member = members.find((candidate) => candidate.id === question.from?.botId);
       askedQuestion.current = { requestId: question.card.requestId, member };
       spokenIds.current.add(question.id);
-      const name = member?.name ?? question.from?.name ?? "A channel member";
+      const name = member?.name ?? question.from?.name ?? "A team member";
       const detail = question.card.subtitle.trim();
       const choices = question.card.options.length
         ? " The options are " + question.card.options.join(", ") + "."
@@ -390,9 +390,9 @@ function GroupCall({ group, members }: { group: Group; members: Bot[] }) {
         ? "Push to talk"
         : "Listening"
       : phase === "sending"
-        ? "Bringing the channel in"
+        ? "Bringing the team in"
         : phase === "speaking"
-          ? (speakingMember?.name ?? "Channel member") + " is speaking"
+          ? (speakingMember?.name ?? "Team member") + " is speaking"
           : workingMember
             ? workingMember.name + " is working"
             : "Working";
@@ -430,6 +430,7 @@ function GroupCall({ group, members }: { group: Group; members: Bot[] }) {
                 <MausAvatar
                   color={member.color}
                   state={state}
+                  personality={member.personality}
                   size={94}
                   animated
                   motion={workingMember?.id === member.id ? "working" : "none"}
@@ -458,7 +459,7 @@ function GroupCall({ group, members }: { group: Group; members: Bot[] }) {
             <span className="text-ink-secondary">
               {pushToTalk
                 ? "Release Control + Option to send…"
-                : "Say a name, say “everyone,” or just talk to the channel…"}
+                : "Say a name, say “everyone,” or just talk to the team…"}
             </span>
           )
         ) : phase === "speaking" ? (

@@ -1,9 +1,6 @@
-// Bot avatar — the Blob Studio "Cursor" mascot (CursorAvatar.tsx), wrapped
-// in the app's historical MausAvatar API so no call site changes: per-bot
-// color becomes a body gradient, the app's one-shot motion beats borrow the
-// face/state for a moment, and the eyes follow the pointer. The previous
-// hand-built Maus body + face engine (maus-engine/face/driver) is gone;
-// CursorAvatar owns morphing, blinking, drift, body motion and effects.
+// Bot avatar — a circular, expressive character wrapped in the app's
+// historical MausAvatar API so no call site changes. Per-bot color paints the
+// ring while live state drives the eyes, pose, and small ambient effects.
 import {
   forwardRef,
   memo,
@@ -14,24 +11,9 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import { MAUS_COLORS, type MausColor, type MausMotion, type MausState } from "@/lib/mascot";
-import {
-  CursorAvatar,
-  DEFAULT_SILHOUETTE,
-  type CursorAvatarHandle,
-  type CursorSilhouette,
-} from "./CursorAvatar";
+import { CircleBotAvatar, type CircleBotAvatarHandle } from "./CircleBotAvatar";
 import { botAvatarProfile, type BotAvatarCrop } from "../../shared/bot-avatar";
-
-/**
- * The pack's baked-in silhouette was exported with the body fill hardcoded
- * to black instead of the {{GRADIENT}} placeholder the component
- * substitutes, which painted every bot the same. Restore the slot so the
- * per-bot gradient actually lands on the body.
- */
-const GRADIENT_SILHOUETTE: CursorSilhouette = {
-  ...DEFAULT_SILHOUETTE,
-  body: DEFAULT_SILHOUETTE.body.replace(/fill="#000000"/g, 'fill="{{GRADIENT}}"'),
-};
+import { normalizeBotPersonality, type BotPersonality } from "../../shared/bot-personality";
 
 /**
  * Legacy face-placement knobs from the Maus body era. The cursor mascot
@@ -49,6 +31,19 @@ export const MOUTH_WEIGHT = 11;
  * safe; with the expressions' authored gaze they already start off-centre.
  */
 const POINTER_GAZE = { forward: 1, authored: 0.25 };
+
+/** Ambient pointer attention is deliberately low priority. Important product
+ * states keep their authored gaze instead of being interrupted by a cursor. */
+const POINTER_ATTENTION_STATES = new Set<MausState>([
+  "idle",
+  "happy",
+  "curious",
+  "bored",
+  "proud",
+  "shy",
+  "playful",
+  "drowsy",
+]);
 
 /**
  * What a one-shot motion does while it plays: CursorAvatar animates the body
@@ -101,7 +96,7 @@ const gradientFor = (color: MausColor): [string, string, string] => {
   return [mix(fill, "#ffffff", 0.55), fill, mix(fill, "#000000", 0.42)];
 };
 
-export type MausAvatarHandle = CursorAvatarHandle;
+export type MausAvatarHandle = CircleBotAvatarHandle;
 
 export type MausAvatarProps = {
   color: MausColor;
@@ -134,6 +129,7 @@ export type MausAvatarProps = {
   faceX?: number;
   faceY?: number;
   faceScale?: number;
+  personality?: BotPersonality;
 };
 
 function MausAvatarComponent(
@@ -154,10 +150,11 @@ function MausAvatarComponent(
     forward = true,
     trackPointer = true,
     animated = true,
+    personality = "friendly",
   }: MausAvatarProps,
   ref: React.Ref<MausAvatarHandle>,
 ) {
-  const inner = useRef<CursorAvatarHandle>(null);
+  const inner = useRef<CircleBotAvatarHandle>(null);
   useImperativeHandle(ref, () => ({
     blink: () => inner.current?.blink(),
     spin: (durationMs?: number) => inner.current?.spin(durationMs),
@@ -180,9 +177,14 @@ function MausAvatarComponent(
 
   // Pointer-follow gaze, composed with any gaze the caller pins.
   const [pointer, setPointer] = useState({ x: 0, y: 0 });
+  const displayedState = motionState ?? state;
+  const acceptsPointer = POINTER_ATTENTION_STATES.has(displayedState);
+  useEffect(() => {
+    if (!acceptsPointer) setPointer({ x: 0, y: 0 });
+  }, [acceptsPointer]);
   const range = forward ? POINTER_GAZE.forward : POINTER_GAZE.authored;
   const onPointerMove = (event: ReactPointerEvent<HTMLSpanElement>) => {
-    if (!trackPointer || !animated) return;
+    if (!trackPointer || !animated || !acceptsPointer) return;
     const rect = event.currentTarget.getBoundingClientRect();
     setPointer({
       x: Math.max(-1, Math.min(1, ((event.clientX - rect.left) / rect.width) * 2 - 1)) * range,
@@ -194,18 +196,16 @@ function MausAvatarComponent(
   return (
     <span
       className="inline-flex shrink-0"
-      onPointerMove={trackPointer && animated ? onPointerMove : undefined}
+      onPointerMove={trackPointer && animated && acceptsPointer ? onPointerMove : undefined}
       onPointerLeave={trackPointer && animated ? onPointerLeave : undefined}
     >
-      <CursorAvatar
+      <CircleBotAvatar
         ref={inner}
-        state={motionState ?? state}
+        state={displayedState}
         expression={expression}
         size={size}
-        silhouette={GRADIENT_SILHOUETTE}
         gradient={gradientFor(color)}
         title={label ?? null}
-        lookAround={forward ? 0 : 1}
         gaze={{ x: (gaze?.x ?? 0) + pointer.x, y: (gaze?.y ?? 0) + pointer.y }}
         turn={turn}
         spring={spring}
@@ -213,6 +213,7 @@ function MausAvatarComponent(
         showMouth={showMouth}
         mouthStroke={mouthStroke}
         paused={!animated}
+        personality={personality}
       />
     </span>
   );
@@ -226,6 +227,7 @@ export type BotAvatarProps = Omit<MausAvatarProps, "color"> & {
     color: MausColor;
     avatarUrl?: string | null;
     avatarCrop?: BotAvatarCrop;
+    personality?: BotPersonality;
   };
 };
 
@@ -247,6 +249,7 @@ export function BotAvatar({ bot, size = 44, label, ...mascotProps }: BotAvatarPr
         color={bot.color}
         size={size}
         label={label ?? bot.name}
+        personality={normalizeBotPersonality(bot.personality)}
       />
     );
   }

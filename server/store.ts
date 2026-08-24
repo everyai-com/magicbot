@@ -14,6 +14,7 @@ import { newId, type CloudBackend, type ModelSelection, type ThreadId } from "./
 import { pickBotName } from "./names.ts";
 import { redactSecretsInText } from "./redact.ts";
 import { botAvatarProfile, type BotAvatarCrop } from "../shared/bot-avatar.ts";
+import { automaticBotAppearance, type BotPersonality } from "../shared/bot-personality.ts";
 
 export type MausColor =
   | "green"
@@ -260,6 +261,8 @@ export interface BotRecord {
   notifications: boolean;
   color: MausColor;
   mascotExpression?: MausExpression | null;
+  /** Shared mascot engine profile; defaults to friendly for older bots. */
+  personality?: BotPersonality;
   /** App-owned attachment served as this bot's custom profile image. */
   avatarUrl?: string;
   /** Mascot, or the crop applied to avatarUrl. */
@@ -460,6 +463,13 @@ export class Store {
       if (b.busy || (b.activity !== undefined && b.activity !== "idle")) botsMigrated = true;
       b.busy = false;
       b.activity = "idle";
+      if (!b.personality) {
+        const appearance = automaticBotAppearance(b.id);
+        b.color = appearance.color;
+        b.mascotExpression = appearance.mascotExpression;
+        b.personality = appearance.personality;
+        botsMigrated = true;
+      }
       if (b.cloudBackend !== "vps" && b.cloudBackend !== "cloudflare") {
         b.cloudBackend = "cloudflare";
         botsMigrated = true;
@@ -797,7 +807,7 @@ export class Store {
 
   createBot(
     profile: Partial<
-      Pick<BotRecord, "name" | "title" | "description" | "color" | "mascotExpression" | "modelSelection" | "section">
+      Pick<BotRecord, "name" | "title" | "description" | "color" | "mascotExpression" | "personality" | "modelSelection" | "section">
     > = {},
     opts: {
       /** false = no greeting/onboarding seed. Imported bots must not open
@@ -815,12 +825,17 @@ export class Store {
       description: profile.description ?? "",
       notifications: true,
       color: profile.color ?? COLORS[this.bots.length % COLORS.length],
-      ...(profile.mascotExpression ? { mascotExpression: profile.mascotExpression } : {}),
       unread: false,
       modelSelection: profile.modelSelection ?? this.defaultSelection(),
       resumeCursors: {},
       createdAt: Date.now(),
     };
+    const automaticAppearance = automaticBotAppearance(bot.id);
+    if (!profile.color) bot.color = automaticAppearance.color;
+    if (!profile.mascotExpression) bot.mascotExpression = automaticAppearance.mascotExpression;
+    if (!profile.personality) bot.personality = automaticAppearance.personality;
+    if (profile.mascotExpression) bot.mascotExpression = profile.mascotExpression;
+    if (profile.personality) bot.personality = profile.personality;
     if (section) bot.section = section;
     bot.tasks = [{ threadId: bot.threadId, title: UNTITLED_TASK, createdAt: bot.createdAt, resumeCursors: {} }];
     this.bots.unshift(bot);

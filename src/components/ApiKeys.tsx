@@ -244,7 +244,7 @@ export function VpsConnection() {
         {configured && <span className="text-[11px] text-success">Connected</span>}
       </div>
       <div className="mb-1.5 text-[12px] leading-relaxed text-ink-secondary">
-        SSH config alias for the Linux VPS. MagicBots uses your normal SSH config and agent; it does not store keys or passwords.{" "}
+        SSH config alias for the Linux VPS. MagicTeams uses your normal SSH config and agent; it does not store keys or passwords.{" "}
         See the{" "}
         <a
           href="https://github.com/milind-soni/OpenMausBot/blob/main/docs/byo-vps.md"

@@ -95,6 +95,7 @@ export function ModelPicker({
   bot,
   className,
   contained = false,
+  prominent = false,
   label,
 }: {
   bot: Bot;
@@ -102,6 +103,8 @@ export function ModelPicker({
   /** Expand the menu in-flow under the trigger so it cannot overflow a
    * narrow parent (the Agent profile sidebar). */
   contained?: boolean;
+  /** Full-width trigger used by the phone toolbar. */
+  prominent?: boolean;
   label?: ReactNode;
 }) {
   const { state, dispatch, refreshInstances } = useStore();
@@ -224,12 +227,13 @@ export function ModelPicker({
         // in a narrow chat header fold to a rounded square with just the
         // provider mark; the model name rides the tooltip (a bot with no
         // resolved engine keeps its label — the mark is what would hide it)
-        !contained && active && COMPACT_SQUARE,
+        !contained && !prominent && active && COMPACT_SQUARE,
+        prominent && "min-h-11 w-full justify-start rounded-xl px-3 py-2 text-left",
       )}
       title={active ? `${active.displayName} · ${modelLabel(active, selection.model)}` : selection.model}
     >
       {active && <ProviderMark driverKind={active.driverKind} size={14} />}
-      <span className={cn("max-w-[160px] truncate", !contained && active && "@max-4xl/chathead:hidden")}>
+      <span className={cn("max-w-[160px] truncate", !contained && !prominent && active && "@max-4xl/chathead:hidden")}>
         {modelLabel(active, selection.model)}
       </span>
       <ChevronDown
@@ -237,7 +241,8 @@ export function ModelPicker({
         className={cn(
           "text-ink-secondary transition-transform",
           open && "rotate-180",
-          !contained && active && "@max-4xl/chathead:hidden",
+          !contained && !prominent && active && "@max-4xl/chathead:hidden",
+          prominent && "ml-auto",
         )}
       />
     </button>
@@ -255,17 +260,25 @@ export function ModelPicker({
       )}
 
       {open && (
-        <div
-          data-model-picker-content
-          role="dialog"
-          aria-label="Choose model"
-          className={cn(
-            "flex overflow-hidden rounded-2xl border border-hairline/50 bg-card",
-            contained
-              ? "relative mt-3 w-full max-h-[min(420px,50dvh)]"
-              : "absolute right-0 top-full z-30 mt-2 w-[380px] max-h-[min(480px,calc(100dvh-7rem))] shadow-2xl shadow-black/50",
+        <>
+          {!contained && (
+            <div
+              aria-hidden="true"
+              onMouseDown={() => setOpen(false)}
+              className="fixed inset-0 z-40 bg-black/55 backdrop-blur-[2px] sm:hidden"
+            />
           )}
-        >
+          <div
+            data-model-picker-content
+            role="dialog"
+            aria-label="Choose model"
+            className={cn(
+              "flex overflow-hidden rounded-2xl border border-hairline/50 bg-card",
+              contained
+                ? "relative mt-3 w-full max-h-[min(420px,50dvh)]"
+                : "fixed inset-x-2 bottom-[max(.5rem,env(safe-area-inset-bottom))] z-50 max-h-[min(74dvh,560px)] w-auto shadow-2xl shadow-black/50 sm:absolute sm:inset-x-auto sm:bottom-auto sm:right-0 sm:top-full sm:z-30 sm:mt-2 sm:w-[380px] sm:max-h-[min(480px,calc(100dvh-7rem))]",
+            )}
+          >
           <div className="flex w-14 shrink-0 flex-col gap-1 overflow-y-auto border-r border-hairline/40 bg-panel p-2">
             {(() => {
               const { subscription, custom: local } = splitEngineRail(state.instances);
@@ -324,7 +337,7 @@ export function ModelPicker({
                   </div>
                   <div className="mt-0.5 text-[11.5px] text-ink-secondary">
                     {pane === "custom"
-                      ? "Run this agent with a model already on your machine."
+                      ? "Run this bot with a model already on your machine."
                       : "Choose a model for this bot."}
                   </div>
                 </div>
@@ -458,7 +471,8 @@ export function ModelPicker({
               <div className="px-4 py-5 text-[13px] text-ink-secondary">No model providers are available.</div>
             )}
           </div>
-        </div>
+          </div>
+        </>
       )}
     </div>
   );

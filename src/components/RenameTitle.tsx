@@ -89,7 +89,7 @@ export function RenameTitle({
             onClick={onActivate}
             aria-label={`Open ${value}'s profile`}
             className={cn("min-w-0 truncate text-left", className)}
-            title="Open agent profile"
+            title="Open bot profile"
           >
             {value}
           </button>

@@ -327,6 +327,7 @@ export function Composer({
                   <MausAvatar
                     color={peer.bot.color}
                     state={normalizeState(peer.bot.mascotExpression) ?? "happy"}
+                    personality={peer.bot.personality}
                     size={24}
                   />
                 ) : (
@@ -335,7 +336,7 @@ export function Composer({
                   </span>
                 )}
                 <span className="min-w-0 flex-1 truncate text-[14px] font-medium text-ink">{peer.name}</span>
-                <span className="shrink-0 text-xs text-ink-secondary">{peer.bot ? "Agent" : "Channel"}</span>
+                <span className="shrink-0 text-xs text-ink-secondary">{peer.bot ? "Agent" : "Team"}</span>
               </button>
             ))}
           </div>
@@ -463,7 +464,7 @@ export function Composer({
           disabled={Boolean(approval) || locked}
           placeholder={
             locked
-              ? "Finish room setup to start chatting"
+              ? "Finish team setup to start chatting"
               : approval
               ? "Answer the approval above to continue"
               : recording

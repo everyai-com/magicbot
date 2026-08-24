@@ -113,7 +113,7 @@ export function ClaudeApiConnection() {
             </div>
           </div>
           <p className="mt-2 max-w-[58ch] text-[12.5px] leading-relaxed text-ink-secondary">
-            Use Claude Code access from the subscription you already have. Sign in once with Claude; MagicBots encrypts the connection in Cloudflare and never asks for an API key.
+            Use Claude Code access from the subscription you already have. Sign in once with Claude; MagicTeams encrypts the connection in Cloudflare and never asks for an API key.
           </p>
 
           {anthropic?.configured && (

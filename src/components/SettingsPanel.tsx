@@ -333,6 +333,7 @@ export function SettingsPanel({ bot }: { bot: Bot }) {
         | "cloudBackend"
         | "color"
         | "mascotExpression"
+        | "personality"
         | "avatarUrl"
         | "avatarCrop"
         | "autoApprove"
@@ -367,17 +368,17 @@ export function SettingsPanel({ bot }: { bot: Bot }) {
       <div className="flex items-center justify-between px-4 py-3">
         <button
           onClick={() => dispatch({ type: "toggleSettings", open: false })}
-          aria-label="Collapse agent profile"
-          title="Collapse agent profile"
+          aria-label="Collapse bot profile"
+          title="Collapse bot profile"
           className="flex size-10 items-center justify-center rounded-md text-ink-secondary hover:bg-control hover:text-ink"
         >
           <ChevronLeft size={18} />
         </button>
-        <span className="text-[15px] font-semibold text-ink">Agent profile</span>
+        <span className="text-[15px] font-semibold text-ink">Bot profile</span>
         <button
           onClick={() => dispatch({ type: "toggleSettings", open: false })}
-          aria-label="Close agent profile"
-          title="Close agent profile"
+          aria-label="Close bot profile"
+          title="Close bot profile"
           className="flex size-10 items-center justify-center rounded-md text-ink-secondary hover:bg-control hover:text-ink"
         >
           <X size={18} />
@@ -405,7 +406,7 @@ export function SettingsPanel({ bot }: { bot: Bot }) {
             <input
               className={inputCls}
               maxLength={BOT_PROFILE_LIMITS.title}
-              placeholder="Describe what your agent does"
+              placeholder="Describe what your bot does"
               value={bot.title}
               onChange={(e) => patch({ title: e.target.value })}
             />
@@ -414,7 +415,7 @@ export function SettingsPanel({ bot }: { bot: Bot }) {
             <textarea
               className={cn(inputCls, "min-h-[96px] resize-none")}
               maxLength={BOT_PROFILE_LIMITS.description}
-              placeholder="What this agent is for"
+              placeholder="What this bot is for"
               value={bot.description}
               onChange={(e) => patch({ description: e.target.value })}
             />
@@ -682,13 +683,13 @@ export function SettingsPanel({ bot }: { bot: Bot }) {
                 Notifications
               </div>
               <div className="mt-0.5 text-[13px] text-ink-secondary">
-                Get notified when this agent finishes or needs input
+                Get notified when this bot finishes or needs input
               </div>
             </div>
             <button
               role="switch"
               aria-checked={bot.notifications}
-              aria-label="Agent notifications"
+              aria-label="Bot notifications"
               onClick={() => {
                 const enabled = !bot.notifications;
                 if (enabled) void requestNotificationPermission();

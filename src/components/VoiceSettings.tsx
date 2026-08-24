@@ -78,8 +78,8 @@ export function VoiceSettings({
       <div className="text-[15px] font-medium text-ink">Voice</div>
       <div className="mt-0.5 text-[13px] text-ink-secondary">
         {cloudVoice
-          ? "Give this agent a Cloudflare Aura voice for calls and spoken replies. No separate API key is needed."
-          : "Give this agent a voice for calls and spoken replies. The ElevenLabs key is shared by the workspace; the voice choice belongs to this agent."}
+          ? "Give this bot a Cloudflare Aura voice for calls and spoken replies. No separate API key is needed."
+          : "Give this bot a voice for calls and spoken replies. The ElevenLabs key is shared by the workspace; the voice choice belongs to this bot."}
       </div>
 
       {!cloudVoice && <div className="mt-4">
@@ -163,7 +163,7 @@ export function VoiceSettings({
         <div>
           <div className="text-[13px] font-medium text-ink">Read replies aloud</div>
           <div className="mt-0.5 text-[11.5px] leading-relaxed text-ink-secondary">
-            Speak this agent's answers as they arrive, even from another chat.
+            Speak this bot&apos;s answers as they arrive, even from another chat.
           </div>
         </div>
         <button
