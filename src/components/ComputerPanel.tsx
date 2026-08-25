@@ -1,9 +1,6 @@
-// The bot's computer, in the right-side slot. Where it runs decides the
-// whole flow: cloud → provision the box on open (idempotent) and preview
-// via SSE frames or a ~4s screenshot poll; local ("This Mac") → frames
-// come from the Electron main process (desktopCapturer over the preload
-// bridge — box endpoints are never touched); off → parked. Auto (unset)
-// prefers the cloud box when one exists, else local inside the app.
+// The bot's computer, in the right-side slot. Cloud → provision the box on
+// open (idempotent) and preview via SSE frames or a ~4s screenshot poll;
+// off → parked. Auto (unset) uses the cloud box when one exists.
 import { useEffect, useRef, useState } from "react";
 import {
   CalendarClock,
@@ -26,55 +23,34 @@ async function api(path: string, init?: RequestInit): Promise<any> {
   return body;
 }
 
-type Phase =
-  | "checking"
-  | "unconfigured"
-  | "starting"
-  | "ready"
-  | "local"
-  | "local-unavailable"
-  | "off"
-  | "error";
+type Phase = "checking" | "unconfigured" | "starting" | "ready" | "off" | "error";
 
 export function ComputerPanel({ bot }: { bot: Bot }) {
   const { state, dispatch } = useStore();
   const [phase, setPhase] = useState<Phase>("checking");
   const [boxState, setBoxState] = useState<string | null>(null);
   const [polledFrame, setPolledFrame] = useState<{ png: string; mime: string } | null>(null);
-  const [localFrame, setLocalFrame] = useState<string | null>(null);
   const [pending, setPending] = useState<"join" | "sleep" | null>(null);
   const [error, setError] = useState<string | null>(null);
   // bumped when a Box token is saved inline, to re-run the spin-up flow
   const [retry, setRetry] = useState(0);
 
   // resolve the mode on open; box endpoints are only ever hit on the
-  // cloud path, so local/off can never render a JSON error as an image
+  // cloud path, so "off" can never render a JSON error as an image
   useEffect(() => {
     let alive = true;
     setPhase("checking");
     setPolledFrame(null);
-    setLocalFrame(null);
     setError(null);
-    const isElectron = Boolean(window.ogb);
     if (bot.computer === "off") {
       setPhase("off");
       return;
     }
-    if (bot.computer === "local") {
-      setPhase(isElectron ? "local" : "local-unavailable");
-      return;
-    }
-    // cloud, or auto (cloud box wins when one exists, else local in-app)
     api(`/api/bots/${bot.id}/computer`)
       .then((status) => {
         if (!alive) return;
-        const autoLocal = bot.computer !== "cloud" && isElectron;
         if (!status.configured) {
-          setPhase(autoLocal ? "local" : "unconfigured");
-          return;
-        }
-        if (!status.box && autoLocal) {
-          setPhase("local");
+          setPhase("unconfigured");
           return;
         }
         setPhase("starting");
@@ -121,37 +97,15 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
     };
   }, [phase, sseFlowing, bot.id]);
 
-  // local preview: frames from the Electron main process
-  useEffect(() => {
-    if (phase !== "local" || !window.ogb) return;
-    let alive = true;
-    const shoot = async () => {
-      try {
-        const url = await window.ogb!.screenFrame();
-        if (alive && url) setLocalFrame(url);
-      } catch {
-        /* capture denied or transient — next tick */
-      }
-    };
-    void shoot();
-    const timer = setInterval(shoot, 3000);
-    return () => {
-      alive = false;
-      clearInterval(timer);
-    };
-  }, [phase]);
-
   const lastScreenMessage = [...bot.messages].reverse().find((m) => m.kind === "screen" && m.png);
   const cloudFrame =
     live ??
     polledFrame ??
     (lastScreenMessage ? { png: lastScreenMessage.png!, mime: lastScreenMessage.mime ?? "image/png" } : null);
   const frameSrc =
-    phase === "local"
-      ? localFrame
-      : phase === "ready" || phase === "starting"
-        ? cloudFrame && `data:${cloudFrame.mime};base64,${cloudFrame.png}`
-        : null;
+    phase === "ready" || phase === "starting"
+      ? cloudFrame && `data:${cloudFrame.mime};base64,${cloudFrame.png}`
+      : null;
 
   const run = (kind: "join" | "sleep") => {
     setPending(kind);
@@ -166,11 +120,10 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
       .finally(() => setPending(null));
   };
 
-  const emptyState: Record<Exclude<Phase, "ready" | "local">, string> = {
+  const emptyState: Record<Exclude<Phase, "ready">, string> = {
     checking: "Checking…",
     starting: "Starting your bot's computer…",
     unconfigured: "No cloud computer configured",
-    "local-unavailable": "Local preview needs the desktop app — run pnpm dev:desktop",
     off: "This bot's computer is off",
     error: "Couldn't reach the computer",
   };
@@ -199,14 +152,13 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
         {/* Screen preview */}
         <div className="mb-1.5 mt-2 flex items-center justify-between text-[13px] text-ink-secondary">
           <span>{bot.name}'s screen</span>
-          {phase === "local" && <span className="text-[11px]">this Mac</span>}
         </div>
         <div className="flex aspect-[16/10] w-full items-center justify-center overflow-hidden rounded-xl bg-card">
           {frameSrc ? (
             <img src={frameSrc} alt={`${bot.name}'s screen`} className="h-full w-full object-contain" />
           ) : (
             <div className="flex flex-col items-center gap-2 px-6 text-center text-ink-secondary">
-              {phase === "checking" || phase === "starting" || phase === "local" ? (
+              {phase === "checking" || phase === "starting" ? (
                 <Loader2 size={18} className="animate-spin" />
               ) : phase === "off" ? (
                 <Power size={22} />
@@ -214,11 +166,7 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
                 <Monitor size={22} />
               )}
               <span className="text-[12px]">
-                {phase === "ready"
-                  ? "Waiting for the first frame…"
-                  : phase === "local"
-                    ? "Capturing this Mac's screen…"
-                    : emptyState[phase]}
+                {phase === "ready" ? "Waiting for the first frame…" : emptyState[phase]}
               </span>
             </div>
           )}
@@ -272,14 +220,12 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
         <div className="mt-4 rounded-xl bg-card p-4">
           <div className="text-[15px] font-medium text-ink">Runs on</div>
           <div className="mt-0.5 text-[13px] text-ink-secondary">
-            {bot.computer ? "" : "Auto: the cloud box when one exists, else this Mac. "}Pick where this bot's
-            computer lives.
+            Pick whether this bot gets a cloud computer.
           </div>
           <div className="mt-3 flex overflow-hidden rounded-lg border border-hairline/40">
             {(
               [
-                ["cloud", "Cloud box"],
-                ["local", "This Mac"],
+                ["cloud", "Cloud"],
                 ["off", "Off"],
               ] as const
             ).map(([mode, label], i) => (

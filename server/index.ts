@@ -3,7 +3,6 @@
 // folds one SSE event stream; every provider process runs here.
 import { readFileSync, unlinkSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { homedir } from "node:os";
 import { extname, join } from "node:path";
 
 import * as box from "./box.ts";
@@ -229,24 +228,6 @@ function stopScreenPoller(botId: string): Frame | null {
   return entry.last;
 }
 
-// Local computer-use contract written by Electron main on startup
-// (~/Library/Application Support/MagicBot/cua-connection.json). Read
-// fresh each turn — Electron may restart or permissions may change.
-function readCuaConnection(): { command: string; args: string[]; env: Record<string, string> } | null {
-  // new name first; pre-rename desktop builds used the old directory
-  for (const dir of ["MagicBot", "magicbot", "OpenGrokBot", "opengrokbot"]) {
-    try {
-      const p = join(homedir(), "Library", "Application Support", dir, "cua-connection.json");
-      const conn = JSON.parse(readFileSync(p, "utf8"));
-      if (!conn || conn.mode === "unavailable" || !conn.mcpCommand) continue;
-      return { command: conn.mcpCommand, args: conn.mcpArgs ?? ["mcp"], env: conn.mcpEnv ?? {} };
-    } catch {
-      /* try the next location */
-    }
-  }
-  return null;
-}
-
 // The system-prompt block that teaches a bot to delegate to its teammates.
 function delegationBlock(selfId: string): string {
   const others = store.bots.filter((b) => b.id !== selfId && !b.hidden).map((b) => b.name);
@@ -292,7 +273,7 @@ async function runDelegations(orchestratorId: string, threadId: string, delegati
 }
 
 // ── turn dispatch (upstream ProviderCommandReactor, miniature) ──────────
-async function startTurn(botId: string, text: string) {
+async function startTurn(botId: string, text: string, clientMessageId?: string) {
   const bot = store.bot(botId);
   if (!bot) throw Object.assign(new Error("no such bot"), { status: 404 });
   if (bot.busy) throw Object.assign(new Error("the bot is already working — interrupt it first"), { status: 409 });
@@ -305,7 +286,14 @@ async function startTurn(botId: string, text: string) {
     );
   }
 
-  const userMessage = store.appendMessage(bot.threadId, { role: "user", kind: "text", text });
+  // reuse the client's optimistic message id (when given) so the SSE echo
+  // dedupes in the UI instead of duplicating the bubble
+  const userMessage = store.appendMessage(bot.threadId, {
+    role: "user",
+    kind: "text",
+    text,
+    ...(clientMessageId ? { id: clientMessageId } : {}),
+  });
   broadcast({ kind: "message", threadId: bot.threadId, message: userMessage });
 
   // transcript for API-backed drivers: settled text turns only
@@ -340,7 +328,12 @@ async function startTurn(botId: string, text: string) {
       const integrations: NonNullable<Parameters<typeof instance.adapter.sendTurn>[0]["integrations"]> = {};
       if (cfg.composio?.key) integrations.composio = { key: cfg.composio.key, url: cfg.composio.url };
       const wants = bot.computer; // 'cloud' | 'local' | 'off' | undefined(auto)
-      if (wants !== "off" && wants !== "local" && box.boxConfigured(cfg)) {
+      // cloud computer preference: the user's own Cloudflare Worker (cf-computer/)
+      // over box.ascii.dev — except for the Computer driver, whose turns run ON a
+      // box and still need one provisioned
+      if (wants !== "off" && wants !== "local" && cfcomputer.cfConfigured(cfg) && instance.driverKind !== "boxAgent") {
+        integrations.cfComputer = { url: cfg.cfComputer!.url!, token: cfg.cfComputer!.token!, botId: bot.id };
+      } else if (wants !== "off" && wants !== "local" && box.boxConfigured(cfg)) {
         let b = await box.findBox(cfg, bot.id).catch(() => null);
         // the Computer driver runs ON the box — provision it on first use
         if (!b && instance.driverKind === "boxAgent") {
@@ -350,14 +343,6 @@ async function startTurn(botId: string, text: string) {
         }
         if (b) integrations.computer = { boxId: b.id, token: cfg.box!.token! };
       }
-      // local computer (this Mac) via the Electron-hosted cua-driver: the
-      // Electron main process owns the daemon (TCC attribution) and writes
-      // its spawn contract to cua-connection.json; the harness only reads it
-      if (!integrations.computer && wants !== "off" && wants !== "cloud") {
-        const cua = readCuaConnection();
-        if (cua) integrations.localComputer = cua;
-      }
-
       await instance.adapter.sendTurn({
         threadId: bot.threadId,
         text,
@@ -366,10 +351,10 @@ async function startTurn(botId: string, text: string) {
         transcript,
         system:
           persona +
-          (integrations.computer && instance.driverKind !== "boxAgent"
-            ? " You have your own cloud computer — use the computer tools (screenshot, computer_exec, open_url) whenever browsing or acting on a desktop helps."
-            : integrations.localComputer
-              ? " You can act on the user's computer through the computer tools — take a screenshot or read the desktop state first, prefer accessibility actions over raw coordinates, and act carefully."
+          (integrations.cfComputer
+            ? " You have your own cloud computer — a persistent Linux sandbox whose disk survives between conversations. Use the computer tools (computer_exec, run_code, write_file, read_file, expose_port) whenever running code, installing software, or hosting something helps."
+            : integrations.computer && instance.driverKind !== "boxAgent"
+              ? " You have your own cloud computer — use the computer tools (screenshot, computer_exec, open_url) whenever browsing or acting on a desktop helps."
               : ""),
         integrations,
       });
@@ -394,6 +379,11 @@ function configStatus() {
     xai: { configured: Boolean(cfg.xai?.key) },
     composio: { configured: Boolean(cfg.composio?.key), apiKeyConfigured: Boolean(cfg.composio?.apiKey) },
     box: { configured: Boolean(cfg.box?.token) },
+    cfComputer: {
+      configured: cfcomputer.cfConfigured(cfg),
+      urlConfigured: Boolean(cfg.cfComputer?.url),
+      tokenConfigured: Boolean(cfg.cfComputer?.token),
+    },
   };
 }
 
@@ -440,10 +430,14 @@ const server = createServer(async (req, res) => {
     if (method === "GET" && path === "/api/events") {
       res.writeHead(200, {
         "content-type": "text/event-stream",
-        "cache-control": "no-cache",
+        "cache-control": "no-cache, no-transform",
         connection: "keep-alive",
+        // reverse proxies (nginx & friends) must not buffer this stream —
+        // buffered SSE is exactly "my message shows up seconds later"
+        "x-accel-buffering": "no",
       });
-      res.write(`data: ${JSON.stringify({ kind: "hello" })}\n\n`);
+      res.flushHeaders?.();
+      res.write(`retry: 2000\ndata: ${JSON.stringify({ kind: "hello" })}\n\n`);
       sseClients.add(res);
       const keepalive = setInterval(() => {
         try {
@@ -566,7 +560,8 @@ const server = createServer(async (req, res) => {
       // a fresh human message resets the delegation hop budget for this thread
       const turnBot = store.bot(m[1]);
       if (turnBot) delegationHops.delete(turnBot.threadId);
-      await startTurn(m[1], text);
+      const clientId = typeof body.id === "string" && /^[\w-]{1,64}$/.test(body.id) ? body.id : undefined;
+      await startTurn(m[1], text, clientId);
       return json(res, 202, { ok: true });
     }
     m = path.match(/^\/api\/bots\/([\w-]+)\/respond$/);
@@ -610,7 +605,7 @@ const server = createServer(async (req, res) => {
     if ((method === "PUT" || method === "PATCH") && path === "/api/config") {
       const body = await readBody(req);
       const patch: Record<string, object> = {};
-      for (const key of ["xai", "composio", "box"] as const) {
+      for (const key of ["xai", "composio", "box", "cfComputer"] as const) {
         if (body[key] && typeof body[key] === "object") patch[key] = body[key];
       }
       if (!Object.keys(patch).length) return json(res, 400, { error: "nothing to save" });

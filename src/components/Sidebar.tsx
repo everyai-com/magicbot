@@ -20,8 +20,6 @@ import { MausAvatar, InitialsAvatar } from "./Avatar";
 import { expressionForBot } from "@/lib/mascot";
 import { cn } from "@/lib/cn";
 
-const isElectron = navigator.userAgent.includes("Electron");
-
 function preview(bot: Bot): string {
   if (bot.busy) return "Working…";
   const last = bot.messages[bot.messages.length - 1];
@@ -183,24 +181,16 @@ export function Sidebar() {
 
   return (
     <aside className="flex h-full w-[320px] shrink-0 flex-col border-r border-hairline/40 bg-panel">
-      {/* Titlebar: real traffic lights in Electron, faux ones in the browser */}
-      <div
-        className="flex items-center justify-between px-4 pt-3.5 pb-1"
-        style={{ WebkitAppRegion: "drag" } as React.CSSProperties}
-      >
-        {isElectron ? (
-          <div className="w-14" />
-        ) : (
-          <div className="flex items-center gap-2">
-            <span className="size-3 rounded-full bg-[#ff5f57]" />
-            <span className="size-3 rounded-full bg-[#febc2e]" />
-            <span className="size-3 rounded-full bg-[#28c840]" />
-          </div>
-        )}
+      {/* Titlebar */}
+      <div className="flex items-center justify-between px-4 pt-3.5 pb-1">
+        <div className="flex items-center gap-2">
+          <span className="size-3 rounded-full bg-[#ff5f57]" />
+          <span className="size-3 rounded-full bg-[#febc2e]" />
+          <span className="size-3 rounded-full bg-[#28c840]" />
+        </div>
         <button
           onClick={() => { track("bot_created"); dispatch({ type: "newBot" }); }}
           className="rounded-md p-1 text-ink-secondary hover:bg-raised hover:text-ink"
-          style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
           title="New bot"
         >
           <Plus size={20} strokeWidth={2} />

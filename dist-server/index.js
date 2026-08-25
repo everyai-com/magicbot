@@ -3,13 +3,16 @@
 // folds one SSE event stream; every provider process runs here.
 import { readFileSync, unlinkSync } from "node:fs";
 import { createServer } from "node:http";
-import { homedir } from "node:os";
 import { extname, join } from "node:path";
 import * as box from "./box.js";
+import * as cfcomputer from "./cfcomputer.js";
 import * as composio from "./composio.js";
 import { ensureDirs, instanceConfigs, loadConfig, saveConfig, EVENTS_DIR, NATIVE_DIR } from "./config.js";
 import { BUILT_IN_DRIVERS } from "./drivers/builtIn.js";
 import { EventBus } from "./harness/bus.js";
+import * as memory from "./organs/memory.js";
+import * as routines from "./organs/routines.js";
+import * as delegation from "./organs/delegation.js";
 import { ProviderRegistry } from "./harness/registry.js";
 import { Store } from "./store.js";
 const PORT = Number(process.env.OMB_PORT || process.env.OGB_PORT || 8799);
@@ -59,6 +62,10 @@ function broadcast(payload) {
 // and every client view are projections of it.
 const toolMessageByItem = new Map(); // itemId -> messageId
 const askMessageByRequest = new Map(); // requestId -> messageId
+// delegation organ: [DELEGATE: bot | task] markers seen this turn, executed on
+// turn.completed; hop counter (per orchestrator thread) bounds delegation chains
+const pendingDelegations = new Map();
+const delegationHops = new Map();
 bus.subscribe((event) => {
     broadcast({ kind: "runtime", event });
     const bot = store.botByThread(event.threadId);
@@ -77,7 +84,22 @@ bus.subscribe((event) => {
             break;
         case "item.completed":
             if (event.itemType === "assistant_text") {
-                pushMessage({ role: "bot", kind: "text", text: event.text });
+                // AIOS memory organ: pull [REMEMBER: …] markers out of the reply,
+                // persist them, and show the user the cleaned text.
+                const { stripped, captured } = memory.captureFromText(bot.id, event.text);
+                // delegation organ: pull [DELEGATE: bot | task] markers; stash them to
+                // run when the turn completes, and hide them from the shown text.
+                const delegations = delegation.parse(stripped);
+                const display = delegation.strip(stripped);
+                pushMessage({ role: "bot", kind: "text", text: display || stripped || event.text });
+                for (const fact of captured) {
+                    pushMessage({ role: "bot", kind: "activity", tool: { name: `remembered: ${fact.text.slice(0, 60)}`, ok: true } });
+                }
+                if (delegations.length) {
+                    const list = pendingDelegations.get(event.threadId) ?? [];
+                    list.push(...delegations);
+                    pendingDelegations.set(event.threadId, list);
+                }
             }
             else if (event.itemType === "tool" && event.itemId) {
                 const messageId = toolMessageByItem.get(event.itemId);
@@ -143,6 +165,13 @@ bus.subscribe((event) => {
                 pushMessage({ role: "bot", kind: "screen", png: frame.png, mime: frame.mime });
             store.patchBot(bot.id, { busy: false, unread: true });
             broadcast({ kind: "bot", bot: store.bot(bot.id) });
+            // delegation organ: run any [DELEGATE] handoffs this turn queued, then
+            // feed the results back so the orchestrator continues (bounded by hops)
+            const pending = pendingDelegations.get(event.threadId);
+            if (pending?.length) {
+                pendingDelegations.delete(event.threadId);
+                void runDelegations(bot.id, event.threadId, pending);
+            }
             break;
         }
     }
@@ -189,27 +218,48 @@ function stopScreenPoller(botId) {
     screenPollers.delete(botId);
     return entry.last;
 }
-// Local computer-use contract written by Electron main on startup
-// (~/Library/Application Support/MagicBot/cua-connection.json). Read
-// fresh each turn — Electron may restart or permissions may change.
-function readCuaConnection() {
-    // new name first; pre-rename desktop builds used the old directory
-    for (const dir of ["MagicBot", "magicbot", "OpenGrokBot", "opengrokbot"]) {
-        try {
-            const p = join(homedir(), "Library", "Application Support", dir, "cua-connection.json");
-            const conn = JSON.parse(readFileSync(p, "utf8"));
-            if (!conn || conn.mode === "unavailable" || !conn.mcpCommand)
-                continue;
-            return { command: conn.mcpCommand, args: conn.mcpArgs ?? ["mcp"], env: conn.mcpEnv ?? {} };
+// The system-prompt block that teaches a bot to delegate to its teammates.
+function delegationBlock(selfId) {
+    const others = store.bots.filter((b) => b.id !== selfId && !b.hidden).map((b) => b.name);
+    if (!others.length)
+        return "";
+    return (` You work alongside other bots you can hand tasks to: ${others.join(", ")}.` +
+        ` To delegate, write [DELEGATE: <bot name> | <the task, with enough context to act>] in your reply.` +
+        ` Their result is fed back to you so you can combine it and answer the user. Delegate only when a teammate is better suited; otherwise just do it yourself.`);
+}
+// ── delegation organ: run queued handoffs, feed results back ────────────
+async function runDelegations(orchestratorId, threadId, delegations) {
+    const post = (m) => {
+        const message = store.appendMessage(threadId, m);
+        broadcast({ kind: "message", threadId, message });
+    };
+    const hops = delegationHops.get(threadId) ?? 0;
+    if (hops >= delegation.MAX_HOPS) {
+        post({ role: "bot", kind: "activity", tool: { name: "delegation limit reached — stopping", ok: false } });
+        return;
+    }
+    const results = [];
+    for (const d of delegations) {
+        const target = store.bots.find((b) => b.name.toLowerCase() === d.to.toLowerCase() && b.id !== orchestratorId);
+        if (!target) {
+            results.push(`(no bot named "${d.to}" — skipped)`);
+            continue;
         }
-        catch {
-            /* try the next location */
+        post({ role: "bot", kind: "activity", tool: { name: `delegated to ${target.name}: ${d.task.slice(0, 60)}` } });
+        try {
+            const answer = await delegation.collectTurn(bus, startTurn, target.id, target.threadId, d.task);
+            results.push(`Result from ${target.name}:\n${answer}`);
+        }
+        catch (e) {
+            results.push(`${target.name} could not complete it: ${e instanceof Error ? e.message : String(e)}`);
         }
     }
-    return null;
+    delegationHops.set(threadId, hops + 1);
+    // hand the results back to the orchestrator as its next input so it continues
+    await startTurn(orchestratorId, `[delegation results]\n\n${results.join("\n\n")}`).catch(() => { });
 }
 // ── turn dispatch (upstream ProviderCommandReactor, miniature) ──────────
-async function startTurn(botId, text) {
+async function startTurn(botId, text, clientMessageId) {
     const bot = store.bot(botId);
     if (!bot)
         throw Object.assign(new Error("no such bot"), { status: 404 });
@@ -219,7 +269,14 @@ async function startTurn(botId, text) {
     if (!instance) {
         throw Object.assign(new Error(`provider instance "${bot.modelSelection.instanceId}" is unavailable — pick another model in settings`), { status: 409 });
     }
-    const userMessage = store.appendMessage(bot.threadId, { role: "user", kind: "text", text });
+    // reuse the client's optimistic message id (when given) so the SSE echo
+    // dedupes in the UI instead of duplicating the bubble
+    const userMessage = store.appendMessage(bot.threadId, {
+        role: "user",
+        kind: "text",
+        text,
+        ...(clientMessageId ? { id: clientMessageId } : {}),
+    });
     broadcast({ kind: "message", threadId: bot.threadId, message: userMessage });
     // transcript for API-backed drivers: settled text turns only
     const transcript = store
@@ -233,7 +290,12 @@ async function startTurn(botId, text) {
         bot.description && `About: ${bot.description}`,
     ]
         .filter(Boolean)
-        .join(" ");
+        .join(" ") +
+        " When you learn a durable fact about the user or their work that would help future conversations" +
+        " (a preference, a name, an ongoing goal, a constraint), record it by writing [REMEMBER: the fact]" +
+        " anywhere in your reply. Do not re-remember things already listed below." +
+        delegationBlock(bot.id) +
+        memory.memoryBlock(bot.id);
     // busy flips immediately so the composer locks; the dispatch itself runs
     // in the background — box provisioning can take ~90s and must never
     // hang the HTTP request
@@ -245,7 +307,13 @@ async function startTurn(botId, text) {
             if (cfg.composio?.key)
                 integrations.composio = { key: cfg.composio.key, url: cfg.composio.url };
             const wants = bot.computer; // 'cloud' | 'local' | 'off' | undefined(auto)
-            if (wants !== "off" && wants !== "local" && box.boxConfigured(cfg)) {
+            // cloud computer preference: the user's own Cloudflare Worker (cf-computer/)
+            // over box.ascii.dev — except for the Computer driver, whose turns run ON a
+            // box and still need one provisioned
+            if (wants !== "off" && wants !== "local" && cfcomputer.cfConfigured(cfg) && instance.driverKind !== "boxAgent") {
+                integrations.cfComputer = { url: cfg.cfComputer.url, token: cfg.cfComputer.token, botId: bot.id };
+            }
+            else if (wants !== "off" && wants !== "local" && box.boxConfigured(cfg)) {
                 let b = await box.findBox(cfg, bot.id).catch(() => null);
                 // the Computer driver runs ON the box — provision it on first use
                 if (!b && instance.driverKind === "boxAgent") {
@@ -256,14 +324,6 @@ async function startTurn(botId, text) {
                 if (b)
                     integrations.computer = { boxId: b.id, token: cfg.box.token };
             }
-            // local computer (this Mac) via the Electron-hosted cua-driver: the
-            // Electron main process owns the daemon (TCC attribution) and writes
-            // its spawn contract to cua-connection.json; the harness only reads it
-            if (!integrations.computer && wants !== "off" && wants !== "cloud") {
-                const cua = readCuaConnection();
-                if (cua)
-                    integrations.localComputer = cua;
-            }
             await instance.adapter.sendTurn({
                 threadId: bot.threadId,
                 text,
@@ -271,10 +331,10 @@ async function startTurn(botId, text) {
                 resumeCursor: bot.resumeCursors[bot.modelSelection.instanceId],
                 transcript,
                 system: persona +
-                    (integrations.computer && instance.driverKind !== "boxAgent"
-                        ? " You have your own cloud computer — use the computer tools (screenshot, computer_exec, open_url) whenever browsing or acting on a desktop helps."
-                        : integrations.localComputer
-                            ? " You can act on the user's computer through the computer tools — take a screenshot or read the desktop state first, prefer accessibility actions over raw coordinates, and act carefully."
+                    (integrations.cfComputer
+                        ? " You have your own cloud computer — a persistent Linux sandbox whose disk survives between conversations. Use the computer tools (computer_exec, run_code, write_file, read_file, expose_port) whenever running code, installing software, or hosting something helps."
+                        : integrations.computer && instance.driverKind !== "boxAgent"
+                            ? " You have your own cloud computer — use the computer tools (screenshot, computer_exec, open_url) whenever browsing or acting on a desktop helps."
                             : ""),
                 integrations,
             });
@@ -300,6 +360,11 @@ function configStatus() {
         xai: { configured: Boolean(cfg.xai?.key) },
         composio: { configured: Boolean(cfg.composio?.key), apiKeyConfigured: Boolean(cfg.composio?.apiKey) },
         box: { configured: Boolean(cfg.box?.token) },
+        cfComputer: {
+            configured: cfcomputer.cfConfigured(cfg),
+            urlConfigured: Boolean(cfg.cfComputer?.url),
+            tokenConfigured: Boolean(cfg.cfComputer?.token),
+        },
     };
 }
 /** Rebuild the provider fleet after a config change so new keys take
@@ -344,10 +409,14 @@ const server = createServer(async (req, res) => {
         if (method === "GET" && path === "/api/events") {
             res.writeHead(200, {
                 "content-type": "text/event-stream",
-                "cache-control": "no-cache",
+                "cache-control": "no-cache, no-transform",
                 connection: "keep-alive",
+                // reverse proxies (nginx & friends) must not buffer this stream —
+                // buffered SSE is exactly "my message shows up seconds later"
+                "x-accel-buffering": "no",
             });
-            res.write(`data: ${JSON.stringify({ kind: "hello" })}\n\n`);
+            res.flushHeaders?.();
+            res.write(`retry: 2000\ndata: ${JSON.stringify({ kind: "hello" })}\n\n`);
             sseClients.add(res);
             const keepalive = setInterval(() => {
                 try {
@@ -404,6 +473,55 @@ const server = createServer(async (req, res) => {
             broadcast({ kind: "bot.deleted", botId: bot.id });
             return json(res, 200, { ok: true });
         }
+        // routines — recurring scheduled tasks per bot (AIOS organ)
+        m = path.match(/^\/api\/bots\/([\w-]+)\/routines$/);
+        if (m && method === "GET")
+            return json(res, 200, { routines: routines.forBot(m[1]) });
+        if (m && method === "POST") {
+            if (!store.bot(m[1]))
+                return json(res, 404, { error: "no such bot" });
+            const body = await readBody(req);
+            const prompt = typeof body.prompt === "string" ? body.prompt : "";
+            if (!prompt.trim())
+                return json(res, 400, { error: "prompt required" });
+            const everyMinutes = Number(body.everyMinutes) || 1440;
+            const routine = routines.create(m[1], prompt, everyMinutes);
+            broadcast({ kind: "routines", botId: m[1], routines: routines.forBot(m[1]) });
+            return json(res, 200, { routine });
+        }
+        m = path.match(/^\/api\/routines\/([\w-]+)$/);
+        if (m && method === "PATCH") {
+            const body = await readBody(req);
+            const routine = routines.patch(m[1], body);
+            if (!routine)
+                return json(res, 404, { error: "no such routine" });
+            broadcast({ kind: "routines", botId: routine.botId, routines: routines.forBot(routine.botId) });
+            return json(res, 200, { routine });
+        }
+        if (m && method === "DELETE") {
+            const existing = routines.get(m[1]);
+            if (!routines.remove(m[1]))
+                return json(res, 404, { error: "no such routine" });
+            if (existing)
+                broadcast({ kind: "routines", botId: existing.botId, routines: routines.forBot(existing.botId) });
+            return json(res, 200, { ok: true });
+        }
+        // cloud computer (Cloudflare) — status + a one-shot connectivity test so
+        // the user can confirm a deployed cf-computer/ Worker before relying on it
+        if (method === "GET" && path === "/api/cfcomputer") {
+            return json(res, 200, { configured: cfcomputer.cfConfigured(cfg) });
+        }
+        if (method === "POST" && path === "/api/cfcomputer/test") {
+            if (!cfcomputer.cfConfigured(cfg))
+                return json(res, 400, { error: "set the cloud computer URL + token first" });
+            try {
+                const r = await cfcomputer.exec(cfg, "connectivity-test", "echo magicbot-ok");
+                return json(res, 200, { ok: r.ok, stdout: r.stdout.trim() });
+            }
+            catch (e) {
+                return json(res, 502, { error: e instanceof Error ? e.message : String(e) });
+            }
+        }
         // onboarding/ask cards persist their answered/dismissed state
         m = path.match(/^\/api\/bots\/([\w-]+)\/cards\/([\w-]+)$/);
         if (m && method === "PATCH") {
@@ -430,7 +548,12 @@ const server = createServer(async (req, res) => {
             const text = String(body.text ?? "").trim();
             if (!text)
                 return json(res, 400, { error: "text required" });
-            await startTurn(m[1], text);
+            // a fresh human message resets the delegation hop budget for this thread
+            const turnBot = store.bot(m[1]);
+            if (turnBot)
+                delegationHops.delete(turnBot.threadId);
+            const clientId = typeof body.id === "string" && /^[\w-]{1,64}$/.test(body.id) ? body.id : undefined;
+            await startTurn(m[1], text, clientId);
             return json(res, 202, { ok: true });
         }
         m = path.match(/^\/api\/bots\/([\w-]+)\/respond$/);
@@ -474,7 +597,7 @@ const server = createServer(async (req, res) => {
         if ((method === "PUT" || method === "PATCH") && path === "/api/config") {
             const body = await readBody(req);
             const patch = {};
-            for (const key of ["xai", "composio", "box"]) {
+            for (const key of ["xai", "composio", "box", "cfComputer"]) {
                 if (body[key] && typeof body[key] === "object")
                     patch[key] = body[key];
             }
@@ -562,6 +685,10 @@ const server = createServer(async (req, res) => {
 server.listen(PORT, "127.0.0.1", () => {
     console.log(`magicbot server on http://127.0.0.1:${PORT}`);
 });
+// AIOS routines organ: run due scheduled tasks by firing them as turns.
+// startTurn throws when the bot is busy/unavailable → routines.runDue leaves
+// the routine to retry on the next tick.
+routines.startScheduler((botId, prompt) => startTurn(botId, prompt));
 for (const signal of ["SIGINT", "SIGTERM"]) {
     process.on(signal, () => {
         void registry.disposeAll().finally(() => process.exit(0));

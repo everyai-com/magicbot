@@ -33,6 +33,7 @@ export function loadConfig() {
     cfg.xai = { key: process.env.XAI_API_KEY, ...cfg.xai };
     cfg.composio = { key: process.env.COMPOSIO_KEY, ...cfg.composio };
     cfg.box = { token: process.env.BOX_TOKEN, ...cfg.box };
+    cfg.cfComputer = { url: process.env.MAGICBOT_COMPUTER_URL, token: process.env.MAGICBOT_COMPUTER_TOKEN, ...cfg.cfComputer };
     return cfg;
 }
 /** Merge a partial config into ~/.magicbot/config.json (secrets never
@@ -46,7 +47,7 @@ export function saveConfig(patch) {
     catch {
         /* first write */
     }
-    for (const key of ["xai", "composio", "box"]) {
+    for (const key of ["xai", "composio", "box", "cfComputer"]) {
         if (patch[key] && typeof patch[key] === "object") {
             disk[key] = { ...disk[key], ...patch[key] };
         }

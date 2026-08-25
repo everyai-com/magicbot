@@ -6,7 +6,7 @@ import { Check, Loader2 } from "lucide-react";
 import { api, useStore, type ConfigStatus } from "@/state/store";
 import { cn } from "@/lib/cn";
 
-export type ConfigSection = "composio" | "composioApi" | "box";
+export type ConfigSection = "composio" | "composioApi" | "box" | "cfComputerUrl" | "cfComputerToken";
 
 const SECTIONS: Record<
   ConfigSection,
@@ -18,6 +18,14 @@ const SECTIONS: Record<
     flag: (c) => c.composio.apiKeyConfigured ?? false,
   },
   box: { body: (v) => ({ box: { token: v } }), flag: (c) => c.box.configured },
+  cfComputerUrl: {
+    body: (v) => ({ cfComputer: { url: v } }),
+    flag: (c) => c.cfComputer?.urlConfigured ?? false,
+  },
+  cfComputerToken: {
+    body: (v) => ({ cfComputer: { token: v } }),
+    flag: (c) => c.cfComputer?.tokenConfigured ?? false,
+  },
 };
 
 export function ApiKeyRow({
