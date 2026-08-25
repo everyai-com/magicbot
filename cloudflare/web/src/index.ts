@@ -973,6 +973,38 @@ async function aiReply(env: Env, userId: string, bot: Bot, text: string): Promis
   return "I reached the computer-action limit for this turn. Ask me to continue and I'll pick up from here.";
 }
 
+function hostedEngineLabel(bot: Bot): string {
+  if (bot.modelSelection.instanceId === "codex-subscription") return "ChatGPT";
+  if (bot.modelSelection.instanceId === "claude-subscription" || bot.modelSelection.instanceId === "anthropic-api") return "Claude";
+  return "the selected model";
+}
+
+/** Keep a temporary subscription-runtime outage from taking the conversation
+ * down. The user's configured model remains selected; only this reply uses the
+ * built-in Cloudflare model, and the UI is told exactly what happened. */
+async function resilientAiReply(env: Env, userId: string, bot: Bot, text: string): Promise<string> {
+  try {
+    return await aiReply(env, userId, bot, text);
+  } catch (error) {
+    if (bot.modelSelection.instanceId === "cloudflare-ai") throw error;
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(JSON.stringify({
+      event: "hosted_engine_fallback",
+      userId,
+      botId: bot.id,
+      engine: bot.modelSelection.instanceId,
+      model: bot.modelSelection.model,
+      message,
+    }));
+    const fallbackBot: Bot = {
+      ...bot,
+      modelSelection: { instanceId: "cloudflare-ai", model: MODEL },
+    };
+    const reply = await aiReply(env, userId, fallbackBot, text);
+    return `_${hostedEngineLabel(bot)} was temporarily unavailable, so MagicTeams Cloud answered this message. Your selected model has not changed._\n\n${reply}`;
+  }
+}
+
 function appendTurn(bot: Bot, text: string, reply: string, clientMessageId?: string): [Message, Message] {
   const userMessage: Message = {
     id: clientMessageId && /^[A-Za-z0-9_-]{8,128}$/.test(clientMessageId) ? clientMessageId : crypto.randomUUID(),
@@ -1025,7 +1057,7 @@ async function executeRoutine(
     bot.threadId = taskId;
     bot.messages = [];
     bot.activeLeafId = null;
-    const output = await aiReply(env, userId, bot, prompt);
+    const output = await resilientAiReply(env, userId, bot, prompt);
     appendTurn(bot, prompt, output);
     await saveBot(env, userId, bot);
     run.threadId = taskId;
@@ -1731,7 +1763,7 @@ async function api(request: Request, env: Env, user: User, path: string): Promis
     if (speakers.length === 0 && available[0]) speakers = [available[0]];
     for (const bot of speakers.slice(0, 8)) {
       const roomBot = { ...bot, messages: group.messages } as Bot;
-      const reply = await aiReply(env, user.id, roomBot, `${group.bulletin ? `Room instructions: ${group.bulletin}\n\n` : ""}${text}`);
+      const reply = await resilientAiReply(env, user.id, roomBot, `${group.bulletin ? `Room instructions: ${group.bulletin}\n\n` : ""}${text}`);
       const message: Message = {
         id: crypto.randomUUID(), role: "bot", kind: "text", text: reply, at: Date.now(), parentId: group.messages.at(-1)?.id ?? null,
         from: { botId: bot.id, name: bot.name, color: bot.color },
@@ -2153,7 +2185,7 @@ async function api(request: Request, env: Env, user: User, path: string): Promis
     const branch: Message = { id: crypto.randomUUID(), role: "user", kind: "text", text, at: Date.now(), parentId: source.parentId };
     bot.messages.push(branch);
     bot.activeLeafId = branch.id;
-    const reply = await aiReply(env, user.id, bot, text);
+    const reply = await resilientAiReply(env, user.id, bot, text);
     const assistant: Message = { id: crypto.randomUUID(), role: "bot", kind: "text", text: reply, at: Date.now(), parentId: branch.id };
     bot.messages.push(assistant);
     bot.activeLeafId = assistant.id;
@@ -2220,7 +2252,7 @@ async function api(request: Request, env: Env, user: User, path: string): Promis
     const body = await request.json<{ text?: string; clientMessageId?: string }>();
     const text = body.text?.trim() ?? "";
     if (!text || text.length > 20_000) return json({ error: "Message must be between 1 and 20,000 characters" }, 400);
-    const reply = await aiReply(env, user.id, bot, text);
+    const reply = await resilientAiReply(env, user.id, bot, text);
     const messages = appendTurn(bot, text, reply, body.clientMessageId);
     await saveBot(env, user.id, bot);
     return json({ threadId: bot.threadId, messages });
