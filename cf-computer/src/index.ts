@@ -52,7 +52,13 @@ export class Computer extends withWorkspace(ComputerBase, workspaceOptions) {
   }
 
   async computerStatus() {
-    return this.getWorkspaceContainer().status();
+    // Read the container state directly from the Durable Object. Returning a
+    // second RpcTarget from inside a DO RPC call can leave the outer service
+    // binding waiting forever when the container is asleep.
+    return {
+      running: Boolean(this.ctx.container?.running),
+      exit: null,
+    };
   }
 
   async sleepComputer() {
