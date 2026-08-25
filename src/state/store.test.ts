@@ -3,11 +3,23 @@ import { describe, expect, it, vi } from "vitest";
 import {
   configStatusFromFrame,
   initialState,
+  isHostedChatSurface,
   openNotificationTarget,
   reducer,
   type Bot,
   type Message,
 } from "./store";
+
+describe("hosted chat surface detection", () => {
+  it("recognizes both production domains even when an embedded bridge exists", () => {
+    expect(isHostedChatSurface(false, { hostname: "bots.magicteams.ai", protocol: "https:" }, {})).toBe(true);
+    expect(isHostedChatSurface(false, { hostname: "magicbot-web.everyai-com.workers.dev", protocol: "https:" }, {})).toBe(true);
+  });
+
+  it("keeps the native local app on its server-driven send flow", () => {
+    expect(isHostedChatSurface(false, { hostname: "localhost", protocol: "http:" }, {})).toBe(false);
+  });
+});
 
 describe("notification routing", () => {
   const bots = [{ id: "bot-1", threadId: "main-thread", tasks: [{ threadId: "detached-thread" }] }] as never;

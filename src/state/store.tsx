@@ -223,6 +223,20 @@ export function visibleMessages(bot: Bot): Message[] {
   return path.reverse();
 }
 
+/** Hosted chat must render the user's turn before the long-running reply
+ * request finishes. Explicit production host checks keep this working inside
+ * embedded browsers that expose a native-looking bridge object. */
+export function isHostedChatSurface(
+  configuredHosted: boolean | undefined,
+  location: Pick<Location, "hostname" | "protocol"> = window.location,
+  nativeBridge: unknown = window.ogb,
+): boolean {
+  if (configuredHosted === true) return true;
+  const hostname = location.hostname.toLowerCase();
+  if (hostname === "bots.magicteams.ai" || hostname.endsWith(".everyai-com.workers.dev")) return true;
+  return !nativeBridge && location.protocol === "https:";
+}
+
 /** All versions of a user message (itself + the forks that replaced it),
  * oldest first. Length 1 = never edited. */
 export function messageVersions(bot: Bot, message: Message): Message[] {
@@ -1239,8 +1253,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     };
 
     const wrapped: React.Dispatch<Action> = (incomingAction) => {
-      const hostedWeb = stateRef.current.config?.hosted === true
-        || (!window.ogb && window.location.protocol === "https:");
+      const hostedWeb = isHostedChatSurface(stateRef.current.config?.hosted);
       const action: Action =
         incomingAction.type === "send" && hostedWeb && !incomingAction.clientMessageId
           ? { ...incomingAction, clientMessageId: crypto.randomUUID(), sentAt: Date.now() }
@@ -1310,7 +1323,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
               }
             })
             .catch((error) => {
-              if (stateRef.current.config?.hosted) rawDispatch({ type: "hostedTurnFailed", botId: action.botId });
+              if (isHostedChatSurface(stateRef.current.config?.hosted)) rawDispatch({ type: "hostedTurnFailed", botId: action.botId });
               showError(error);
             });
           break;
