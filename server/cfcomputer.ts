@@ -1,11 +1,39 @@
-// Harness client for the MagicBot cloud computer (cf-computer/ Worker).
+// Harness client for the MagicBots cloud computer (cf-computer/ Worker).
 // The hosted sibling of box.ts: same shape (run a command, read/write files,
-// expose a service), but backed by a Cloudflare Sandbox container per bot
-// instead of box.ascii.dev. Selected when cfg.cfComputer.url + token are set.
+// and persist files), backed by an official @cloudflare/computer Workspace
+// and Linux runtime per bot. Selected when cfg.cfComputer.url + token are set.
 import type { AppConfig } from "./config.ts";
+import { SPAWNED_PROXIES } from "./proxy-paths.ts";
 
 export function cfConfigured(cfg: AppConfig): boolean {
   return Boolean(cfg.cfComputer?.url && cfg.cfComputer?.token);
+}
+
+export function cfComputerMcp(cfg: AppConfig, botId: string): {
+  command: string;
+  args: string[];
+  env: Record<string, string>;
+} {
+  if (!cfConfigured(cfg)) throw new Error("Cloudflare computer is not configured");
+  return {
+    command: process.execPath,
+    args: [SPAWNED_PROXIES.cfComputer],
+    env: {
+      ELECTRON_RUN_AS_NODE: "1",
+      OMB_CF_COMPUTER_URL: cfg.cfComputer!.url!,
+      OMB_CF_COMPUTER_TOKEN: cfg.cfComputer!.token!,
+      OMB_CF_COMPUTER_BOT: botId,
+    },
+  };
+}
+
+export function status(cfg: AppConfig) {
+  return {
+    configured: cfConfigured(cfg),
+    ready: cfConfigured(cfg),
+    container: cfConfigured(cfg) ? "cloudflare" : null,
+    headless: true,
+  };
 }
 
 async function call(cfg: AppConfig, botId: string, action: string, body: unknown): Promise<any> {
@@ -44,10 +72,6 @@ export function writeFile(cfg: AppConfig, botId: string, path: string, content: 
 
 export function readFile(cfg: AppConfig, botId: string, path: string) {
   return call(cfg, botId, "readFile", { path }) as Promise<{ ok: boolean; content: unknown }>;
-}
-
-export function exposePort(cfg: AppConfig, botId: string, port: number) {
-  return call(cfg, botId, "expose", { port }) as Promise<{ ok: boolean; url: string }>;
 }
 
 export function destroy(cfg: AppConfig, botId: string) {

@@ -4,22 +4,23 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-08-01",
   "compatibility_flags": ["nodejs_compat"],
-  // One container class = the bot's cloud computer. Each bot maps to one
-  // sandbox instance keyed by its botId (see src/index.ts). Bump max_instances
-  // to the number of concurrent bot computers you want to allow.
+  // One official Cloudflare Computer workspace + container per bot.
   "containers": [
     {
-      "class_name": "Sandbox",
+      "class_name": "Computer",
       "image": "./Dockerfile",
-      "instance_type": "standard",
+      "instance_type": "standard-2",
       "max_instances": 10
     }
   ],
   "durable_objects": {
-    "bindings": [{ "class_name": "Sandbox", "name": "Sandbox" }]
+    "bindings": [{ "class_name": "Computer", "name": "Computer" }]
   },
-  "migrations": [{ "new_sqlite_classes": ["Sandbox"], "tag": "v1" }],
+  "migrations": [
+    { "new_sqlite_classes": ["Sandbox"], "tag": "v1" },
+    { "new_sqlite_classes": ["Computer"], "tag": "v2" }
+  ],
   // Set with: wrangler secret put MAGICBOT_COMPUTER_TOKEN
-  // The MagicBot harness sends this as a Bearer token on every request.
+  // The MagicBots harness sends this as a Bearer token on every request.
   "vars": {}
 }

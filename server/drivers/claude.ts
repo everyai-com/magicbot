@@ -5,21 +5,22 @@
 // continues across turns via --resume <sessionId> (the resumeCursor).
 //
 // Integrations become MCP servers on the CLI:
-//   - Composio Connect (connected apps → tools) over streamable HTTP
+//   - Composio Sessions (connected apps → tools) over streamable HTTP
 //   - the bot's cloud computer (box.ascii.dev) via server/computer-proxy.ts
 //     — screenshot/exec/open_url, the CUA-on-the-box bridge
-import { spawn } from "node:child_process";
-import { execFile } from "node:child_process";
-import { existsSync, unlinkSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { createServer as createNetServer } from "node:net";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
 
-import { DATA_DIR } from "../config.ts";
+import { DATA_DIR, stripWorkspaceCredentialEnv } from "../config.ts";
+import { augmentedPath } from "../env-path.ts";
+import { brokerSocketPath, describeSpawnFailure, execCli, killCliTree, spawnCli } from "../procs.ts";
 
 import type {
   DriverCreateInput,
+  ModelCatalog,
   ProviderDriver,
   ProviderInstance,
   ProviderSnapshot,
@@ -27,8 +28,66 @@ import type {
   RuntimeEventListener,
   SendTurnInput,
 } from "../contracts.ts";
+import { computerProxyEnv } from "../container-computer.ts";
 import { newEventId, newId } from "../contracts.ts";
+import { classifyError, computeBackoff, interruptibleDelay, RETRY_MAX_ATTEMPTS } from "./retry.ts";
+import {
+  applyClaudeInject,
+  decodeInjectId,
+  mergeLocalInject,
+  probeLocalInjects,
+  resolveInjectId,
+} from "./local-inject.ts";
 import { appendNative } from "./native.ts";
+import { SPAWNED_PROXIES } from "../proxy-paths.ts";
+
+/** Whether `claude` has been signed in.
+ *
+ * Credential storage is deliberately not inspected here. Claude Code uses the
+ * macOS Keychain for OAuth, a JSON file on some platforms, and may gain other
+ * backends over time. Presence checks also accept stale credentials. The CLI's
+ * own machine-readable auth command is the source of truth for every backend.
+ */
+export function claudeSignedIn(
+  cli: string,
+  env: NodeJS.ProcessEnv,
+  run: typeof execCli = execCli,
+): Promise<boolean> {
+  return new Promise((resolve) => {
+    run(cli, ["auth", "status", "--json"], { timeout: 8000, env }, (_error, stdout) => {
+      try {
+        const status: unknown = JSON.parse(stdout);
+        resolve(
+          typeof status === "object" && status !== null && "loggedIn" in status && status.loggedIn === true,
+        );
+      } catch {
+        resolve(false);
+      }
+    });
+  });
+}
+
+/** The CLI environment shared by auth probes and real turns.
+ *
+ * Subscription users can be billed pay-as-you-go if an inherited API key
+ * leaks through, and a nested CLI must not inherit this session's identity.
+ * Keeping the probe and turn environments identical prevents setup from
+ * claiming an API-key login that the turn itself would deliberately remove.
+ */
+function claudeEnvironment(
+  model?: string | null,
+  source: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...source, PATH: augmentedPath(), NPM_CONFIG_LOGLEVEL: "error" };
+  delete env.CLAUDECODE;
+  delete env.CLAUDE_CODE_ENTRYPOINT;
+  // The harness process may hold workspace credentials (xai/box/voice keys,
+  // env-injected at boot); none of them are this CLI's to see.
+  stripWorkspaceCredentialEnv(env);
+  const applied = applyClaudeInject(env, model);
+  if (!applied.injected) delete env.ANTHROPIC_API_KEY;
+  return env;
+}
 
 const DRIVER_KIND = "claudeAgent";
 
@@ -38,7 +97,7 @@ export interface ClaudeConfig {
 }
 
 // model catalog ported from upstream packages/contracts/src/model.ts
-const MODELS = {
+export const STATIC_CLAUDE_MODELS: ModelCatalog = {
   default: "claude-sonnet-5",
   options: [
     { id: "claude-fable-5", label: "Claude Fable 5" },
@@ -48,15 +107,79 @@ const MODELS = {
   ],
 };
 
-// proxy entry files live next to this one as .ts in dev (node type
-// stripping) and .js in the compiled dist-server the packaged app ships
-const proxyPath = (basename: string) => {
-  const ts = join(dirname(fileURLToPath(import.meta.url)), "..", `${basename}.ts`);
-  return existsSync(ts) ? ts : ts.replace(/\.ts$/, ".js");
-};
-const PROXY_PATH = proxyPath("computer-proxy");
-const CF_PROXY_PATH = proxyPath("cf-computer-proxy");
-const PERM_PROXY_PATH = proxyPath("permission-proxy");
+const CLAUDE_MODEL_ID = /^[a-z0-9][a-z0-9._:/-]*$/i;
+
+/** Rewrite a leftover API slug (`orcarouter/Qwen…`) to `host::model` when a
+ *  local host is serving it, so the turn injects instead of asking for /login.
+ *  Official cloud ids and already-encoded inject ids skip the probe. */
+async function resolveClaudeTurnModel(
+  model: string | null | undefined,
+  env: Record<string, string | undefined>,
+): Promise<string | null | undefined> {
+  if (!model || decodeInjectId(model) || STATIC_CLAUDE_MODELS.options.some((option) => option.id === model)) {
+    return model;
+  }
+  return resolveInjectId(model, await probeLocalInjects(env)) ?? model;
+}
+
+function claudeConfigDir(env: Record<string, string | undefined>): string {
+  if (env.CLAUDE_CONFIG_DIR) return env.CLAUDE_CONFIG_DIR;
+  return join(env.HOME || env.USERPROFILE || homedir(), ".claude");
+}
+
+function extrasFromUnknown(value: unknown): Array<{ id: string; label: string }> {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    if (typeof item === "string") {
+      return CLAUDE_MODEL_ID.test(item) ? [{ id: item, label: item }] : [];
+    }
+    if (!item || typeof item !== "object") return [];
+    const row = item as { id?: unknown; model?: unknown; slug?: unknown; name?: unknown; displayName?: unknown; label?: unknown };
+    const id = [row.id, row.model, row.slug].find((candidate): candidate is string => typeof candidate === "string");
+    if (!id || !CLAUDE_MODEL_ID.test(id)) return [];
+    const label = [row.name, row.displayName, row.label].find((candidate): candidate is string => typeof candidate === "string");
+    return [{ id, label: label || id }];
+  });
+}
+
+/** Extra ids from ~/.claude/settings.json. Official cloud rows stay untagged.
+ *  `model` is Claude Code's last-used slug, not a catalog — listing it as
+ *  Custom put a non-inject id in the picker and the turn then had no
+ *  ANTHROPIC_API_KEY ("Not logged in · Please run /login"). Live injects
+ *  come from mergeLocalInject. */
+export function readClaudeModelCatalog(env: Record<string, string | undefined> = process.env) {
+  let settings: Record<string, unknown> = {};
+  try {
+    settings = JSON.parse(readFileSync(join(claudeConfigDir(env), "settings.json"), "utf8")) as Record<string, unknown>;
+  } catch {
+    return STATIC_CLAUDE_MODELS;
+  }
+
+  const extras = [
+    ...extrasFromUnknown(settings.availableModels),
+    ...extrasFromUnknown(settings.customModels),
+    ...extrasFromUnknown(settings.extraModels),
+  ];
+  const nestedEnv = settings.env && typeof settings.env === "object" ? (settings.env as Record<string, unknown>) : {};
+  const envModel = nestedEnv.ANTHROPIC_MODEL ?? env.ANTHROPIC_MODEL;
+  if (typeof envModel === "string") extras.push(...extrasFromUnknown([envModel]));
+
+  const options = STATIC_CLAUDE_MODELS.options.map((option) => ({ ...option }));
+  const seen = new Set(options.map((option) => option.id));
+  for (const extra of extras) {
+    if (seen.has(extra.id)) continue;
+    seen.add(extra.id);
+    options.push({ id: extra.id, label: extra.label, custom: true });
+  }
+  return { default: STATIC_CLAUDE_MODELS.default, options };
+}
+
+// Resolved from the server root, never relative to this file: bundling inlines
+// this module into an entry one directory up, so a `".."` here would climb too
+// far. See server/proxy-paths.ts.
+const PROXY_PATH = SPAWNED_PROXIES.computer;
+const PERM_PROXY_PATH = SPAWNED_PROXIES.permission;
+const DWEB_PROXY_PATH = SPAWNED_PROXIES.dweb;
 // in the packaged app process.execPath is the Electron binary — this env
 // makes it behave as plain node for the spawned MCP proxies (harmless in dev)
 const NODE_ENV_FLAG = { ELECTRON_RUN_AS_NODE: "1" };
@@ -75,10 +198,22 @@ interface Ask {
   input: Record<string, unknown>;
   at: number;
 }
+type AskBehavior = "allow" | "deny" | "answer";
+type AskResolutionSource = "user" | "timeout" | "system";
 
 const DENY_TIMEOUT_NOTE =
-  "MagicBot: nobody answered this permission request in time. Skip this action and finish what you can without it.";
-const QUESTION_TIMEOUT_NOTE = "MagicBot: nobody answered in time. Use your best judgment and continue.";
+  "OpenMausBot: nobody answered this permission request in time. Skip this action and finish what you can without it.";
+const QUESTION_TIMEOUT_NOTE = "OpenMausBot: nobody answered in time. Use your best judgment and continue.";
+const DUPLICATE_ASK_ID_NOTE = "OpenMausBot: duplicate ask id — skipping this request.";
+
+/** The system-source reply for an ask that outlives the turn — used both to
+ * drain in-flight `pending` asks on close() and to answer one that arrives
+ * on an already-closed broker (see the `closed` branch below). */
+function systemEndedReply(kind: Ask["kind"]): { behavior: AskBehavior; message: string } {
+  return kind === "question"
+    ? { behavior: "answer", message: "OpenMausBot: the turn is ending — wrap up." }
+    : { behavior: "deny", message: "OpenMausBot: the turn ended" };
+}
 
 /** One human-readable line for an ask — what the card subtitle shows. */
 function askSummary(ask: Ask): string {
@@ -90,19 +225,41 @@ function askSummary(ask: Ask): string {
   return text === "{}" ? (ask.tool ?? "tool") : text.slice(0, 200);
 }
 
-function permissionSocketPath(threadId: string) {
-  const tag = threadId.replace(/[^\w-]/g, "").slice(0, 8);
-  return join(DATA_DIR, `perm-${tag}.sock`);
+export function permissionSocketPath(threadId: string) {
+  // A readable prefix alone is not unique: ids that agree on their first
+  // characters ("t-perm-dup-1", "t-perm-dup-2") would share a socket. POSIX
+  // hides that — a new broker's listen replaces the socket FILE, so the name
+  // always points at the fresh server — but Windows named pipes live in a
+  // global namespace that is never unlinked, and a reused name races the
+  // previous broker's async teardown. Half the tag is a digest of the FULL
+  // id so distinct threads get distinct sockets; the tag stays at 8 chars
+  // total because the POSIX path already brushes the 104-byte sun_path
+  // limit under deep tmp home dirs.
+  const prefix = threadId.replace(/[^\w-]/g, "").slice(0, 4);
+  const digest = createHash("sha256").update(threadId).digest("hex").slice(0, 4);
+  return brokerSocketPath(DATA_DIR, `${prefix}${digest}`);
 }
 
 function createPermissionBroker(opts: {
   socketPath: string;
   onAsk: (ask: Ask) => void;
-  onResolve: (resolved: Ask & { behavior: string; source: string }) => void;
+  onResolve: (resolved: Ask & { behavior: AskBehavior; source: AskResolutionSource }) => void;
+  isActive?: () => boolean;
   timeoutMs?: number;
 }) {
   const timeoutMs = opts.timeoutMs ?? 15 * 60_000;
-  const pending = new Map<string, { ask: Ask; finish: (behavior: string, message: string | undefined, source: string) => void }>();
+  const pending = new Map<
+    string,
+    { ask: Ask; finish: (behavior: AskBehavior, message: string | undefined, source: AskResolutionSource) => void }
+  >();
+  // server.close() only stops accepting NEW connections — it does not touch
+  // a connection that's already open. A still-alive child's MCP proxy can
+  // keep sending asks on such a connection after the turn has ended, and
+  // this handler stays fully wired to it. Without this flag those asks would
+  // become new `pending` entries and `request.opened` cards for a turn the
+  // driver already forgot (`active.delete(threadId)` already ran), which can
+  // never be answered — the "zombie card" in issue #211.
+  let closed = false;
   try {
     unlinkSync(opts.socketPath);
   } catch {}
@@ -124,8 +281,44 @@ function createPermissionBroker(opts: {
         if (msg.t !== "ask") continue;
         const askId = String(msg.id ?? newId());
         const kind = msg.kind === "question" ? ("question" as const) : ("permission" as const);
+        if (closed) {
+          // Closure is terminal and takes precedence over every active-turn
+          // rule, including duplicate-id rejection. Never register a pending
+          // entry or notify onAsk, but always answer an existing connection:
+          // permission-proxy.ts only resolves on an explicit answer (or a
+          // connection error/close), so a silent drop would hang the tool.
+          try {
+            conn.write(JSON.stringify({ t: "answer", id: askId, ...systemEndedReply(kind) }) + "\n");
+          } catch {}
+          continue;
+        }
+        // A retained Claude process keeps its proxy connection between
+        // turns. Late/background asks must still fail closed without opening
+        // a card for a turn that has already settled.
+        if (opts.isActive && !opts.isActive()) {
+          try {
+            conn.write(JSON.stringify({ t: "answer", id: askId, ...systemEndedReply(kind) }) + "\n");
+          } catch {}
+          continue;
+        }
+        // `pending` is server-scoped, not per-connection: two asks with the
+        // same id — a buggy/adversarial client, never a legitimate retry
+        // (permission-proxy mints a fresh randomUUID per ask) — would
+        // otherwise let the second `pending.set` silently overwrite the
+        // first, orphaning it as an unanswerable card once the first
+        // resolves and deletes the shared key. Reject before either ask
+        // becomes visible to onAsk.
+        if (pending.has(askId)) {
+          // askId is client-controlled; JSON.stringify escapes newlines and
+          // control characters so it can't corrupt the log line or terminal.
+          console.error(`permission broker on ${opts.socketPath}: duplicate ask id ${JSON.stringify(askId)} — denying`);
+          try {
+            conn.write(JSON.stringify({ t: "answer", id: askId, behavior: "deny", message: DUPLICATE_ASK_ID_NOTE }) + "\n");
+          } catch {}
+          continue;
+        }
         const ask: Ask = { id: askId, kind, tool: msg.tool ?? "tool", input: msg.input ?? {}, at: Date.now() };
-        const finish = (behavior: string, message: string | undefined, source: string) => {
+        const finish = (behavior: AskBehavior, message: string | undefined, source: AskResolutionSource) => {
           if (!pending.delete(askId)) return;
           clearTimeout(timer);
           try {
@@ -146,22 +339,33 @@ function createPermissionBroker(opts: {
       }
     });
   });
-  server.on("error", () => {});
+  // A broker that never came up used to be silent — every approval then
+  // timed out into a deny nobody could explain. Keep the turn fail-closed,
+  // but leave an actionable diagnostic.
+  server.on("error", (error) => {
+    console.error(`permission broker unavailable on ${opts.socketPath}: ${error.message}`);
+  });
   server.listen(opts.socketPath);
+  const drain = () => {
+    for (const p of [...pending.values()]) {
+      const { behavior, message } = systemEndedReply(p.ask.kind);
+      p.finish(behavior, message, "system");
+    }
+  };
   return {
-    answer(askId: string, behavior: string, message?: string): boolean {
+    answer(askId: string, behavior: AskBehavior, message?: string): boolean {
       const p = pending.get(askId);
       if (!p) return false;
-      const valid = p.ask.kind === "question" ? ["answer"] : ["allow", "deny"];
-      if (!valid.includes(behavior)) return false;
+      if (p.ask.kind === "question" ? behavior !== "answer" : behavior === "answer") return false;
       p.finish(behavior, message, "user");
       return true;
     },
+    pause() {
+      drain();
+    },
     close() {
-      for (const p of [...pending.values()]) {
-        if (p.ask.kind === "question") p.finish("answer", "MagicBot: the turn is ending — wrap up.", "shutdown");
-        else p.finish("deny", "MagicBot: the turn ended", "shutdown");
-      }
+      closed = true;
+      drain();
       try {
         server.close();
       } catch {}
@@ -198,15 +402,111 @@ function firstText(content: unknown): string {
 export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
   driverKind: DRIVER_KIND,
   metadata: { displayName: "Claude", supportsMultipleInstances: true },
-  models: MODELS,
+  // npm on all three: the one recipe that is genuinely cross-platform. The
+  // native installers differ per OS and would need verifying separately.
+  install: {
+    command: {
+      darwin: "npm install -g @anthropic-ai/claude-code",
+      linux: "npm install -g @anthropic-ai/claude-code",
+      win32: "npm install -g @anthropic-ai/claude-code",
+    },
+    needsNode: true,
+    docsUrl: "https://claude.com/claude-code",
+    signInCommand: "claude",
+  },
+  models: STATIC_CLAUDE_MODELS,
   decodeConfig,
   defaultConfig: () => decodeConfig({}),
 
   async create(input: DriverCreateInput<ClaudeConfig>): Promise<ProviderInstance> {
     const { instanceId, config } = input;
+    const catalogEnv: Record<string, string | undefined> = { ...process.env, ...input.environment };
+    let models = STATIC_CLAUDE_MODELS;
+    const refreshModels = async () => {
+      try {
+        const resolved = await mergeLocalInject(readClaudeModelCatalog(catalogEnv), catalogEnv);
+        if (resolved.options.length) models = resolved;
+      } catch {
+        // Keep the last usable catalog when settings.json is unreadable.
+      }
+    };
+    await refreshModels();
     const listeners = new Set<RuntimeEventListener>();
     // one active turn per thread; a second send while busy is a caller bug
     const active = new Map<string, { stop: () => void; turnId: string; broker?: ReturnType<typeof createPermissionBroker> }>();
+
+    // One live CLI process per thread, kept across turns. Under
+    // --input-format stream-json the CLI settles a turn with `result` while
+    // stdin stays open, takes the next user message on the same stdin as a
+    // new turn, and folds a message that arrives MID-turn into the running
+    // one before its next model call (verified against 2.1.221 — that fold
+    // is what "steer" is). So a session is spawned once, reused while its
+    // spawn contract (args, MCP config, cwd, model) is unchanged, closed
+    // after SESSION_IDLE_MS of quiet, and resumed by --resume when needed.
+    interface Session {
+      child: ReturnType<typeof spawnCli>;
+      broker?: ReturnType<typeof createPermissionBroker>;
+      mcpConfigPath: string | null;
+      /** the spawn contract — a different one means a fresh process */
+      argsKey: string;
+      /** the CLI's session id from `init`, what --resume takes later */
+      sessionId: string | null;
+      /** the running turn, or null between turns */
+      turn: { turnId: string; settled: boolean; sawStreamDelta: boolean } | null;
+      idleTimer: ReturnType<typeof setTimeout> | null;
+      closing: boolean;
+      stderr: string;
+    }
+    const sessions = new Map<string, Session>();
+    const configuredIdleMinimum = Number(process.env.OMB_CLAUDE_SESSION_IDLE_MIN_MS);
+    const sessionIdleMinimum = Number.isFinite(configuredIdleMinimum) && configuredIdleMinimum > 0
+      ? configuredIdleMinimum
+      : 10_000;
+    const SESSION_IDLE_MS = Math.max(sessionIdleMinimum, Number(process.env.OMB_CLAUDE_SESSION_IDLE_MS) || 10 * 60_000);
+
+    const closeSession = (threadId: string, why: string) => {
+      const s = sessions.get(threadId);
+      if (!s || s.closing) return;
+      s.closing = true;
+      if (s.idleTimer) clearTimeout(s.idleTimer);
+      // Broker ownership belongs to this session. Detach and close it now,
+      // before a replacement can bind the same per-thread socket; the old
+      // child's later close event must never unlink a new broker.
+      const broker = s.broker;
+      s.broker = undefined;
+      broker?.close();
+      appendNative(threadId, { dir: "out", source: "claude.session", msg: { close: why } });
+      // stdin EOF is the CLI's exit signal; give it a moment, then insist
+      try {
+        s.child.stdin.end();
+      } catch {}
+      const kill = setTimeout(() => {
+        if (s.child.exitCode === null) killCliTree(s.child);
+      }, 5_000);
+      kill.unref?.();
+    };
+    const armIdle = (threadId: string) => {
+      const s = sessions.get(threadId);
+      if (!s) return;
+      if (s.idleTimer) clearTimeout(s.idleTimer);
+      s.idleTimer = setTimeout(() => closeSession(threadId, "idle"), SESSION_IDLE_MS);
+      s.idleTimer.unref?.();
+    };
+    const writeUser = (s: Session, threadId: string, text: string): Promise<boolean> => {
+      const promptMsg = { type: "user", message: { role: "user", content: text } };
+      if (!s.child.stdin.writable || s.child.stdin.destroyed) return Promise.resolve(false);
+      return new Promise((resolve) => {
+        try {
+          s.child.stdin.write(JSON.stringify(promptMsg) + "\n", (error) => {
+            if (error) return resolve(false);
+            appendNative(threadId, { dir: "out", source: "claude.sdk.message", msg: promptMsg });
+            resolve(true);
+          });
+        } catch {
+          resolve(false);
+        }
+      });
+    };
 
     const emit = (event: RuntimeEvent) => {
       for (const l of [...listeners]) l(event);
@@ -218,11 +518,25 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       turnId,
       createdAt: new Date().toISOString(),
     });
+    // retry bookkeeping lives PER THREAD, not per sendTurn call: a relaunch
+    // is a fresh sendTurn, and the attempt cap must survive across launches
+    const retryState = new Map<string, { attempt: number; cancelled: boolean }>();
 
     const sendTurn = async (turn: SendTurnInput) => {
       const { threadId } = turn;
       if (active.has(threadId)) throw new Error("a turn is already running on this thread");
+      const controlsHost = turn.integrations?.localComputer?.scope === "local-computer";
+      if (controlsHost && config.permissionMode === "bypassPermissions") {
+        throw new Error("local computer control requires the interactive approval broker");
+      }
       const turnId = newId();
+      const retryAbort = new AbortController();
+      const retry = retryState.get(threadId) ?? { attempt: 0, cancelled: false };
+      retry.cancelled = false;
+      retryState.set(threadId, retry);
+      // a retry relaunches the whole CLI; the backoff is scaled down in tests
+      // so a fake's transient failures don't stall real seconds
+      const retryScale = Number(process.env.FAKE_CLAUDE_RETRY_SCALE ?? "1");
       const sessionId = typeof turn.resumeCursor === "string" ? turn.resumeCursor : null;
       const newSessionId = sessionId ? null : newId();
 
@@ -231,109 +545,213 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
         "--output-format", "stream-json",
         "--input-format", "stream-json",
         "--verbose", // required by stream-json output
+        // token-level streaming: content_block_delta events between the
+        // whole-message frames, so the bubble grows as the model writes
+        "--include-partial-messages",
         "--permission-mode", config.permissionMode === "auto" ? "acceptEdits" : config.permissionMode,
       ];
-      if (sessionId) args.push("--resume", sessionId);
-      else args.push("--session-id", newSessionId!);
-      if (turn.model) args.push("--model", turn.model);
+      const turnEnvironment: NodeJS.ProcessEnv = { ...process.env, ...input.environment };
+      const turnModel = await resolveClaudeTurnModel(turn.model, turnEnvironment);
+      const injected = applyClaudeInject({ ...turnEnvironment }, turnModel);
+      if (injected.model) args.push("--model", injected.model);
+      if (turn.effort) args.push("--effort", turn.effort);
       if (turn.system) args.push("--append-system-prompt", turn.system);
 
       // integrations → MCP servers; pre-allow their tools (a headless
       // acceptEdits run silently denies anything unlisted)
       const mcpServers: Record<string, unknown> = {};
       const allowed: string[] = [];
-      if (turn.integrations?.composio?.key) {
-        mcpServers.composio = {
-          type: "http",
-          url: turn.integrations.composio.url || "https://connect.composio.dev/mcp",
-          headers: { "x-consumer-api-key": turn.integrations.composio.key },
-        };
+      if (turn.integrations?.composio) {
+        mcpServers.composio = { ...turn.integrations.composio };
         allowed.push("mcp__composio");
       }
-      if (turn.integrations?.cfComputer) {
-        // the MagicBot cloud computer (Cloudflare Sandbox) — same "computer"
-        // MCP name as the box/local paths, the agent just sees a computer
-        mcpServers.computer = {
-          command: process.execPath,
-          args: [CF_PROXY_PATH],
-          env: {
-            ...NODE_ENV_FLAG,
-            MGB_CF_URL: turn.integrations.cfComputer.url,
-            MGB_CF_TOKEN: turn.integrations.cfComputer.token,
-            MGB_CF_BOT_ID: turn.integrations.cfComputer.botId,
-          },
-        };
-        allowed.push("mcp__computer");
-      } else if (turn.integrations?.computer) {
+      if (turn.integrations?.computer) {
         mcpServers.computer = {
           command: process.execPath,
           args: [PROXY_PATH],
-          env: {
-            ...NODE_ENV_FLAG,
-            OGB_BOX_ID: turn.integrations.computer.boxId,
-            OGB_BOX_TOKEN: turn.integrations.computer.token,
-          },
+          env: { ...NODE_ENV_FLAG, ...computerProxyEnv(turn.integrations.computer) },
         };
         allowed.push("mcp__computer");
+      } else if (turn.integrations?.localComputer) {
+        const local = turn.integrations.localComputer;
+        mcpServers.computer = {
+          command: local.command,
+          args: local.args,
+          env: local.env,
+        };
+        // The isolated Local VM preserves the established pre-allow behavior.
+        // Host tools always route through OpenMausBot's permission broker.
+        if (!controlsHost) allowed.push("mcp__computer");
+      }
+      // peer-agent comms (list_bots/ask_bot) — the harness builds the whole
+      // spawn contract (command/args/env incl. the boot token) in
+      // agentsIntegration(); pre-allowing matters doubly here, or the CLI's
+      // own ListAgents look-alike shadows it and "@Bot" asks go nowhere
+      if (turn.integrations?.agents) {
+        mcpServers.agents = { ...turn.integrations.agents };
+        allowed.push("mcp__agents");
+      }
+      if (turn.integrations?.phone) {
+        mcpServers.phone = { ...turn.integrations.phone };
+        allowed.push("mcp__phone");
+      }
+      // dweb network daemon (status / repo / opencode model access) via
+      // server/drivers/dweb-proxy.ts — points at the configured dweb instance
+      if (turn.integrations?.dweb) {
+        mcpServers.dweb = {
+          command: process.execPath,
+          args: [DWEB_PROXY_PATH],
+          env: {
+            ...NODE_ENV_FLAG,
+            DWEB_URL: turn.integrations.dweb.url,
+          },
+        };
+        allowed.push("mcp__dweb");
       }
       // permission broker: anything acceptEdits would silently deny becomes
       // an Allow/Deny card in chat, and the agent gets ask_user. Skipped in
       // bypassPermissions (fullAuto) — nothing would ever ask.
       let broker: ReturnType<typeof createPermissionBroker> | undefined;
+      let socketPath: string | null = null;
       if (config.permissionMode !== "bypassPermissions") {
-        const socketPath = permissionSocketPath(threadId);
+        socketPath = permissionSocketPath(threadId);
+        args.push("--permission-prompt-tool", "mcp__ogb__approve");
+        mcpServers.ogb = { command: process.execPath, args: [PERM_PROXY_PATH, socketPath], env: { ...NODE_ENV_FLAG } };
+        allowed.push("mcp__ogb");
+      }
+      // The MCP config carries credentials — a Composio consumer key in a
+      // header, the box token in the computer proxy's env, the comms token in
+      // the agents proxy's env. On argv every one of those is world-readable
+      // through `ps` for the life of the turn, to any local process. The CLI
+      // accepts a FILE for this flag, so the secrets go in a 0600 file that
+      // is removed when the turn settles.
+      let mcpConfigPath: string | null = null;
+      if (Object.keys(mcpServers).length) {
+        mcpConfigPath = join(mkdtempSync(join(tmpdir(), "omb-mcp-")), "mcp.json");
+        writeFileSync(mcpConfigPath, JSON.stringify({ mcpServers }), { mode: 0o600 });
+        args.push("--mcp-config", mcpConfigPath);
+        args.push("--allowedTools", allowed.join(","));
+      }
+
+      const env = claudeEnvironment(turnModel, turnEnvironment);
+      const cwd = turn.cwd ?? homedir();
+      // everything that shapes the process, minus session/turn specifics
+      // (the --mcp-config file is a fresh temp path each time; its CONTENT
+      // is what matters and mcpServers carries that)
+      const keyArgs = args.filter((a, i) => a !== "--mcp-config" && args[i - 1] !== "--mcp-config");
+      const argsKey = JSON.stringify({ args: keyArgs, mcpServers, cwd, model: injected.model ?? null, base: env.ANTHROPIC_BASE_URL ?? null });
+
+      // Reuse the live process when it is idle, unchanged, and is the session
+      // the harness wants resumed. Anything else: close it and spawn fresh
+      // (with --resume, so the conversation continues in the new process).
+      const live = sessions.get(threadId);
+      if (live && !live.turn && !live.closing && live.child.exitCode === null && live.argsKey === argsKey && (!sessionId || sessionId === live.sessionId)) {
+        if (live.idleTimer) clearTimeout(live.idleTimer);
+        live.turn = { turnId, settled: false, sawStreamDelta: false };
+        active.set(threadId, { stop: () => killCliTree(live.child), turnId, broker: live.broker });
+        emit({ ...base(threadId, turnId), type: "turn.started" });
+        const written = await writeUser(live, threadId, turn.text);
+        if (!written) {
+          active.delete(threadId);
+          live.turn = null;
+          closeSession(threadId, "stdin write failed");
+          throw new Error("claude session stdin is not writable");
+        }
+        // the MCP config was for the first spawn; nothing to clean here
+        if (mcpConfigPath) {
+          try {
+            rmSync(dirname(mcpConfigPath), { recursive: true, force: true });
+          } catch {}
+        }
+        return { turnId };
+      }
+      if (live) closeSession(threadId, "spawn contract changed");
+
+      // Only create a broker for a new process. A compatible retained process
+      // keeps its existing proxy connection and broker across turns.
+      if (socketPath) {
         broker = createPermissionBroker({
           socketPath,
-          onAsk: (ask) =>
+          isActive: () => Boolean(sessions.get(threadId)?.turn),
+          onAsk: (ask) => {
+            const eventTurnId = sessions.get(threadId)?.turn?.turnId ?? turnId;
             emit({
-              ...base(threadId, turnId),
+              ...base(threadId, eventTurnId),
               type: "request.opened",
               requestId: ask.id,
               requestType: ask.kind,
               tool: ask.tool,
               summary: askSummary(ask),
+              approvalScope: controlsHost ? "local-computer" : undefined,
               choices: Array.isArray(ask.input?.choices) ? (ask.input.choices as string[]).slice(0, 5) : undefined,
-            }),
-          onResolve: (resolved) =>
+            });
+          },
+          onResolve: (resolved) => {
+            const eventTurnId = sessions.get(threadId)?.turn?.turnId ?? turnId;
             emit({
-              ...base(threadId, turnId),
+              ...base(threadId, eventTurnId),
               type: "request.resolved",
               requestId: resolved.id,
               behavior: resolved.behavior,
               source: resolved.source,
-            }),
+              approvalScope: controlsHost ? "local-computer" : undefined,
+            });
+          },
         });
-        args.push("--permission-prompt-tool", "mcp__ogb__approve");
-        mcpServers.ogb = { command: process.execPath, args: [PERM_PROXY_PATH, socketPath], env: { ...NODE_ENV_FLAG } };
-        allowed.push("mcp__ogb");
       }
-      if (Object.keys(mcpServers).length) {
-        args.push("--mcp-config", JSON.stringify({ mcpServers }));
-        args.push("--allowedTools", allowed.join(","));
-      }
+      if (sessionId) args.push("--resume", sessionId);
+      else args.push("--session-id", newSessionId!);
 
-      const env: Record<string, string | undefined> = { ...process.env, NPM_CONFIG_LOGLEVEL: "error" };
-      // subscription users get billed pay-as-you-go if this leaks through;
-      // and a nested CLI must not inherit this session's identity (agentcal)
-      delete env.ANTHROPIC_API_KEY;
-      delete env.CLAUDECODE;
-      delete env.CLAUDE_CODE_ENTRYPOINT;
-
-      const child = spawn(config.cli, args, {
-        cwd: turn.cwd ?? homedir(),
+      const child = spawnCli(config.cli, args, {
+        cwd,
         env,
         stdio: ["pipe", "pipe", "pipe"],
-        detached: true, // own process group: killing -pid reaps child MCP servers
       });
-
-      let settled = false;
-      const settle = (ok: boolean, stopReason: string | null, cost: number | null = null) => {
-        if (settled) return;
-        settled = true;
-        broker?.close();
-        active.delete(threadId);
-        emit({ ...base(threadId, turnId), type: "turn.completed", ok, stopReason, cost });
+      const session: Session = {
+        child,
+        broker,
+        mcpConfigPath,
+        argsKey,
+        sessionId: sessionId ?? newSessionId,
+        turn: { turnId, settled: false, sawStreamDelta: false },
+        idleTimer: null,
+        closing: false,
+        stderr: "",
       };
+      sessions.set(threadId, session);
+
+      // settles the TURN, not the process: the CLI stays for the next
+      // message until it has been quiet for SESSION_IDLE_MS
+      const settle = (
+        ok: boolean,
+        stopReason: string | null,
+        cost: number | null = null,
+        usage?: { input: number; output: number },
+      ) => {
+        const t = session.turn;
+        if (!t || t.settled) return;
+        t.settled = true;
+        // Resolve any ask still open for this turn, but keep the broker
+        // listening for the next turn on the retained process. Between turns
+        // isActive() rejects late background asks without creating cards.
+        session.broker?.pause();
+        // the config file holds live credentials — the CLI read it at start;
+        // it must not sit on disk for the life of the session
+        if (session.mcpConfigPath) {
+          try {
+            rmSync(dirname(session.mcpConfigPath), { recursive: true, force: true });
+          } catch {}
+          session.mcpConfigPath = null;
+        }
+        active.delete(threadId);
+        session.turn = null;
+        // A settled turn owns no retry budget. Retained CLI sessions may run
+        // many later turns on this thread, and each must start fresh.
+        retryState.delete(threadId);
+        emit({ ...base(threadId, t.turnId), type: "turn.completed", ok, stopReason, cost, ...(usage ? { usage } : {}) });
+        if (session.child.exitCode === null && !session.closing) armIdle(threadId);
+      };
+      const currentTurnId = () => session.turn?.turnId ?? turnId;
 
       const handleLine = (line: string) => {
         let o: any;
@@ -346,26 +764,46 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
         switch (o.type) {
           case "system":
             if (o.subtype === "init") {
-              emit({ ...base(threadId, turnId), type: "session.started", sessionId: o.session_id, model: o.model });
+              if (typeof o.session_id === "string") session.sessionId = o.session_id;
+              emit({ ...base(threadId, currentTurnId()), type: "session.started", sessionId: o.session_id, model: o.model });
             } else if (o.subtype === "thinking_tokens") {
-              emit({ ...base(threadId, turnId), type: "item.updated", itemType: "reasoning", tokens: o.estimated_tokens });
+              emit({ ...base(threadId, currentTurnId()), type: "item.updated", itemType: "reasoning", tokens: o.estimated_tokens });
             }
             break;
+          case "stream_event": {
+            // subagent narration is dropped — N parallel Tasks would
+            // interleave their prose into one bubble (upstream-verified bug)
+            if (o.parent_tool_use_id) break;
+            const ev = o.event ?? {};
+            if (ev.type !== "content_block_delta") break;
+            const d = ev.delta ?? {};
+            if (d.type === "text_delta" && typeof d.text === "string" && d.text) {
+              if (session.turn) session.turn.sawStreamDelta = true;
+              emit({ ...base(threadId, currentTurnId()), type: "content.delta", streamKind: "assistant_text", delta: d.text });
+            } else if (d.type === "thinking_delta" && typeof d.thinking === "string" && d.thinking) {
+              emit({ ...base(threadId, currentTurnId()), type: "content.delta", streamKind: "reasoning_text", delta: d.thinking });
+            }
+            break;
+          }
           case "assistant": {
             const msg = o.message ?? {};
             const text = firstText(msg.content);
             if (text.trim()) {
-              emit({ ...base(threadId, turnId), type: "content.delta", streamKind: "assistant_text", delta: text });
-              emit({ ...base(threadId, turnId), type: "item.completed", itemType: "assistant_text", text });
+              // fallback delta for CLIs/paths that never streamed the block
+              if (!session.turn?.sawStreamDelta) {
+                emit({ ...base(threadId, currentTurnId()), type: "content.delta", streamKind: "assistant_text", delta: text });
+              }
+              if (session.turn) session.turn.sawStreamDelta = false;
+              emit({ ...base(threadId, currentTurnId()), type: "item.completed", itemType: "assistant_text", text });
             }
             for (const b of Array.isArray(msg.content) ? msg.content : []) {
               if (b.type === "tool_use") {
-                emit({ ...base(threadId, turnId), type: "item.started", itemType: "tool", itemId: b.id, title: b.name });
+                emit({ ...base(threadId, currentTurnId()), type: "item.started", itemType: "tool", itemId: b.id, title: b.name });
               }
             }
             if (msg.usage) {
               emit({
-                ...base(threadId, turnId),
+                ...base(threadId, currentTurnId()),
                 type: "thread.token-usage.updated",
                 input: (msg.usage.input_tokens || 0) + (msg.usage.cache_read_input_tokens || 0),
                 output: msg.usage.output_tokens || 0,
@@ -376,17 +814,33 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
           case "user":
             for (const b of Array.isArray(o.message?.content) ? o.message.content : []) {
               if (b.type === "tool_result") {
-                emit({ ...base(threadId, turnId), type: "item.completed", itemType: "tool", itemId: b.tool_use_id, ok: !b.is_error });
+                emit({ ...base(threadId, currentTurnId()), type: "item.completed", itemType: "tool", itemId: b.tool_use_id, ok: !b.is_error });
               }
             }
             break;
           case "result":
-            settle(o.is_error !== true, o.stop_reason ?? o.terminal_reason ?? null, o.total_cost_usd ?? null);
+            // result.usage is this invocation's total — one process per turn,
+            // so it is the turn's figure. cache reads count as input: they
+            // are billed (at the cache rate) and they fill the window.
+            settle(
+              o.is_error !== true,
+              o.stop_reason ?? o.terminal_reason ?? null,
+              o.total_cost_usd ?? null,
+              o.usage
+                ? {
+                    input: (o.usage.input_tokens || 0) + (o.usage.cache_read_input_tokens || 0) + (o.usage.cache_creation_input_tokens || 0),
+                    output: o.usage.output_tokens || 0,
+                  }
+                : undefined,
+            );
             break;
         }
       };
 
       let buf = "";
+      // decode as UTF-8 across chunk boundaries — a raw `buf += chunk` splits
+      // multibyte characters that straddle two reads and corrupts the text
+      child.stdout.setEncoding("utf8");
       child.stdout.on("data", (chunk) => {
         buf += chunk;
         let nl;
@@ -397,58 +851,154 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
         }
       });
 
-      let stderr = "";
       child.stderr.on("data", (c) => {
-        stderr += c;
-        if (stderr.length > 8192) stderr = stderr.slice(-8192);
+        session.stderr += c;
+        if (session.stderr.length > 8192) session.stderr = session.stderr.slice(-8192);
       });
 
       child.on("error", (e) => {
-        emit({ ...base(threadId, turnId), type: "runtime.error", message: `spawn failed: ${e.message}` });
+        emit({ ...base(threadId, currentTurnId()), type: "runtime.error", ...describeSpawnFailure(e, config.cli) });
         settle(false, "spawn_error");
       });
 
       child.on("close", (code) => {
-        if (!settled) {
+        // a turn still running when the process died is a failed turn; a
+        // process that exited between turns (idle close, contract change)
+        // is just a session ending
+        if (session.turn && !session.turn.settled) {
+          const message = `claude exited ${code} before result${session.stderr ? `: ${session.stderr.trim().slice(-300)}` : ""}`;
+          const verdict = classifyError({ exitCode: code, stderr: message });
+          if (
+            !retry.cancelled &&
+            code !== 0 &&
+            verdict.transient &&
+            !session.turn.sawStreamDelta &&
+            retry.attempt < RETRY_MAX_ATTEMPTS - 1
+          ) {
+            // the CLI is gone but the TURN continues: keep the thread busy,
+            // emit no terminal event, and relaunch after the backoff. The
+            // `active` entry STAYS — it is what makes an interrupt during
+            // the backoff reach this turn's stop() and cancel the retry.
+            const failedBroker = session.broker;
+            session.broker = undefined;
+            failedBroker?.pause();
+            failedBroker?.close();
+            if (session.mcpConfigPath) {
+              try {
+                rmSync(dirname(session.mcpConfigPath), { recursive: true, force: true });
+              } catch {}
+              session.mcpConfigPath = null;
+            }
+            sessions.delete(threadId);
+            session.turn = null;
+            retry.attempt++;
+            const delayMs = computeBackoff(retry.attempt - 1);
+            emit({
+              ...base(threadId, turnId),
+              type: "turn.retrying",
+              attempt: retry.attempt,
+              delayMs,
+              reason: verdict.reason,
+            });
+            void (async () => {
+              const wait = interruptibleDelay(delayMs * retryScale, retryAbort.signal);
+              await wait.promise;
+              // an interrupt during the backoff landed here via stop(); the
+              // turn settles as interrupted and no zombie relaunch happens
+              if (retry.cancelled) {
+                active.delete(threadId);
+                retryState.delete(threadId);
+                emit({
+                  ...base(threadId, turnId),
+                  type: "turn.completed",
+                  ok: false,
+                  stopReason: "interrupted",
+                  cost: null,
+                });
+                return;
+              }
+              // hand the thread back before recursing — the relaunch's own
+              // guard would otherwise reject it as "already running"
+              active.delete(threadId);
+              try {
+                const cursor = session.sessionId ?? sessionId ?? undefined;
+                await sendTurn({ ...turn, resumeCursor: cursor });
+              } catch (e) {
+                retryState.delete(threadId);
+                emit({
+                  ...base(threadId, turnId),
+                  type: "runtime.error",
+                  message: e instanceof Error ? e.message : String(e),
+                });
+                emit({
+                  ...base(threadId, turnId),
+                  type: "turn.completed",
+                  ok: false,
+                  stopReason: "exit_before_result",
+                  cost: null,
+                });
+              }
+            })();
+            return;
+          }
+          retryState.delete(threadId);
           emit({
-            ...base(threadId, turnId),
+            ...base(threadId, currentTurnId()),
             type: "runtime.error",
-            message: `claude exited ${code} before result${stderr ? `: ${stderr.trim().slice(-300)}` : ""}`,
+            message,
           });
           settle(false, "exit_before_result");
         }
+        if (session.idleTimer) clearTimeout(session.idleTimer);
+        session.broker?.close();
+        if (session.mcpConfigPath) {
+          try {
+            rmSync(dirname(session.mcpConfigPath), { recursive: true, force: true });
+          } catch {}
+        }
+        if (sessions.get(threadId) === session) sessions.delete(threadId);
       });
 
       const stop = () => {
-        try {
-          process.kill(-child.pid!, "SIGTERM");
-        } catch {
-          try {
-            child.kill("SIGTERM");
-          } catch {}
-        }
+        retry.cancelled = true;
+        retryAbort.abort();
+        killCliTree(child);
       };
       active.set(threadId, { stop, turnId, broker });
       emit({ ...base(threadId, turnId), type: "turn.started" });
 
-      // prompt over stdin as a stream-json message — never argv (ARG_MAX)
-      const promptMsg = { type: "user", message: { role: "user", content: turn.text } };
-      child.stdin.write(JSON.stringify(promptMsg) + "\n");
-      child.stdin.end();
-      appendNative(threadId, { dir: "out", source: "claude.sdk.message", msg: promptMsg });
+      // prompt over stdin as a stream-json message — never argv (ARG_MAX).
+      // stdin stays OPEN: that is what keeps the session alive for a
+      // mid-turn steer or the next turn; closeSession() ends it.
+      if (!(await writeUser(session, threadId, turn.text))) {
+        settle(false, "stdin_write_failed");
+        closeSession(threadId, "stdin write failed");
+      }
 
       return { turnId };
     };
 
+    /** A user message into the running turn: the CLI delivers it before its
+     * next model call. False when nothing is running here to steer. */
+    const steer = async (threadId: string, text: string): Promise<boolean> => {
+      const s = sessions.get(threadId);
+      if (!s || !s.turn || s.turn.settled || s.closing || s.child.exitCode !== null) return false;
+      return writeUser(s, threadId, text);
+    };
+
     const snapshot = async (): Promise<ProviderSnapshot> => {
+      const env = claudeEnvironment(undefined, { ...process.env, ...input.environment });
       const version = await new Promise<string | null>((resolve) => {
-        execFile(config.cli, ["--version"], { timeout: 8000 }, (err, stdout) =>
+        execCli(config.cli, ["--version"], { timeout: 8000, env }, (err, stdout) =>
           resolve(err ? null : stdout.trim()),
         );
       });
       if (!version) return { state: "unavailable", reason: `\`${config.cli}\` CLI not found` };
-      const authenticated = existsSync(join(homedir(), ".claude", ".credentials.json"));
-      return { state: "available", version, authenticated };
+      const authenticated = await claudeSignedIn(config.cli, env);
+      // claudeEnvironment strips ANTHROPIC_API_KEY, so turns run on the
+      // CLI's own login (Pro/Max): the cost it reports is what the call
+      // WOULD bill, not a charge
+      return { state: "available", version, authenticated, billing: "subscription" };
     };
 
     return {
@@ -456,24 +1006,40 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       driverKind: DRIVER_KIND,
       displayName: input.displayName,
       enabled: input.enabled,
-      models: MODELS,
+      get models() {
+        return models;
+      },
+      refreshModels,
       snapshot,
       adapter: {
         provider: DRIVER_KIND,
-        capabilities: { sessionModelSwitch: "in-session" },
+        capabilities: {
+          sessionModelSwitch: "in-session",
+          agentsMcp: true,
+          computerMcp: true,
+          composioMcp: true,
+          phoneMcp: true,
+          images: true,
+          effortLevels: ["low", "medium", "high", "xhigh", "max"],
+          queueing: true,
+          localComputerMcp: config.permissionMode !== "bypassPermissions",
+        },
         sendTurn,
+        steer,
         interruptTurn: async (threadId) => active.get(threadId)?.stop(),
         respondToRequest: async (threadId, requestId, decision) => {
-          const broker = active.get(threadId)?.broker;
-          if (!broker) throw new Error("no active turn with a permission broker on this thread");
+          // fail-closed by construction: no broker, or an ask that already
+          // timed out / settled, is `unavailable` — the caller denies
+          const broker = sessions.get(threadId)?.broker ?? active.get(threadId)?.broker;
+          if (!broker) return "unavailable";
           const behavior = decision.behavior === "answer" ? "answer" : decision.behavior;
-          if (!broker.answer(requestId, behavior, decision.message)) {
-            throw new Error("no such pending request (it may have timed out)");
-          }
+          if (!broker.answer(requestId, behavior, decision.message)) return "unavailable";
+          return behavior === "allow" ? "allowed-once" : behavior === "answer" ? "answered" : "rejected";
         },
         hasSession: (threadId) => active.has(threadId),
         stopAll: async () => {
           for (const { stop } of active.values()) stop();
+          for (const threadId of [...sessions.keys()]) closeSession(threadId, "stopAll");
         },
         onEvent: (listener) => {
           listeners.add(listener);
@@ -482,15 +1048,16 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       },
       generateText: (prompt: string) =>
         new Promise((resolve, reject) => {
-          execFile(
+          execCli(
             config.cli,
             ["-p", prompt, "--model", "claude-haiku-4-5", "--output-format", "text"],
-            { timeout: 60_000, env: { ...process.env } },
+            { timeout: 60_000, env: claudeEnvironment("claude-haiku-4-5") },
             (err, stdout) => (err ? reject(err) : resolve(stdout.trim())),
           );
         }),
       dispose: async () => {
         for (const { stop } of active.values()) stop();
+        for (const threadId of [...sessions.keys()]) closeSession(threadId, "dispose");
         listeners.clear();
       },
     };

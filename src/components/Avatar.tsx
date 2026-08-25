@@ -1,172 +1,276 @@
+// Bot avatar — a circular, expressive character wrapped in the app's
+// historical MausAvatar API so no call site changes. Per-bot color paints the
+// ring while live state drives the eyes, pose, and small ambient effects.
 import {
-  MAUS_COLORS,
-  type MausColor,
-  type MausExpression,
-} from "@/lib/mascot";
+  forwardRef,
+  memo,
+  useEffect,
+  useImperativeHandle,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
+import { MAUS_COLORS, type MausColor, type MausMotion, type MausState } from "@/lib/mascot";
+import { CircleBotAvatar, type CircleBotAvatarHandle } from "./CircleBotAvatar";
+import { botAvatarProfile, type BotAvatarCrop } from "../../shared/bot-avatar";
+import { normalizeBotPersonality, type BotPersonality } from "../../shared/bot-personality";
 
-// Exact SupaMaus mascot silhouette from the website's
-// components/v2/MascotSlot.js. The geometry and tilt remain faithful to that
-// source; app avatars use a larger borderless flat fill.
-const BODY =
-  "M93.4 40.6 L43 151.1 Q38 162 48.4 156 L91.4 131 Q100 126 108.7 131 L151.6 156 Q162 162 157 151.1 L106.6 40.6 Q100 26 93.4 40.6 Z";
+/**
+ * Legacy face-placement knobs from the Maus body era. The cursor mascot
+ * places its own face; these remain only so the preview harness's sliders
+ * keep compiling — the matching props are accepted and ignored.
+ */
+export const FACE_X = 80;
+export const FACE_Y = 102;
+export const FACE_SCALE = 0.47;
+export const EYE_SCALE = 1.12;
+export const MOUTH_WEIGHT = 11;
 
-const INK = "#10201b";
+/**
+ * How far the pointer may pull the eyes. Facing forward the full range is
+ * safe; with the expressions' authored gaze they already start off-centre.
+ */
+const POINTER_GAZE = { forward: 1, authored: 0.25 };
 
-function PillEye({
-  cx,
-  cy = 88,
-  width = 7,
-  height = 18,
-  angle = -12,
-}: {
-  cx: number;
-  cy?: number;
-  width?: number;
-  height?: number;
-  angle?: number;
-}) {
+/** Ambient pointer attention is deliberately low priority. Important product
+ * states keep their authored gaze instead of being interrupted by a cursor. */
+const POINTER_ATTENTION_STATES = new Set<MausState>([
+  "idle",
+  "happy",
+  "curious",
+  "bored",
+  "proud",
+  "shy",
+  "playful",
+  "drowsy",
+]);
+
+/**
+ * What a one-shot motion does while it plays: CursorAvatar animates the body
+ * per state, so borrowing the state for a beat moves body and face together.
+ */
+interface MotionFaces
+  extends Partial<
+    Record<Exclude<MausMotion, "none">, { state?: MausState; blink?: boolean; spin?: number }>
+  > {}
+
+const MOTION_FACE: MotionFaces = {
+  arrive: { state: "spawning", spin: 900 },
+  switch: { state: "waking", spin: 620 },
+  customize: { state: "proud", blink: true },
+  alert: { state: "alerting" },
+  thinking: { state: "thinking" },
+  working: { state: "working" },
+  launch: { state: "loading" },
+  success: { state: "happy", blink: true },
+  celebrate: { state: "celebrate", spin: 700 },
+  blink: { blink: true },
+  surprise: { state: "surprised", blink: true },
+  failure: { state: "sad" },
+};
+
+/** How long a one-shot motion holds its state before the bot's own returns. */
+const MOTION_FACE_MS = 1400;
+
+/** Channel-wise mix of a hex color toward another, t in 0..1. */
+function mix(hex: string, toward: string, t: number): string {
+  const a = Number.parseInt(hex.slice(1), 16);
+  const b = Number.parseInt(toward.slice(1), 16);
+  const channel = (shift: number) => {
+    const va = (a >> shift) & 0xff;
+    const vb = (b >> shift) & 0xff;
+    return Math.round(va + (vb - va) * t);
+  };
+  return `#${[channel(16), channel(8), channel(0)]
+    .map((part) => part.toString(16).padStart(2, "0"))
+    .join("")}`;
+}
+
+/**
+ * Bot color -> the mascot's three-stop body gradient (highlight, base,
+ * shadow), with the same light/dark spread as the pack's default green
+ * ["#9FE6B5", "#3FAE6E", "#1C7A4C"].
+ */
+const gradientFor = (color: MausColor): [string, string, string] => {
+  const fill = MAUS_COLORS[color] ?? MAUS_COLORS.green;
+  return [mix(fill, "#ffffff", 0.55), fill, mix(fill, "#000000", 0.42)];
+};
+
+export type MausAvatarHandle = CircleBotAvatarHandle;
+
+export type MausAvatarProps = {
+  color: MausColor;
+  /** Named behaviour — drives the expression pool, its cadence and blinking. */
+  state?: MausState;
+  /** Pin one of the 25 faces and stop the state's own drift. */
+  expression?: number;
+  size?: number;
+  label?: string;
+  motion?: MausMotion;
+  motionKey?: number;
+  /** Head turn in degrees. */
+  turn?: number;
+  gaze?: { x?: number; y?: number };
+  spring?: number;
+  eyeScale?: number;
+  showMouth?: boolean;
+  mouthStroke?: number;
+  /**
+   * Face the viewer at turn 0, cancelling each expression's authored gaze
+   * direction. Off restores the engine's own drawn-in directions.
+   */
+  forward?: boolean;
+  /** Let the eyes follow the pointer across this avatar. */
+  trackPointer?: boolean;
+  /** Run the animation. Off renders the state's resting face. */
+  animated?: boolean;
+  /** Legacy Maus face-placement knobs — accepted, ignored. */
+  eyeSpacing?: number;
+  faceX?: number;
+  faceY?: number;
+  faceScale?: number;
+  personality?: BotPersonality;
+};
+
+function MausAvatarComponent(
+  {
+    color,
+    state = "idle",
+    expression,
+    size = 44,
+    label,
+    motion = "none",
+    motionKey = 0,
+    turn,
+    gaze,
+    spring,
+    eyeScale,
+    showMouth,
+    mouthStroke,
+    forward = true,
+    trackPointer = true,
+    animated = true,
+    personality = "friendly",
+  }: MausAvatarProps,
+  ref: React.Ref<MausAvatarHandle>,
+) {
+  const inner = useRef<CircleBotAvatarHandle>(null);
+  useImperativeHandle(ref, () => ({
+    blink: () => inner.current?.blink(),
+    spin: (durationMs?: number) => inner.current?.spin(durationMs),
+    setExpression: (index: number) => inner.current?.setExpression(index),
+  }));
+
+  // A one-shot motion borrows the state for a moment, then hands it back.
+  const [motionState, setMotionState] = useState<MausState | null>(null);
+  useEffect(() => {
+    if (motion === "none" || !animated) return;
+    const beat = MOTION_FACE[motion];
+    if (!beat) return;
+    if (beat.blink) inner.current?.blink();
+    if (beat.spin) inner.current?.spin(beat.spin);
+    if (!beat.state) return;
+    setMotionState(beat.state);
+    const timer = setTimeout(() => setMotionState(null), MOTION_FACE_MS);
+    return () => clearTimeout(timer);
+  }, [motion, motionKey, animated]);
+
+  // Pointer-follow gaze, composed with any gaze the caller pins.
+  const [pointer, setPointer] = useState({ x: 0, y: 0 });
+  const displayedState = motionState ?? state;
+  const acceptsPointer = POINTER_ATTENTION_STATES.has(displayedState);
+  useEffect(() => {
+    if (!acceptsPointer) setPointer({ x: 0, y: 0 });
+  }, [acceptsPointer]);
+  const range = forward ? POINTER_GAZE.forward : POINTER_GAZE.authored;
+  const onPointerMove = (event: ReactPointerEvent<HTMLSpanElement>) => {
+    if (!trackPointer || !animated || !acceptsPointer) return;
+    const rect = event.currentTarget.getBoundingClientRect();
+    setPointer({
+      x: Math.max(-1, Math.min(1, ((event.clientX - rect.left) / rect.width) * 2 - 1)) * range,
+      y: Math.max(-1, Math.min(1, ((event.clientY - rect.top) / rect.height) * 2 - 1)) * range,
+    });
+  };
+  const onPointerLeave = () => setPointer({ x: 0, y: 0 });
+
   return (
-    <rect
-      x={cx - width / 2}
-      y={cy - height / 2}
-      width={width}
-      height={height}
-      rx={width / 2}
-      fill={INK}
-      transform={`rotate(${angle} ${cx} ${cy})`}
-    />
+    <span
+      className="inline-flex shrink-0"
+      onPointerMove={trackPointer && animated && acceptsPointer ? onPointerMove : undefined}
+      onPointerLeave={trackPointer && animated ? onPointerLeave : undefined}
+    >
+      <CircleBotAvatar
+        ref={inner}
+        state={displayedState}
+        expression={expression}
+        size={size}
+        gradient={gradientFor(color)}
+        title={label ?? null}
+        gaze={{ x: (gaze?.x ?? 0) + pointer.x, y: (gaze?.y ?? 0) + pointer.y }}
+        turn={turn}
+        spring={spring}
+        eyeScale={eyeScale}
+        showMouth={showMouth}
+        mouthStroke={mouthStroke}
+        paused={!animated}
+        personality={personality}
+      />
+    </span>
   );
 }
 
-function Face({ expression }: { expression: MausExpression }) {
-  const line = {
-    fill: "none",
-    stroke: INK,
-    strokeWidth: 6,
-    strokeLinecap: "round" as const,
-    strokeLinejoin: "round" as const,
+export const MausAvatar = memo(forwardRef(MausAvatarComponent));
+
+export type BotAvatarProps = Omit<MausAvatarProps, "color"> & {
+  bot: {
+    name?: string;
+    color: MausColor;
+    avatarUrl?: string | null;
+    avatarCrop?: BotAvatarCrop;
+    personality?: BotPersonality;
   };
+};
 
-  switch (expression) {
-    case "friendly":
-      return (
-        <>
-          <PillEye cx={90} height={15} angle={-18} />
-          <PillEye cx={112} height={15} angle={-10} />
-          <path d="M88 105 Q101 118 114 105" {...line} />
-        </>
-      );
-    case "focused":
-      return (
-        <>
-          <path d="M83 80 L94 84 M108 84 L119 80" {...line} strokeWidth="5" />
-          <PillEye cx={90} cy={92} height={16} angle={-7} />
-          <PillEye cx={112} cy={92} height={16} angle={7} />
-          <path d="M90 111 Q101 107 112 111" {...line} />
-        </>
-      );
-    case "thinking":
-      return (
-        <>
-          <PillEye cx={90} cy={87} height={17} angle={-16} />
-          <PillEye cx={112} cy={82} height={14} angle={-7} />
-          <path d="M84 78 Q90 73 96 77 M108 73 Q115 70 120 75" {...line} strokeWidth="4.5" />
-          <path d="M93 111 Q101 105 110 109" {...line} />
-        </>
-      );
-    case "excited":
-      return (
-        <>
-          <PillEye cx={90} cy={87} height={19} angle={-24} />
-          <PillEye cx={112} cy={87} height={19} angle={4} />
-          <path d="M88 102 Q101 124 114 102 Q101 109 88 102 Z" fill={INK} />
-        </>
-      );
-    case "sleepy":
-      return (
-        <>
-          <PillEye cx={90} cy={89} height={8} angle={-24} />
-          <PillEye cx={112} cy={89} height={8} angle={-6} />
-          <ellipse cx="101" cy="110" rx="6" ry="8" fill={INK} />
-        </>
-      );
-    case "surprised":
-      return (
-        <>
-          <PillEye cx={90} height={22} width={8} angle={-15} />
-          <PillEye cx={112} height={22} width={8} angle={-8} />
-          <circle cx="101" cy="111" r="8" fill={INK} />
-        </>
-      );
-    case "skeptical":
-      return (
-        <>
-          <path d="M83 82 L96 79 M107 77 L120 83" {...line} strokeWidth="5" />
-          <PillEye cx={90} cy={91} height={17} angle={-18} />
-          <PillEye cx={112} cy={92} height={8} angle={-2} />
-          <path d="M91 112 Q101 107 112 113" {...line} />
-        </>
-      );
-    case "worried":
-      return (
-        <>
-          <path d="M83 82 Q90 76 97 82 M105 82 Q112 76 119 82" {...line} strokeWidth="4.5" />
-          <PillEye cx={90} cy={91} height={17} angle={-5} />
-          <PillEye cx={112} cy={91} height={17} angle={-20} />
-          <path d="M89 115 Q101 103 113 115" {...line} />
-        </>
-      );
-    case "mischievous":
-      return (
-        <>
-          <path d="M83 82 L96 86 M106 86 L119 80" {...line} strokeWidth="5" />
-          <PillEye cx={90} cy={93} height={15} angle={-2} />
-          <PillEye cx={112} cy={93} height={15} angle={-22} />
-          <path d="M89 106 Q103 118 116 103 Q103 110 89 106 Z" fill={INK} />
-        </>
-      );
-    case "deadpan":
-      return (
-        <>
-          <PillEye cx={90} angle={-18} />
-          <PillEye cx={112} angle={-10} />
-          <path d="M88 110 L114 110" {...line} />
-        </>
-      );
+/**
+ * The one renderer for a bot's chosen profile image. Malformed persisted
+ * values and images that fail to load both fall back to the animated mascot,
+ * so an old/corrupt profile can never leave a broken-image icon in the app.
+ */
+export function BotAvatar({ bot, size = 44, label, ...mascotProps }: BotAvatarProps) {
+  const profile = botAvatarProfile(bot);
+  const [imageFailed, setImageFailed] = useState(false);
+
+  useEffect(() => setImageFailed(false), [profile.avatarUrl]);
+
+  if (profile.avatarCrop === "mascot" || !profile.avatarUrl || imageFailed) {
+    return (
+      <MausAvatar
+        {...mascotProps}
+        color={bot.color}
+        size={size}
+        label={label ?? bot.name}
+        personality={normalizeBotPersonality(bot.personality)}
+      />
+    );
   }
-}
 
-export function MausAvatar({
-  color,
-  expression = "deadpan",
-  size = 44,
-  label,
-}: {
-  color: MausColor;
-  expression?: MausExpression;
-  size?: number;
-  label?: string;
-}) {
-  const fill = MAUS_COLORS[color] ?? MAUS_COLORS.green;
-
+  const radius =
+    profile.avatarCrop === "circle"
+      ? "50%"
+      : profile.avatarCrop === "rounded"
+        ? "22%"
+        : "0";
   return (
-    <svg
+    <img
+      src={profile.avatarUrl}
+      alt={label ?? (bot.name ? `${bot.name} avatar` : "Bot avatar")}
       width={size}
       height={size}
-      viewBox="25 20 150 150"
-      className="shrink-0 overflow-visible"
-      role={label ? "img" : undefined}
-      aria-label={label}
-      aria-hidden={label ? undefined : true}
-    >
-      <g transform="rotate(-20 100 100)">
-        <path
-          d={BODY}
-          fill={fill}
-        />
-        <Face expression={expression} />
-      </g>
-    </svg>
+      draggable={false}
+      onError={() => setImageFailed(true)}
+      className="block shrink-0 bg-raised object-cover"
+      style={{ width: size, height: size, borderRadius: radius }}
+    />
   );
 }
 
