@@ -134,7 +134,7 @@ export class Store {
     return list!;
   }
 
-  appendMessage(threadId: string, message: Omit<Message, "id" | "at"> & { at?: number }): Message {
+  appendMessage(threadId: string, message: Omit<Message, "id" | "at"> & { id?: string; at?: number }): Message {
     const full: Message = { id: newId(), at: Date.now(), ...message };
     const list = this.messagesFor(threadId);
     list.push(full);

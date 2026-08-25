@@ -55,6 +55,7 @@ const proxyPath = (basename: string) => {
   return existsSync(ts) ? ts : ts.replace(/\.ts$/, ".js");
 };
 const PROXY_PATH = proxyPath("computer-proxy");
+const CF_PROXY_PATH = proxyPath("cf-computer-proxy");
 const PERM_PROXY_PATH = proxyPath("permission-proxy");
 // in the packaged app process.execPath is the Electron binary — this env
 // makes it behave as plain node for the spawned MCP proxies (harmless in dev)
@@ -249,7 +250,21 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
         };
         allowed.push("mcp__composio");
       }
-      if (turn.integrations?.computer) {
+      if (turn.integrations?.cfComputer) {
+        // the MagicBot cloud computer (Cloudflare Sandbox) — same "computer"
+        // MCP name as the box/local paths, the agent just sees a computer
+        mcpServers.computer = {
+          command: process.execPath,
+          args: [CF_PROXY_PATH],
+          env: {
+            ...NODE_ENV_FLAG,
+            MGB_CF_URL: turn.integrations.cfComputer.url,
+            MGB_CF_TOKEN: turn.integrations.cfComputer.token,
+            MGB_CF_BOT_ID: turn.integrations.cfComputer.botId,
+          },
+        };
+        allowed.push("mcp__computer");
+      } else if (turn.integrations?.computer) {
         mcpServers.computer = {
           command: process.execPath,
           args: [PROXY_PATH],
@@ -259,12 +274,6 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
             OGB_BOX_TOKEN: turn.integrations.computer.token,
           },
         };
-        allowed.push("mcp__computer");
-      } else if (turn.integrations?.localComputer) {
-        // this Mac, via the Electron-owned cua-driver daemon (spawn config
-        // read from cua-connection.json — same "computer" name either way,
-        // the agent just sees a computer)
-        mcpServers.computer = { ...turn.integrations.localComputer };
         allowed.push("mcp__computer");
       }
       // permission broker: anything acceptEdits would silently deny becomes

@@ -38,6 +38,26 @@ export function AppSettingsPanel() {
             <ApiKeyRow section="box" label="Box token" placeholder="Token from box.ascii.dev" />
           </div>
         </div>
+
+        <div className="mt-4 rounded-xl bg-card p-4">
+          <div className="text-[15px] font-medium text-ink">Cloud computer</div>
+          <div className="mt-0.5 text-[13px] text-ink-secondary">
+            Your own cf-computer Worker on Cloudflare — every bot gets a persistent Linux sandbox.
+            Preferred over Box when both are set.
+          </div>
+          <div className="mt-4 flex flex-col gap-4">
+            <ApiKeyRow
+              section="cfComputerUrl"
+              label="Worker URL"
+              placeholder="https://magicbot-computer.<you>.workers.dev"
+            />
+            <ApiKeyRow
+              section="cfComputerToken"
+              label="Computer token"
+              placeholder="MAGICBOT_COMPUTER_TOKEN secret"
+            />
+          </div>
+        </div>
       </div>
     </aside>
   );

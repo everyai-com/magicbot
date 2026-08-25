@@ -68,6 +68,7 @@ export interface ConfigStatus {
   xai?: { configured: boolean };
   composio: { configured: boolean; apiKeyConfigured?: boolean };
   box: { configured: boolean };
+  cfComputer?: { configured: boolean; urlConfigured?: boolean; tokenConfigured?: boolean };
 }
 
 /** One row of GET /api/instances — the model picker's data. */
@@ -108,7 +109,8 @@ type Action =
   | { type: "instances"; instances: InstanceInfo[] }
   | { type: "configStatus"; config: ConfigStatus }
   | { type: "select"; id: string }
-  | { type: "send"; botId: string; text: string }
+  | { type: "send"; botId: string; text: string; clientId?: string }
+  | { type: "removeMessage"; botId: string; messageId: string }
   | { type: "answerCard"; botId: string; messageId: string; answer: string }
   | { type: "dismissCard"; botId: string; messageId: string }
   | { type: "newBot" }
@@ -269,8 +271,24 @@ function reducer(state: AppState, action: Action): AppState {
     }
     case "updateBot":
       return updateBot(state, action.botId, (b) => ({ ...b, ...action.patch }));
+    // optimistic echo: the bubble shows instantly; the server persists the
+    // same id, so the SSE echo (and any rehydrate) dedupes against it
+    case "send": {
+      if (!action.clientId) return state;
+      return updateBot(state, action.botId, (b) => ({
+        ...b,
+        messages: [
+          ...b.messages,
+          { id: action.clientId!, role: "user", kind: "text", text: action.text, at: Date.now() },
+        ],
+      }));
+    }
+    case "removeMessage":
+      return updateBot(state, action.botId, (b) => ({
+        ...b,
+        messages: b.messages.filter((m) => m.id !== action.messageId),
+      }));
     // handled entirely by the async wrapper
-    case "send":
     case "newBot":
     case "duplicateBot":
     case "interrupt":
@@ -333,14 +351,25 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     };
 
     const wrapped: React.Dispatch<Action> = (action) => {
+      // a send gets a client-generated message id so the bubble renders
+      // immediately; the server reuses the id, making the SSE echo a no-op
+      if (action.type === "send" && !action.clientId) {
+        action = { ...action, clientId: `u-${crypto.randomUUID()}` };
+      }
       rawDispatch(action);
       switch (action.type) {
-        case "send":
-          api(`/api/bots/${action.botId}/messages`, {
+        case "send": {
+          const { botId, clientId } = action;
+          api(`/api/bots/${botId}/messages`, {
             method: "POST",
-            body: JSON.stringify({ text: action.text }),
-          }).catch(showError);
+            body: JSON.stringify({ text: action.text, id: clientId }),
+          }).catch((e) => {
+            // the send never reached the server — take the ghost bubble back
+            if (clientId) rawDispatch({ type: "removeMessage", botId, messageId: clientId });
+            showError(e);
+          });
           break;
+        }
         case "answerCard": {
           const bot = stateRef.current.bots.find((b) => b.id === action.botId);
           const card = bot?.messages.find((m) => m.id === action.messageId)?.card;

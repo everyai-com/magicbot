@@ -14,12 +14,12 @@ export function initAnalytics() {
   posthog.init(TOKEN, {
     api_host: "https://us.i.posthog.com",
     autocapture: true,
-    capture_pageview: false, // single-window desktop app — no page routes
+    capture_pageview: false, // single-page app — no page routes
     person_profiles: "identified_only",
     persistence: "localStorage",
   });
   ready = true;
-  const platform = navigator.userAgent.includes("Electron") ? "desktop" : "browser";
+  const platform = "browser";
   // one-time install marker — app_first_open counts installs (the closest
   // truth to "downloads that mattered"; raw download counts live on the
   // GitHub release assets)

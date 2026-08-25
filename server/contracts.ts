@@ -100,11 +100,10 @@ export interface SendTurnInput {
     composio?: { url?: string; key: string };
     /** The bot's cloud computer (box.ascii.dev) for desktop/browser use. */
     computer?: { boxId: string; token: string };
-    /** Local computer use via the Electron-hosted cua-driver daemon —
-     * spawn config comes verbatim from cua-connection.json (the daemon
-     * MUST be spawned by Electron main; the harness only points the agent
-     * CLI at the already-running socket via this MCP proxy command). */
-    localComputer?: { command: string; args: string[]; env: Record<string, string> };
+    /** The bot's MagicBot cloud computer — a per-bot Cloudflare Sandbox
+     * behind the user's own cf-computer/ Worker. Preferred over box when
+     * both are configured. */
+    cfComputer?: { url: string; token: string; botId: string };
   };
   cwd?: string;
 }

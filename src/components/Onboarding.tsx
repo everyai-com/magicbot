@@ -1,10 +1,10 @@
 import { useEffect, useState } from "react";
-import { Check, AlertTriangle, Loader2, Mic, Monitor } from "lucide-react";
+import { Check, AlertTriangle, Loader2 } from "lucide-react";
 import { MausAvatar } from "./Avatar";
 import { identifyEmail, setEmailGateDone, track } from "@/lib/analytics";
 
-// Three-step first-run onboarding: who you are (email), what's installed
-// (live engine checks from the harness), what the app may use (TCC).
+// Two-step first-run onboarding: who you are (email), what's installed
+// (live engine checks from the harness).
 // Every check is skippable — onboarding must never brick the app.
 
 type InstanceRow = {
@@ -13,8 +13,6 @@ type InstanceRow = {
   displayName: string;
   snapshot: { state: "available" | "unavailable"; reason?: string; version?: string | null; authenticated?: boolean };
 };
-
-const isElectron = navigator.userAgent.includes("Electron");
 
 function StatusRow({
   ok,
@@ -48,7 +46,6 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
   const [step, setStep] = useState(0);
   const [email, setEmail] = useState("");
   const [instances, setInstances] = useState<InstanceRow[] | null>(null);
-  const [perms, setPerms] = useState<{ mic: string; screen: string } | null>(null);
   const valid = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email.trim());
 
   useEffect(() => {
@@ -59,20 +56,11 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
         .then((d) => setInstances(d.instances ?? []))
         .catch(() => setInstances([]));
     }
-    if (step === 2 && isElectron) {
-      const poll = () => window.ogb?.permStatus?.().then(setPerms).catch(() => {});
-      poll();
-      // keep polling — the user may grant in System Settings and come back
-      const t = setInterval(poll, 2000);
-      return () => clearInterval(t);
-    }
   }, [step, instances]);
 
   const finish = () => {
     track("onboarding_completed", {
       engines_available: instances?.filter((i) => i.snapshot.state === "available").length ?? -1,
-      mic: perms?.mic ?? "n/a",
-      screen: perms?.screen ?? "n/a",
     });
     setEmailGateDone("submitted");
     onDone();
@@ -128,7 +116,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
           <div className="flex flex-col">
             <h1 className="text-[18px] font-semibold text-ink">Your engines</h1>
             <p className="mt-1 text-[13.5px] text-ink-secondary">
-              Bots run on the AI tools already on this Mac — here&rsquo;s what we found.
+              Bots run on the AI engines available to the server — here&rsquo;s what we found.
             </p>
             <div className="mt-4 flex flex-col gap-2.5">
               {!instances ? (
@@ -163,91 +151,10 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
               )}
             </div>
             <button
-              onClick={() => (isElectron ? setStep(2) : finish())}
+              onClick={finish}
               className="mt-5 w-full rounded-lg bg-accent py-2.5 text-[15px] font-medium text-white"
             >
-              Continue
-            </button>
-          </div>
-        )}
-
-        {step === 2 && (
-          <div className="flex flex-col">
-            <h1 className="text-[18px] font-semibold text-ink">Permissions</h1>
-            <p className="mt-1 text-[13.5px] text-ink-secondary">
-              Optional, and only ever used when you ask for the feature.
-            </p>
-            <div className="mt-4 flex flex-col gap-2.5">
-              <div className="flex items-center justify-between gap-3 rounded-xl bg-card p-3.5">
-                <div className="flex items-start gap-3">
-                  <Mic size={18} className="mt-0.5 shrink-0 text-ink-secondary" />
-                  <div>
-                    <div className="text-[14px] font-medium text-ink">Microphone & speech</div>
-                    <div className="mt-0.5 text-[12.5px] text-ink-secondary">
-                      Voice dictation into the composer, transcribed on-device.
-                    </div>
-                  </div>
-                </div>
-                {perms?.mic === "granted" ? (
-                  <Check size={16} className="shrink-0 text-[#38d591]" />
-                ) : perms?.mic === "denied" || perms?.mic === "restricted" ? (
-                  <button
-                    onClick={() => window.ogb?.permOpenSettings?.("mic")}
-                    className="shrink-0 rounded-lg bg-raised px-3 py-1.5 text-[13px] text-ink hover:bg-raised-hover"
-                  >
-                    Open Settings
-                  </button>
-                ) : (
-                  <button
-                    onClick={() =>
-                      window.ogb?.permRequestMic?.().then(() => window.ogb?.permStatus?.().then(setPerms))
-                    }
-                    className="shrink-0 rounded-lg bg-raised px-3 py-1.5 text-[13px] text-ink hover:bg-raised-hover"
-                  >
-                    Enable
-                  </button>
-                )}
-              </div>
-              <div className="flex items-center justify-between gap-3 rounded-xl bg-card p-3.5">
-                <div className="flex items-start gap-3">
-                  <Monitor size={18} className="mt-0.5 shrink-0 text-ink-secondary" />
-                  <div>
-                    <div className="text-[14px] font-medium text-ink">Screen preview</div>
-                    <div className="mt-0.5 text-[12.5px] text-ink-secondary">
-                      Shows this Mac&rsquo;s screen in the Computer panel when a bot works locally.
-                    </div>
-                  </div>
-                </div>
-                {perms?.screen === "granted" ? (
-                  <Check size={16} className="shrink-0 text-[#38d591]" />
-                ) : perms?.screen === "denied" || perms?.screen === "restricted" ? (
-                  <button
-                    onClick={() => window.ogb?.permOpenSettings?.("screen")}
-                    className="shrink-0 rounded-lg bg-raised px-3 py-1.5 text-[13px] text-ink hover:bg-raised-hover"
-                  >
-                    Open Settings
-                  </button>
-                ) : (
-                  <button
-                    onClick={() =>
-                      navigator.mediaDevices
-                        .getDisplayMedia({ video: true })
-                        .then((stream) => stream.getTracks().forEach((t) => t.stop()))
-                        .catch(() => {})
-                        .then(() => window.ogb?.permStatus?.().then(setPerms))
-                    }
-                    className="shrink-0 rounded-lg bg-raised px-3 py-1.5 text-[13px] text-ink hover:bg-raised-hover"
-                  >
-                    Enable
-                  </button>
-                )}
-              </div>
-            </div>
-            <button onClick={finish} className="mt-5 w-full rounded-lg bg-accent py-2.5 text-[15px] font-medium text-white">
               Start using MagicBot
-            </button>
-            <button onClick={finish} className="mt-3 text-[12px] text-ink-secondary hover:text-ink">
-              Skip for now
             </button>
           </div>
         )}
