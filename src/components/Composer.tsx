@@ -1,7 +1,7 @@
 import { track } from "@/lib/analytics";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowUp, Clock, Mic, Paperclip, Square, Users, X } from "lucide-react";
-import { useStore, visibleMessages, type Bot, type Group } from "@/state/store";
+import { isHostedChatSurface, useStore, visibleMessages, type Bot, type Group } from "@/state/store";
 import { cn } from "@/lib/cn";
 import { useComposerDraft } from "@/lib/drafts";
 import { MausAvatar } from "./Avatar";
@@ -186,7 +186,13 @@ export function Composer({
       dispatch({ type: "sendGroup", groupId: group.id, text: t });
       track("message_sent", { room: true });
     } else if (bot) {
-      dispatch({ type: "send", botId: bot.id, text: t });
+      const optimistic = isHostedChatSurface(state.config?.hosted);
+      dispatch({
+        type: "send",
+        botId: bot.id,
+        text: t,
+        ...(optimistic ? { clientMessageId: crypto.randomUUID(), sentAt: Date.now() } : {}),
+      });
       track("message_sent", { driver: bot.modelSelection?.instanceId, queued: busy && !canSteer });
     }
     setText("");
