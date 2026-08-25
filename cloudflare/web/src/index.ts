@@ -30,6 +30,28 @@ interface Env {
   };
 }
 
+class ServiceTimeoutError extends Error {
+  constructor(service: string, timeoutMs: number) {
+    super(`${service} did not respond within ${Math.round(timeoutMs / 1000)} seconds`);
+    this.name = "ServiceTimeoutError";
+  }
+}
+
+/** Keep a stalled service-binding RPC from letting Cloudflare cancel the
+ * entire request as hung. The timer also gives the fallback path a chance to
+ * answer while leaving the user's selected model unchanged. */
+async function withServiceTimeout<T>(work: Promise<T>, timeoutMs: number, service: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new ServiceTimeoutError(service, timeoutMs)), timeoutMs);
+  });
+  try {
+    return await Promise.race([work, timeout]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
 interface User {
   id: string;
   email: string;
@@ -748,12 +770,16 @@ async function modelContentForPrompt(env: Env, userId: string, prompt: string): 
 async function verifyCodexRuntime(env: Env, userId: string, model: string): Promise<boolean> {
   try {
     const tokens = await freshCodexTokens(env, userId);
-    const result = await env.COMPUTER.codex(
-      `codex-check-${userId}`,
-      codexAuthJson(tokens),
-      "Reply exactly CONNECTED.",
-      model,
-      "low",
+    const result = await withServiceTimeout(
+      env.COMPUTER.codex(
+        `codex-check-${userId}`,
+        codexAuthJson(tokens),
+        "Reply exactly CONNECTED.",
+        model,
+        "low",
+      ),
+      60_000,
+      "Hosted Codex connection check",
     );
     const ready = result.ok && result.text.trim().replace(/[.!]+$/, "") === "CONNECTED";
     if (!ready) {
@@ -793,7 +819,11 @@ async function codexReply(env: Env, userId: string, bot: Bot, text: string): Pro
     `Current user request:\n${currentText}`,
   ].filter(Boolean).join("\n\n");
   const effort = bot.modelSelection.effort === "none" ? "low" : (bot.modelSelection.effort ?? "medium");
-  const result = await env.COMPUTER.codex(bot.id, codexAuthJson(tokens), prompt, bot.modelSelection.model, effort);
+  const result = await withServiceTimeout(
+    env.COMPUTER.codex(bot.id, codexAuthJson(tokens), prompt, bot.modelSelection.model, effort),
+    120_000,
+    "Hosted Codex runtime",
+  );
   if (!result.ok || !result.text) throw new Error("Codex could not answer from the cloud computer. Reconnect ChatGPT or try again.");
   return result.text;
 }
@@ -2061,8 +2091,19 @@ async function api(request: Request, env: Env, user: User, path: string): Promis
     // Bot IDs are globally random UUIDs and fit the Sandbox 63-character key limit.
     const sandboxId = bot.id;
     if (action === "status" && request.method === "GET") {
-      const state = await env.COMPUTER.status(sandboxId);
-      return json({ backend: "cloudflare-computer", configured: true, ready: true, running: state.running, container: state.running ? "cloudflare" : "sleeping", box: false, headless: true, persistentWorkspace: true });
+      try {
+        const state = await withServiceTimeout(env.COMPUTER.status(sandboxId), 5_000, "Cloudflare computer status");
+        return json({ backend: "cloudflare-computer", configured: true, ready: true, running: state.running, container: state.running ? "cloudflare" : "sleeping", box: false, headless: true, persistentWorkspace: true });
+      } catch (error) {
+        console.error(JSON.stringify({
+          event: "computer_status_degraded",
+          botId: sandboxId,
+          message: error instanceof Error ? error.message : String(error),
+        }));
+        // Health information is advisory. Keep the computer panel available
+        // and preserve the workspace even when the status service is slow.
+        return json({ backend: "cloudflare-computer", configured: true, ready: false, running: false, container: "unknown", box: false, headless: true, persistentWorkspace: true, degraded: true });
+      }
     }
     if (action === "control") {
       const body: { action?: string } = request.method === "POST" ? await request.json<{ action?: string }>().catch(() => ({})) : {};
