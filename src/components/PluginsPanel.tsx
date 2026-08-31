@@ -229,7 +229,9 @@ export function PluginsPanel() {
     };
   }, [dispatch]);
 
-  const openConnectUrl = async (url: string) => {
+  const reserveConnectWindow = () => window.ogb?.openExternal ? null : window.open("", "_blank");
+
+  const openConnectUrl = async (url: string, reservedWindow: Window | null = null) => {
     if (window.ogb?.openExternal) {
       await window.ogb.openExternal(url);
       return;
@@ -237,7 +239,7 @@ export function PluginsPanel() {
     // Browser development fallback. If a popup blocker rejects the first
     // asynchronous open, the visible Continue button retries from a direct
     // user gesture using the URL retained in pendingUrls.
-    const opened = window.open("", "_blank");
+    const opened = reservedWindow ?? window.open("", "_blank");
     if (!opened) throw new Error("Your browser blocked the connection page. Click Continue to open it.");
     // Open a same-origin blank page first so the OAuth origin never receives
     // an opener reference, while a real null remains a reliable blocked signal.
@@ -262,6 +264,10 @@ export function PluginsPanel() {
   };
 
   const connect = async (slug: string, alias?: string) => {
+    // Reserve the tab while the click is still a trusted user gesture. The
+    // authorize request is asynchronous, and browsers otherwise block the
+    // OAuth page by the time Composio returns its URL.
+    const reservedWindow = reserveConnectWindow();
     statusGenerations.current.set(slug, (statusGenerations.current.get(slug) ?? 0) + 1);
     setBusySlug(slug);
     setError(null);
@@ -282,8 +288,9 @@ export function PluginsPanel() {
       setAliasSlug(null);
       setAliasDraft("");
       startPolling(slug);
-      await openConnectUrl(url);
+      await openConnectUrl(url, reservedWindow);
     } catch (e) {
+      reservedWindow?.close();
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusySlug(null);

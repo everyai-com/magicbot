@@ -3,12 +3,16 @@ import { Check, Loader2, PlugZap, RefreshCw, X } from "lucide-react";
 
 import { api, type Message } from "@/state/store";
 
-async function openConnectionPage(url: string) {
+function reserveConnectionPage() {
+  return window.ogb?.openExternal ? null : window.open("", "_blank");
+}
+
+async function openConnectionPage(url: string, reservedWindow: Window | null = null) {
   if (window.ogb?.openExternal) {
     await window.ogb.openExternal(url);
     return;
   }
-  const opened = window.open("", "_blank");
+  const opened = reservedWindow ?? window.open("", "_blank");
   if (!opened) throw new Error("Your browser blocked the connection page. Allow pop-ups, then try again.");
   opened.opener = null;
   opened.location.replace(url);
@@ -18,6 +22,7 @@ export function ConnectorCard({ botId, threadId, message }: { botId: string; thr
   const connector = message.connector!;
   const [busy, setBusy] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
+  const [pendingUrl, setPendingUrl] = useState<string | null>(null);
   const polling = useRef(false);
 
   const endpoint = `/api/bots/${encodeURIComponent(botId)}/connector-cards/${encodeURIComponent(message.id)}`;
@@ -54,6 +59,9 @@ export function ConnectorCard({ botId, threadId, message }: { botId: string; thr
   if (connector.dismissed) return null;
 
   const connect = async () => {
+    // Browser popup permission is tied to the original click. Reserve a blank
+    // tab now, then navigate it after the asynchronous authorize request.
+    const reservedWindow = reserveConnectionPage();
     setBusy(true);
     setLocalError(null);
     try {
@@ -61,8 +69,11 @@ export function ConnectorCard({ botId, threadId, message }: { botId: string; thr
         method: "POST",
         body: JSON.stringify({ threadId }),
       });
-      await openConnectionPage(String(result.url));
+      const url = String(result.url);
+      setPendingUrl(url);
+      await openConnectionPage(url, reservedWindow);
     } catch (error) {
+      reservedWindow?.close();
       setLocalError(error instanceof Error ? error.message : String(error));
     } finally {
       setBusy(false);
@@ -132,7 +143,16 @@ export function ConnectorCard({ botId, threadId, message }: { botId: string; thr
           </div>
           {!connected ? (
             <button
-              onClick={() => void connect()}
+              onClick={() => {
+                if (authorizing && pendingUrl) {
+                  setLocalError(null);
+                  void openConnectionPage(pendingUrl).catch((error) => {
+                    setLocalError(error instanceof Error ? error.message : String(error));
+                  });
+                } else {
+                  void connect();
+                }
+              }}
               disabled={busy}
               className="flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-[12.5px] font-medium text-white hover:opacity-90 disabled:opacity-50"
             >
