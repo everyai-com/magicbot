@@ -1445,7 +1445,10 @@ async function api(request: Request, env: Env, user: User, path: string): Promis
     return json({ ok: true });
   }
   if (path === "/api/instances") {
-    const composio = await credentialConfigured(env, user.id, "composio");
+    // Hosted engines use the same connector service as AIOS. A saved user
+    // key is only an override; the managed server-side key means Composio is
+    // available to bots even when no per-user credential exists in D1.
+    const composio = true;
     const instances: Array<Record<string, unknown>> = [{
       instanceId: "cloudflare-ai", driverKind: "cloudflareAi", displayName: "Cloudflare AI",
       snapshot: { state: "available", authenticated: true, billing: "metered" },
