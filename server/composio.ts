@@ -703,11 +703,40 @@ const CURATED: ToolkitCard[] = [
   { slug: "trello", label: "Trello", blurb: "Boards and cards", domain: "trello.com", logo: null },
   { slug: "dropbox", label: "Dropbox", blurb: "Files and folders", domain: "dropbox.com", logo: null },
   { slug: "airtable", label: "Airtable", blurb: "Bases and records", domain: "airtable.com", logo: null },
+  { slug: "outlook", label: "Outlook", blurb: "Microsoft email, calendar, and contacts", domain: "outlook.com", logo: null },
   { slug: "figma", label: "Figma", blurb: "Files and comments", domain: "figma.com", logo: null },
   { slug: "stripe", label: "Stripe", blurb: "Payments and customers", domain: "stripe.com", logo: null },
 ];
 
 let toolkitCache: { at: number; cards: ToolkitCard[] } | null = null;
+
+async function projectToolkitCatalog(apiKey: string): Promise<Record<string, any>[]> {
+  const items: Record<string, any>[] = [];
+  const seenSlugs = new Set<string>();
+  const seenCursors = new Set<string>();
+  let cursor: string | undefined;
+  for (let page = 0; page < MAX_CONNECTED_ACCOUNT_PAGES; page += 1) {
+    const query = new URLSearchParams({ limit: "1000", sort_by: "alphabetically" });
+    if (cursor) query.set("cursor", cursor);
+    const response = await fetch(`${toolkitBase()}/toolkits?${query}`, {
+      headers: { "x-api-key": apiKey },
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!response.ok) throw new Error(await responseError(response, `Composio catalog: HTTP ${response.status}`));
+    const body = await response.json() as { items?: Record<string, any>[]; data?: Record<string, any>[]; next_cursor?: string | null };
+    for (const item of body.items ?? body.data ?? []) {
+      const slug = String(item.slug ?? item.key ?? item.name ?? "").toLowerCase();
+      if (!slug || seenSlugs.has(slug)) continue;
+      seenSlugs.add(slug);
+      items.push(item);
+    }
+    const next = body.next_cursor || undefined;
+    if (!next || seenCursors.has(next)) return items;
+    seenCursors.add(next);
+    cursor = next;
+  }
+  throw new Error("Composio catalog exceeded the pagination safety limit");
+}
 
 /**
  * Marketplace catalog. Tries the v3 toolkits API (official names,
@@ -720,15 +749,13 @@ export async function listToolkits(cfg: AppConfig): Promise<{ cards: ToolkitCard
   const backendKey = brokerAccess() ? undefined : cfg.composio?.apiKey;
   if (backendKey || brokerAccess()) {
     try {
-      const res = backendKey
-        ? await fetch(`${toolkitBase()}/toolkits?limit=500&sort_by=usage`, {
-            headers: { "x-api-key": backendKey },
-            signal: AbortSignal.timeout(15_000),
-          })
-        : await brokerRequest("/v1/catalog", { signal: AbortSignal.timeout(15_000) });
-      if (res.ok) {
-        const json: any = await res.json();
-        const items = json.items ?? json.data ?? [];
+      const items = backendKey
+        ? await projectToolkitCatalog(backendKey)
+        : await brokerRequest("/v1/catalog", { signal: AbortSignal.timeout(30_000) }).then(async (res) => {
+            if (!res.ok) throw new Error(await responseError(res, `Connected apps catalog: HTTP ${res.status}`));
+            const json: any = await res.json();
+            return json.items ?? json.data ?? [];
+          });
         if (Array.isArray(items) && items.length) {
           const cards: ToolkitCard[] = items.map((t: any) => ({
             slug: (t.slug ?? t.key ?? t.name ?? "").toLowerCase(),
@@ -740,7 +767,6 @@ export async function listToolkits(cfg: AppConfig): Promise<{ cards: ToolkitCard
           toolkitCache = { at: Date.now(), cards };
           return { cards, source: "api" };
         }
-      }
     } catch {
       /* fall through to curated */
     }

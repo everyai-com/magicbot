@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   authorize,
+  catalog,
   connectedServices,
   connectionStatus,
   createSession,
@@ -70,6 +71,38 @@ describe("connected-apps broker boundaries", () => {
 
   it("hashes installation tokens before storage", async () => {
     await expect(sha256("openmausbot")).resolves.toBe("63c74f70a9d4681c334e84001935955a75245ea5b16b9c37c808e85c69963705");
+  });
+
+  it("returns the complete deduplicated toolkit catalog", async () => {
+    const fetchCalls: string[] = [];
+    vi.stubGlobal("fetch", async (input: string | URL | Request) => {
+      const url = new URL(String(input));
+      fetchCalls.push(url.toString());
+      if (!url.searchParams.has("cursor")) {
+        return Response.json({
+          items: [{ slug: "gmail", name: "Gmail" }, { slug: "outlook", name: "Outlook" }],
+          next_cursor: "page-2",
+        });
+      }
+      return Response.json({
+        items: [{ slug: "outlook", name: "Outlook duplicate" }, { slug: "microsoft_teams", name: "Microsoft Teams" }],
+      });
+    });
+    const response = await catalog({
+      COMPOSIO_TOOLKIT_BASE: "https://backend.composio.dev/api/v3",
+      COMPOSIO_API_KEY: "ak_test",
+    } as never);
+    await expect(response.json()).resolves.toMatchObject({
+      items: [
+        { slug: "gmail", name: "Gmail" },
+        { slug: "outlook", name: "Outlook" },
+        { slug: "microsoft_teams", name: "Microsoft Teams" },
+      ],
+      total_items: 3,
+    });
+    expect(fetchCalls).toHaveLength(2);
+    expect(new URL(fetchCalls[0]).searchParams.get("limit")).toBe("1000");
+    expect(new URL(fetchCalls[1]).searchParams.get("cursor")).toBe("page-2");
   });
 
   it("creates Sessions with explicit multi-account selection", async () => {

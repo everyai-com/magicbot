@@ -84,6 +84,11 @@ const toolkitPageSchema = z.object({
   items: z.array(toolkitItemSchema).optional(),
   next_cursor: z.string().nullable().optional(),
 });
+const catalogPageSchema = z.object({
+  items: z.array(z.record(z.string(), z.unknown())).optional(),
+  data: z.array(z.record(z.string(), z.unknown())).optional(),
+  next_cursor: z.string().nullable().optional(),
+});
 const linkResponseSchema = z.object({ redirect_url: z.string().optional() });
 const aliasRequestSchema = z.object({ alias: z.string().nullable().optional() });
 const upstreamErrorSchema = z.object({
@@ -303,14 +308,35 @@ async function proxyMcp(request: Request, installation: InstallationRow, env: En
 }
 
 async function catalog(env: Env) {
-  const response = await fetch(`${env.COMPOSIO_TOOLKIT_BASE}/toolkits?limit=500&sort_by=usage`, {
-    headers: { accept: "application/json", "x-api-key": env.COMPOSIO_API_KEY ?? "" },
-    signal: AbortSignal.timeout(20_000),
-  });
-  if (!response.ok) return json({ error: await upstreamError(response, "Catalog unavailable") }, 502);
-  return new Response(response.body, {
-    headers: { "content-type": response.headers.get("content-type") ?? "application/json", "cache-control": "private, max-age=600" },
-  });
+  const items: Array<Record<string, unknown>> = [];
+  const seenSlugs = new Set<string>();
+  const seenCursors = new Set<string>();
+  let cursor: string | undefined;
+  for (let page = 0; page < MAX_CONNECTED_ACCOUNT_PAGES; page += 1) {
+    const query = new URLSearchParams({ limit: "1000", sort_by: "alphabetically" });
+    if (cursor) query.set("cursor", cursor);
+    const response = await fetch(`${env.COMPOSIO_TOOLKIT_BASE}/toolkits?${query}`, {
+      headers: { accept: "application/json", "x-api-key": env.COMPOSIO_API_KEY ?? "" },
+      signal: AbortSignal.timeout(20_000),
+    });
+    if (!response.ok) return json({ error: await upstreamError(response, "Catalog unavailable") }, 502);
+    const body = catalogPageSchema.parse(await response.json());
+    for (const item of body.items ?? body.data ?? []) {
+      const slug = String(item.slug ?? item.key ?? item.name ?? "").toLowerCase();
+      if (!slug || seenSlugs.has(slug)) continue;
+      seenSlugs.add(slug);
+      items.push(item);
+    }
+    const next = body.next_cursor || undefined;
+    if (!next || seenCursors.has(next)) {
+      return new Response(JSON.stringify({ items, next_cursor: null, total_items: items.length }), {
+        headers: { "content-type": "application/json; charset=utf-8", "cache-control": "private, max-age=600" },
+      });
+    }
+    seenCursors.add(next);
+    cursor = next;
+  }
+  return json({ error: "Catalog exceeded the pagination safety limit" }, 502);
 }
 
 async function listConnectedAccounts(env: Env, userId: string, slugs: string[]) {
@@ -677,6 +703,7 @@ export default {
 
 export {
   authorize,
+  catalog,
   connectedServices,
   connectionStatus,
   createSession,
