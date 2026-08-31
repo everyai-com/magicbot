@@ -252,7 +252,7 @@ export function messageVersions(bot: Bot, message: Message): Message[] {
 export interface ConfigStatus {
   hosted?: boolean;
   xai?: { configured: boolean };
-  composio: { configured: boolean; mode?: "managed" | "self-hosted" | "unavailable" };
+  composio: { configured: boolean; mode?: "managed" | "self-hosted" | "unavailable"; keyConfigured?: boolean };
   cfComputer: { configured: boolean; url: string };
   vps: { configured: boolean; sshAlias: string };
   rooms: { turnTimeoutMinutes: number };

@@ -14,7 +14,7 @@ const SECTIONS: Record<
 > = {
   composio: {
     body: (v) => ({ composio: { apiKey: v } }),
-    flag: (c) => c.composio.configured,
+    flag: (c) => c.composio.keyConfigured ?? (c.composio.mode !== "managed" && c.composio.configured),
   },
   opencodeGo: { body: (v) => ({ opencodeGo: { apiKey: v } }), flag: (c) => c.opencodeGo?.configured ?? false },
 };
@@ -39,7 +39,7 @@ const CREDENTIALS: Record<
   composio: {
     label: "Composio project key",
     placeholder: "ak_…",
-    description: "Connect Gmail, GitHub, Slack, Notion, and other apps through your own Composio project.",
+    description: "Optional override. Without this key, Magicbot's managed Composio service works automatically.",
     href: "https://dashboard.composio.dev",
     linkLabel: "Create or copy a project key",
     optional: true,

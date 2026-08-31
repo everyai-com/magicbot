@@ -703,7 +703,6 @@ async function mcpRequest(
 }
 
 async function connectorTools(env: Env, userId: string): Promise<{ tools: Array<Record<string, unknown>>; session: string }> {
-  if (!await credentialConfigured(env, userId, "composio")) return { tools: [], session: "" };
   const initialized = await mcpRequest(env, userId, "", "initialize", {
     protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "magicbot-web", version: "1.0" },
   });
@@ -1261,8 +1260,9 @@ function githubTeamUrls(input: string): string[] {
 }
 
 async function connectorRequest(env: Env, userId: string, path: string, init: RequestInit = {}): Promise<Response> {
-  const key = await credentialValue(env, userId, "composio");
-  if (!key) throw new Error("Add a Composio project key in App Settings → Connections");
+  // Empty selects the connector Worker's server-side managed key; a saved
+  // per-user project key overrides it without ever returning either secret.
+  const key = await credentialValue(env, userId, "composio") ?? "";
   const method = init.method ?? "GET";
   const body = typeof init.body === "string" ? init.body : "";
   const result = await env.CONNECTORS.request(userId, key, path, method, body, new Headers(init.headers).get("mcp-session-id") ?? "");
@@ -1500,6 +1500,14 @@ async function api(request: Request, env: Env, user: User, path: string): Promis
       if (body.composio?.apiKey !== undefined) {
         const key = body.composio.apiKey.trim();
         if (key.length > 500) return json({ error: "Composio key is too long" }, 400);
+        if (key) {
+          const validation = await env.CONNECTORS.request(user.id, key, "/v1/catalog");
+          if (validation.status < 200 || validation.status >= 300) {
+            let detail: { error?: string } = {};
+            try { detail = JSON.parse(validation.body || "{}"); } catch { /* use the safe fallback below */ }
+            return json({ error: detail.error || "Composio rejected this project key" }, 400);
+          }
+        }
         await saveCredential(env, user.id, "composio", key);
       }
     }
@@ -1511,7 +1519,7 @@ async function api(request: Request, env: Env, user: User, path: string): Promis
     const defaultEngine = await preferredHostedEngine(env, user.id);
     return json({
       hosted: true,
-      xai: { configured: false }, composio: { configured: composioConfigured, mode: composioConfigured ? "managed" : "unavailable" },
+      xai: { configured: false }, composio: { configured: true, mode: composioConfigured ? "self-hosted" : "managed", keyConfigured: composioConfigured },
       codex: { configured: codexConfigured, runtimeReady: codexReady === "true", modelCount: codexModels.length, consentVersion: CODEX_CONSENT_VERSION },
       anthropic: { configured: anthropicConfigured, runtimeReady: anthropicReady === "true", modelCount: anthropicConfigured ? CLAUDE_MODELS.length : 0 },
       cfComputer: { configured: true, url: "https://magicbot-cf-computer.everyai-com.workers.dev" },
@@ -1542,15 +1550,12 @@ async function api(request: Request, env: Env, user: User, path: string): Promis
       }
     } catch { /* fall back to the curated catalog */ }
     const cards = CURATED_CONNECTORS.map(([slug, label, blurb, domain]) => ({ slug, label, blurb, logo: null, domain }));
-    const configured = await credentialConfigured(env, user.id, "composio");
-    return json({ configured, mode: configured ? "managed" : "unavailable", source: "curated", cards });
+    return json({ configured: true, mode: "managed", source: "curated", cards });
   }
   if (path === "/api/connectors/connected" && request.method === "GET") {
-    if (!await credentialConfigured(env, user.id, "composio")) return json({ configured: false, services: {} });
     return connectorJson(await connectorRequest(env, user.id, "/v1/connectors/connected"));
   }
   if (path === "/api/connectors" && request.method === "GET") {
-    if (!await credentialConfigured(env, user.id, "composio")) return json({ configured: false, services: {} });
     const services = new URL(request.url).searchParams.get("services") ?? "";
     return connectorJson(await connectorRequest(env, user.id, `/v1/connectors?services=${encodeURIComponent(services)}`));
   }

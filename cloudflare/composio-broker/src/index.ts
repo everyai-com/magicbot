@@ -619,10 +619,16 @@ async function webInstallation(userId: string, env: Env): Promise<InstallationRo
  * after it has been stored by the web Worker. */
 export class WebConnectors extends WorkerEntrypoint<Env> {
   async request(userId: string, apiKey: string, path: string, method = "GET", body = "", mcpSession = "") {
-    if (!userId || userId.length > 100 || !apiKey.trim() || apiKey.length > 500) {
+    const effectiveApiKey = apiKey.trim() || this.env.COMPOSIO_API_KEY?.trim();
+    if (!userId || userId.length > 100 || apiKey.length > 500) {
       return { status: 400, body: JSON.stringify({ error: "Connected-app credentials are invalid" }) };
     }
-    const scopedEnv = { ...this.env, COMPOSIO_API_KEY: apiKey.trim() } as Env;
+    if (!effectiveApiKey) {
+      return { status: 503, body: JSON.stringify({ error: "Connected apps are temporarily unavailable" }) };
+    }
+    // A per-user key overrides the Worker's managed project key. Passing an
+    // empty key intentionally selects Magicbot's secure server-side default.
+    const scopedEnv = { ...this.env, COMPOSIO_API_KEY: effectiveApiKey } as Env;
     try {
       const installation = await webInstallation(userId, scopedEnv);
       const url = new URL(path, "https://connectors.internal");

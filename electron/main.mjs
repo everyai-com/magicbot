@@ -294,7 +294,9 @@ async function startServerOn(port) {
       // the server prefers these over config.json, whose plaintext fields
       // the boot migration has deleted
       ...workspaceCredentialEnv(secureCredentials),
-      ...(composioBrokerUrl() && secureCredentials.composioBrokerToken
+      // A user-supplied project key explicitly opts out of Magicbot's
+      // managed Composio project. Clearing it returns to the default service.
+      ...(!secureCredentials.composioApiKey && composioBrokerUrl() && secureCredentials.composioBrokerToken
         ? {
             OMB_COMPOSIO_BROKER_URL: composioBrokerUrl(),
             OMB_COMPOSIO_BROKER_TOKEN: secureCredentials.composioBrokerToken,
