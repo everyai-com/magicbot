@@ -14,6 +14,9 @@ import { BotProfileAvatarCard } from "./BotProfileAvatarCard";
 import { LocalComputerAutoWarning } from "./LocalComputerAutoWarning";
 import { VoiceSettings } from "./VoiceSettings";
 import { BOT_PROFILE_LIMITS } from "../../shared/bot-profile";
+import { ContextSourcesCard } from "./ContextSourcesCard";
+import { BotAutonomySettings } from "./AutonomySettings";
+import { BotModulesCard } from "./BotModulesCard";
 
 function Field({
   label,
@@ -639,8 +642,12 @@ export function SettingsPanel({ bot }: { bot: Bot }) {
 
           {/* keyed so switching bots never shows one bot's notes under another's name */}
           <MemoryCard key={bot.id} bot={bot} />
+          {state.config?.hosted && <ContextSourcesCard key={`sources-${bot.id}`} bot={bot} />}
+          {state.config?.hosted && <BotModulesCard key={`modules-${bot.id}`} bot={bot} />}
 
-          <div className="flex items-center justify-between gap-4 rounded-xl bg-card p-4">
+          {state.config?.hosted && <BotAutonomySettings key={`autonomy-${bot.id}`} botId={bot.id} />}
+
+          {!state.config?.hosted && <div className="flex items-center justify-between gap-4 rounded-xl bg-card p-4">
             <div>
               <div className="text-[15px] font-medium text-ink">Auto mode</div>
               <div className="mt-0.5 text-[13px] text-ink-secondary">
@@ -673,7 +680,7 @@ export function SettingsPanel({ bot }: { bot: Bot }) {
                 )}
               />
             </button>
-          </div>
+          </div>}
 
           <VoiceSettings bot={bot} onPatch={patch} />
 

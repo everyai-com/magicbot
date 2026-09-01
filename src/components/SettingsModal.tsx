@@ -19,6 +19,10 @@ import { RoomTurnTimeoutSettings } from "./RoomTurnTimeoutSettings";
 import { TranscriptionSettings } from "./TranscriptionSettings";
 import { cn } from "@/lib/cn";
 import { useWebAppInstall } from "@/lib/web-app";
+import { WhatsAppSettings } from "./WhatsAppSettings";
+import { AutonomySettings } from "./AutonomySettings";
+import { OperatingProfileSettings } from "./OperatingProfileSettings";
+import { CompanyProfileSettings } from "./CompanyProfileSettings";
 
 const SECTIONS: Array<{
   id: AppSettingsSection;
@@ -439,6 +443,9 @@ export function SettingsModal() {
                 <Card title="Profile" subtitle="Shown in the sidebar. Saved as you go.">
                   <ProfileFields />
                 </Card>
+                {hosted && <OperatingProfileSettings />}
+                {hosted && <CompanyProfileSettings />}
+                {hosted && <AutonomySettings />}
                 <DevicesRow />
                 <Card title="Skin" subtitle="Applies instantly and is remembered on this machine.">
                   <SkinPicker />
@@ -457,10 +464,12 @@ export function SettingsModal() {
             )}
 
             {section === "connections" && (
-              <Card
-                title="Connections"
-                subtitle="Connected apps and optional service keys are shared by this MagicTeams account across desktop and web."
-              >
+              <>
+                {hosted && <WhatsAppSettings />}
+                <Card
+                  title="Connections"
+                  subtitle="Connected apps and optional service keys are shared by this MagicTeams account across desktop and web."
+                >
                 <div className="flex flex-col gap-4">
                   {state.config?.composio.mode === "managed" ? (
                     <div className="rounded-lg border border-success/25 bg-success/10 px-3 py-2 text-[13px] text-success">
@@ -484,7 +493,8 @@ export function SettingsModal() {
                     </>
                   )}
                 </div>
-              </Card>
+                </Card>
+              </>
             )}
 
             {section === "engines" && (

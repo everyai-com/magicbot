@@ -6,6 +6,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Check, Loader2, RefreshCw, Search, X } from "lucide-react";
 import { api, useStore } from "@/state/store";
 import { cn } from "@/lib/cn";
+import { ConnectorSnapshots } from "./ConnectorSnapshots";
 
 interface ToolkitCard {
   slug: string;
@@ -102,7 +103,7 @@ export function PluginsPanel() {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
-  const [tab, setTab] = useState<"marketplace" | "connected">("marketplace");
+  const [tab, setTab] = useState<"marketplace" | "connected" | "snapshots">("marketplace");
 
   const pollTimers = useRef(new Map<string, ReturnType<typeof setInterval>>());
   const statusGenerations = useRef(new Map<string, number>());
@@ -374,8 +375,19 @@ export function PluginsPanel() {
             >
               Connected{connectedCount > 0 ? ` ${connectedCount}` : ""}
             </button>
+            <button
+              role="tab"
+              aria-selected={tab === "snapshots"}
+              onClick={() => setTab("snapshots")}
+              className={cn(
+                "rounded-lg px-3 py-2 text-[13.5px] transition-colors sm:px-4",
+                tab === "snapshots" ? "bg-card text-ink shadow-sm" : "text-ink-secondary hover:text-ink",
+              )}
+            >
+              Snapshots
+            </button>
           </div>
-          <label className="flex h-11 w-full items-center gap-2.5 rounded-xl bg-raised/70 px-3.5 sm:w-[320px]">
+          {tab !== "snapshots" && <label className="flex h-11 w-full items-center gap-2.5 rounded-xl bg-raised/70 px-3.5 sm:w-[320px]">
             <Search size={17} className="shrink-0 text-ink-secondary" />
             <input
               value={search}
@@ -384,10 +396,10 @@ export function PluginsPanel() {
               aria-label="Search apps"
               className="min-w-0 flex-1 bg-transparent text-[14px] text-ink placeholder:text-ink-secondary focus:outline-none"
             />
-          </label>
+          </label>}
         </div>
 
-        {!configured && (
+        {!configured && tab !== "snapshots" && (
           <div className="mx-6 mb-1 rounded-xl bg-warning/10 px-4 py-3 text-[13px] text-warning sm:mx-8">
             Connected apps are temporarily unavailable. You can retry after restarting, or configure your own connection service.{" "}
             <button
@@ -401,7 +413,7 @@ export function PluginsPanel() {
             </button>
           </div>
         )}
-        {configured && source === "curated" && mode === "self-hosted" && (
+        {configured && tab !== "snapshots" && source === "curated" && mode === "self-hosted" && (
           <div className="mx-6 mb-1 text-[12px] text-ink-secondary sm:mx-8">
             Showing featured apps.{" "}
             <button
@@ -419,7 +431,7 @@ export function PluginsPanel() {
         {error && <div role="alert" className="mx-6 mt-2 rounded-lg bg-danger/10 px-3 py-2 text-[12px] text-danger sm:mx-8">{error}</div>}
 
         <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-7 pt-5 sm:px-8">
-          {cards === null ? (
+          {tab === "snapshots" ? <ConnectorSnapshots /> : cards === null ? (
             <div className="flex items-center justify-center gap-2 py-24 text-[13px] text-ink-secondary">
               <Loader2 size={14} className="animate-spin" /> Loading catalog…
             </div>
@@ -551,7 +563,7 @@ export function PluginsPanel() {
               </div>
             </div>
           )}
-          {cards !== null && visible.length === 0 && (
+          {tab !== "snapshots" && cards !== null && visible.length === 0 && (
             <div className="flex min-h-56 flex-col items-center justify-center text-center">
               <div className="text-[14px] font-medium text-ink">
                 {tab === "connected" ? "No connected apps yet" : "No apps found"}

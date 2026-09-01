@@ -6,12 +6,9 @@
   "homepage": "https://github.com/milind-soni/OpenMausBot",
   "repository": {
     "type": "git",
-    "url": "https://github.com/milind-soni/OpenMausBot.git"
+    "url": "git+https://github.com/milind-soni/OpenMausBot.git"
   },
-  "author": {
-    "name": "Milind Soni",
-    "email": "46266943+milind-soni@users.noreply.github.com"
-  },
+  "author": "Milind Soni <46266943+milind-soni@users.noreply.github.com>",
   "license": "Apache-2.0",
   "desktopName": "com.openmausbot.app.desktop",
   "type": "module",
@@ -107,5 +104,12 @@
         "x64"
       ]
     }
+  },
+  "directories": {
+    "doc": "docs"
+  },
+  "keywords": [],
+  "bugs": {
+    "url": "https://github.com/milind-soni/OpenMausBot/issues"
   }
 }

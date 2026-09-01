@@ -24,6 +24,7 @@ import { showNotification, type NotificationTarget } from "@/lib/notify";
 import { speaker } from "@/lib/tts";
 import { createBotPatchQueue, type BotUpdatePatch } from "./bot-patch-queue";
 import { skillRecorderEnabled } from "@/lib/feature-flags";
+import { hasBrowserIntent } from "@/lib/browser-intent";
 
 export type { MausColor } from "@/lib/mascot";
 
@@ -141,6 +142,10 @@ export interface Task {
   /** folder this task's turns run in, pinned on its first turn; null =
    * legacy home-folder session; absent = not pinned yet */
   cwd?: string | null;
+  /** A closed task is immutable history. New work continues in a linked task. */
+  closedAt?: number;
+  closeoutId?: string;
+  continuedInThreadId?: string;
 }
 
 export interface TaskUsage {
@@ -362,7 +367,7 @@ export interface AppState {
   config: ConfigStatus | null;
   /** selected chat — a bot id OR a group id */
   selectedId: string;
-  activeView: "chat" | "routines" | "skill-recorder";
+  activeView: "chat" | "today" | "work" | "people" | "routines" | "skill-recorder";
   routines: Routine[];
   routineRuns: RoutineRun[];
   webhooks: WebhookTrigger[];
@@ -422,6 +427,9 @@ export type Action =
       computerControl: Record<string, { held: boolean; helpReason: string | null }>;
     }
   | { type: "showRoutines" }
+  | { type: "showToday" }
+  | { type: "showWork" }
+  | { type: "showPeople" }
   | { type: "showSkillRecorder" }
   | { type: "routinesHydrated"; routines: Routine[]; runs: RoutineRun[] }
   | { type: "routinePatched"; routine: Routine }
@@ -475,6 +483,7 @@ export type Action =
   | { type: "newTask"; botId: string }
   | { type: "switchTask"; botId: string; threadId: string }
   | { type: "taskSwitched"; bot: Bot }
+  | { type: "taskRenamed"; botId: string; task: Task }
   | { type: "renameTask"; botId: string; threadId: string; title: string }
   | { type: "deleteTask"; botId: string; threadId: string }
   | { type: "newBot" }
@@ -575,14 +584,61 @@ export function reducer(state: AppState, action: Action): AppState {
       const known = (id: string) => action.bots.some((b) => b.id === id) || action.groups.some((g) => g.id === id);
       const selectedId =
         state.selectedId && known(state.selectedId) ? state.selectedId : (action.bots[0]?.id ?? "");
+      const bots = action.bots.map((snapshot) => {
+        const current = state.bots.find((bot) => bot.id === snapshot.id);
+        if (!current?.busy || current.threadId !== snapshot.threadId) return snapshot;
+        const snapshotIds = new Set(snapshot.messages.map((message) => message.id));
+        const optimistic = current.messages.filter((message) => !snapshotIds.has(message.id));
+        if (!optimistic.length) return { ...snapshot, busy: true, activity: current.activity };
+        return {
+          ...snapshot,
+          busy: true,
+          activity: current.activity,
+          messages: [...snapshot.messages, ...optimistic],
+          activeLeafId: current.activeLeafId,
+        };
+      });
       return {
         ...state,
-        bots: action.bots,
+        // A hosted send is optimistic while the request waits for inference.
+        // A reconnect snapshot may lag that request; keep its local bubble
+        // until the response confirms it instead of making it disappear.
+        bots,
         groups: action.groups,
         computerControl: action.computerControl,
         selectedId,
       };
     }
+    case "showToday":
+      return {
+        ...state,
+        activeView: "today",
+        settingsOpen: false,
+        computerOpen: false,
+        inspectorOpen: false,
+        appSettingsOpen: false,
+        pluginsOpen: false,
+      };
+    case "showWork":
+      return {
+        ...state,
+        activeView: "work",
+        settingsOpen: false,
+        computerOpen: false,
+        inspectorOpen: false,
+        appSettingsOpen: false,
+        pluginsOpen: false,
+      };
+    case "showPeople":
+      return {
+        ...state,
+        activeView: "people",
+        settingsOpen: false,
+        computerOpen: false,
+        inspectorOpen: false,
+        appSettingsOpen: false,
+        pluginsOpen: false,
+      };
     case "showRoutines":
       return {
         ...state,
@@ -1043,7 +1099,7 @@ export function reducer(state: AppState, action: Action): AppState {
       const animated = withMascotMotion(dismissOnboardingCard(state, action.botId), action.botId, "working");
       if (!action.clientMessageId) return animated;
       const clientMessageId = action.clientMessageId;
-      return updateBot(animated, action.botId, (bot) => {
+      const next = updateBot(animated, action.botId, (bot) => {
         if (bot.messages.some((message) => message.id === clientMessageId)) return bot;
         const message: Message = {
           id: clientMessageId,
@@ -1061,6 +1117,16 @@ export function reducer(state: AppState, action: Action): AppState {
           activeLeafId: message.id,
         };
       });
+      const isHostedBrowserTurn = state.config?.hosted === true && hasBrowserIntent(action.text);
+      return isHostedBrowserTurn
+        ? {
+            ...next,
+            computerOpen: true,
+            settingsOpen: false,
+            inspectorOpen: false,
+            appSettingsOpen: false,
+          }
+        : next;
     }
     case "editMessage":
       return withMascotMotion(state, action.botId, "working");
@@ -1073,6 +1139,13 @@ export function reducer(state: AppState, action: Action): AppState {
       return state;
     case "taskSwitched":
       return updateBot(state, action.bot.id, (bot) => ({ ...bot, ...action.bot, messages: action.bot.messages ?? [] }));
+    case "taskRenamed":
+      return updateBot(state, action.botId, (bot) => ({
+        ...bot,
+        tasks: (bot.tasks ?? []).map((task) =>
+          task.threadId === action.task.threadId ? { ...task, ...action.task } : task,
+        ),
+      }));
     case "newBot":
     case "duplicateBot":
     case "interrupt":
@@ -1298,6 +1371,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           void api(`/api/bots/${action.botId}/messages`, {
             method: "POST",
             body: JSON.stringify({ text: action.text, clientMessageId: action.clientMessageId }),
+            // Hosted Codex can legitimately use the Computer runtime's full
+            // three-minute execution window, especially on a cold container.
+            signal: AbortSignal.timeout(210_000),
           })
             .then((body) => {
               // The local harness publishes messages over SSE. The hosted
@@ -1527,7 +1603,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           api(`/api/bots/${action.botId}/tasks/${action.threadId}`, {
             method: "PATCH",
             body: JSON.stringify({ title: action.title }),
-          }).catch(showError);
+          })
+            .then((r: any) => r?.task && dispatch({ type: "taskRenamed", botId: action.botId, task: r.task }))
+            .catch(showError);
           break;
         case "deleteTask":
           api(`/api/bots/${action.botId}/tasks/${action.threadId}`, { method: "DELETE" })

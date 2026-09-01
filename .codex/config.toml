@@ -1,0 +1,12 @@
+# Project-scoped GitHub MCP server for repository and code research.
+# Authentication is read from the launching environment; never put a token
+# in this file. Create a least-privilege token and export it as:
+#   GITHUB_PAT_TOKEN=github_pat_...
+[mcp_servers.github]
+url = "https://api.githubcopilot.com/mcp/"
+bearer_token_env_var = "GITHUB_PAT_TOKEN"
+http_headers = { "X-MCP-Readonly" = "true" }
+default_tools_approval_mode = "writes"
+startup_timeout_sec = 20
+tool_timeout_sec = 60
+enabled = true

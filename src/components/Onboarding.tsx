@@ -182,13 +182,13 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
   const setupEngines = engines.filter((e) => !engineReady(e.instance));
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-app p-8">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-app p-4 sm:p-8">
       {/* the engines step lays tiles out two across, so it gets more room —
           but never more than the window: the panel caps at the viewport and
           the engine list scrolls inside it, so the header and Continue stay
           put and nothing runs into the edges */}
       <div
-        className={`flex max-h-full w-full flex-col rounded-2xl border border-hairline/40 bg-panel p-8 ${step === 1 ? "max-w-[680px]" : "max-w-[460px]"}`}
+        className={`flex max-h-full w-full flex-col rounded-2xl border border-hairline/40 bg-panel p-5 sm:p-8 ${step === 1 ? "max-w-[680px]" : "max-w-[460px]"}`}
       >
         {step === 0 && (
           <div className="flex flex-col items-center">
@@ -226,7 +226,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
                 track("email_skipped");
                 setStep(1);
               }}
-              className="mt-3 text-[12px] text-ink-secondary hover:text-ink"
+              className="mt-1 flex min-h-11 items-center justify-center px-4 text-[12px] text-ink-secondary hover:text-ink"
             >
               Maybe later
             </button>

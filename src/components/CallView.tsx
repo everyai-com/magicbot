@@ -147,7 +147,7 @@ export function CallTargetButton({
         aria-label={label}
         title={label}
         className={cn(
-          "relative flex size-9 items-center justify-center rounded-full transition-colors",
+          "relative flex size-10 items-center justify-center rounded-full transition-colors sm:size-9",
           active
             ? "bg-danger text-white hover:brightness-110"
             : unavailable

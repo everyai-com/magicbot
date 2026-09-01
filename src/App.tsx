@@ -17,6 +17,9 @@ import { RoutinesPage } from "@/components/RoutinesPage";
 import { NoEngines } from "@/components/NoEngines";
 import { CommandPalette } from "@/components/CommandPalette";
 import { SkillRecorderPage } from "@/components/SkillRecorderPage";
+import { TodayPage } from "@/components/TodayPage";
+import { PeoplePage } from "@/components/PeoplePage";
+import { WorkPage } from "@/components/WorkPage";
 
 function Shell() {
   const { state, dispatch } = useStore();
@@ -29,6 +32,15 @@ function Shell() {
   const menuButtonRef = useRef<HTMLButtonElement>(null);
   const group = state.groups.find((g) => g.id === state.selectedId);
   const bot = group ? undefined : (state.bots.find((b) => b.id === state.selectedId) ?? state.bots[0]);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("view") !== "work") return;
+    const workspaceId = params.get("workspaceId");
+    if (workspaceId) localStorage.setItem("magicteams-workspace", workspaceId);
+    dispatch({ type: "showWork" });
+    history.replaceState({}, "", location.pathname);
+  }, [dispatch]);
 
   // Nothing on this machine can run a bot. A missing cloud login does not
   // count — that CLI can still host a local model. Wait for the first
@@ -107,7 +119,13 @@ function Shell() {
           menuButtonRef.current?.focus();
         }}
       />
-      {state.activeView === "routines" ? (
+      {state.activeView === "today" ? (
+        <TodayPage />
+      ) : state.activeView === "work" ? (
+        <WorkPage />
+      ) : state.activeView === "people" ? (
+        <PeoplePage />
+      ) : state.activeView === "routines" ? (
         <RoutinesPage />
       ) : state.activeView === "skill-recorder" ? (
         <SkillRecorderPage />
