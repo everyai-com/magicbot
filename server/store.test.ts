@@ -102,6 +102,13 @@ describe("Store", () => {
     expect(first.color).not.toBe(second.color);
   });
 
+  it("never repeats a live color while the palette has room", () => {
+    const store = new Store(selection);
+    const colors = new Set<string>();
+    for (let index = 0; index < 10; index += 1) colors.add(store.createBot().color);
+    expect(colors.size).toBe(10);
+  });
+
   it("defaults a room to its first member and repairs the lead when membership changes", () => {
     const store = new Store(selection);
     const first = store.createBot();

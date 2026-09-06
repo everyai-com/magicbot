@@ -14,7 +14,7 @@ import { newId, type CloudBackend, type ModelSelection, type ThreadId } from "./
 import { pickBotName } from "./names.ts";
 import { redactSecretsInText } from "./redact.ts";
 import { botAvatarProfile, type BotAvatarCrop } from "../shared/bot-avatar.ts";
-import { automaticBotAppearance, type BotPersonality } from "../shared/bot-personality.ts";
+import { AUTO_BOT_COLORS, automaticBotAppearance, type BotPersonality } from "../shared/bot-personality.ts";
 
 export type MausColor =
   | "green"
@@ -330,6 +330,23 @@ export interface BotRecord {
 const BOTS_FILE = join(DATA_DIR, "bots.json");
 const GROUPS_FILE = join(DATA_DIR, "groups.json");
 const messagesFile = (threadId: string) => join(DATA_DIR, `messages-${threadId}.json`);
+
+/** Hash picks collide on a small palette (birthday paradox), which defeats
+ * the adjacent-bot rotation the UI promises. Walk the palette from the
+ * hashed pick so a fresh bot never repeats a live color while one is free.
+ * Existing bots are never recolored here — migration keeps their colors. */
+function nextFreeBotColor(
+  existing: Array<Pick<BotRecord, "color">>,
+  preferred: MausColor,
+): MausColor {
+  if (!existing.some((bot) => bot.color === preferred)) return preferred;
+  const start = Math.max(0, AUTO_BOT_COLORS.indexOf(preferred));
+  for (let step = 1; step < AUTO_BOT_COLORS.length; step += 1) {
+    const candidate = AUTO_BOT_COLORS[(start + step) % AUTO_BOT_COLORS.length]!;
+    if (!existing.some((bot) => bot.color === candidate)) return candidate;
+  }
+  return preferred;
+}
 
 const COLORS: MausColor[] = [
   "green",
@@ -831,7 +848,7 @@ export class Store {
       createdAt: Date.now(),
     };
     const automaticAppearance = automaticBotAppearance(bot.id);
-    if (!profile.color) bot.color = automaticAppearance.color;
+    if (!profile.color) bot.color = nextFreeBotColor(this.bots, automaticAppearance.color);
     if (!profile.mascotExpression) bot.mascotExpression = automaticAppearance.mascotExpression;
     if (!profile.personality) bot.personality = automaticAppearance.personality;
     if (profile.mascotExpression) bot.mascotExpression = profile.mascotExpression;
