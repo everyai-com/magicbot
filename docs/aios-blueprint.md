@@ -18,8 +18,10 @@ chat is a real agent) and its clean **TS driver/event core**, but rebuilds the
 1. **Memory** ✅ — per-bot durable facts (`memory-<botId>.json`), injected into the
    system prompt every turn; the bot writes with `[REMEMBER: …]` markers the
    harness extracts + strips. Mirrors AIOS `AIOS_REMEMBER → store → injected block`.
-   Driver-agnostic (`server/organs/memory.ts`).
-2. **Routines** ✅ — per-bot recurring scheduled tasks (`server/organs/routines.ts`).
+   Driver-agnostic; lives in `server/workspace.ts` on the harness and in the
+   hosted Worker's memory routes (the original `server/organs/` prototypes were
+   superseded and removed).
+2. **Routines** ✅ — per-bot recurring scheduled tasks (`server/routines.ts`).
    An in-harness scheduler tick fires due routines through `startTurn` (the same
    dispatch as a user message); REST CRUD + a UI section in ComputerPanel. Fills
    OpenMausBot's placeholder. Hosted: the tick becomes a Durable Object alarm,

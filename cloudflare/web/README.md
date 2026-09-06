@@ -14,12 +14,18 @@ The hosted MagicBots entry point runs entirely on Cloudflare:
 
 The web API also supports message branches and reactions, conversation search/export, community and GitHub team import, project scouting, inspector events, and public credentialed webhook ingress.
 
-Deploy from the repository root:
+Verify, migrate, then deploy from the repository root. The Worker is not part of the app or harness
+`tsc` projects, so `web:check` is the only type gate it has; `web:deploy` runs it before bundling.
 
 ```sh
-pnpm web:migrate
+pnpm web:check     # tsc over cloudflare/web (also runs inside `pnpm typecheck`)
+pnpm web:test      # unit tests for the Worker's auth, CSRF, and rate-limit primitives
+pnpm web:migrate   # apply D1 migrations first: the deployed code assumes the current schema
 pnpm web:deploy
 ```
+
+The minute cron also purges expired sessions, password-reset tokens, and finished rate-limit windows, so
+those tables stay bounded without a separate maintenance job.
 
 Connected-app OAuth uses the private `cloudflare/composio-broker` Worker. Each user can add or remove a Composio project key from web settings. Keys are encrypted with AES-GCM under the `CREDENTIAL_KEY` Worker secret, are write-only to the browser, and remain isolated per account.
 

@@ -34,6 +34,22 @@ import { SPECIALIST_AGENTS, normalizeSpecialistAgent, specialistById, specialist
 import { delegationPrompt, normalizeDelegationInput, parseDelegationCommand, parseDelegationMarker, stripDelegationMarker, type DelegationInput } from "../../../shared/delegation";
 import { fallbackWorkflowBrief, nextWorkflowTriggerAt, normalizeAgentWorkflow, normalizeWorkflowTrigger, parseWorkflowReview, readyWorkflowSteps, validateAgentWorkflow, validateWorkflowTrigger, workflowCompletionPrompt, workflowReviewPrompt, type AgentWorkflowInput, type WorkflowStepStatus } from "../../../shared/agent-workflow";
 import { activeBranch, renderContext, selectContext, type ContextCandidate, type ContextScope } from "./context";
+import {
+  SESSION_AGE,
+  SESSION_COOKIE,
+  clearSessionCookie,
+  constantTimeEqual,
+  cookieValue,
+  escapeHtml,
+  passwordHash,
+  purgeExpiredRateLimits,
+  randomToken,
+  safeNext,
+  sameOrigin,
+  sessionCookie,
+  sha256,
+  withinRateLimit,
+} from "./auth";
 
 interface Env {
   DB: D1Database;
@@ -192,8 +208,6 @@ interface Bot {
   [key: string]: unknown;
 }
 
-const SESSION_COOKIE = "magicbot_session";
-const SESSION_AGE = 60 * 60 * 24 * 30;
 const PASSWORD_RESET_AGE = 30 * 60;
 const PASSWORD_RESET_SENDER = "noreply@mail.magicteams.ai";
 const MODEL = "@cf/moonshotai/kimi-k2.6";
@@ -237,44 +251,6 @@ function json(value: unknown, status = 200, headers: HeadersInit = {}): Response
 
 function redirect(location: string, headers: HeadersInit = {}): Response {
   return new Response(null, { status: 303, headers: { location, ...headers } });
-}
-
-function cookieValue(request: Request, name: string): string | null {
-  const source = request.headers.get("cookie") ?? "";
-  for (const part of source.split(";")) {
-    const [key, ...value] = part.trim().split("=");
-    if (key === name) return decodeURIComponent(value.join("="));
-  }
-  return null;
-}
-
-function sessionCookie(token: string): string {
-  return `${SESSION_COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${SESSION_AGE}`;
-}
-
-function clearSessionCookie(): string {
-  return `${SESSION_COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`;
-}
-
-function randomToken(bytes = 32): string {
-  const data = crypto.getRandomValues(new Uint8Array(bytes));
-  return btoa(String.fromCharCode(...data)).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
-}
-
-async function sha256(value: string): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", encoder.encode(value));
-  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
-}
-
-async function passwordHash(password: string, salt: string): Promise<string> {
-  const key = await crypto.subtle.importKey("raw", encoder.encode(password), "PBKDF2", false, ["deriveBits"]);
-  const bits = await crypto.subtle.deriveBits(
-    // Workers Web Crypto currently caps PBKDF2 at 100k iterations.
-    { name: "PBKDF2", hash: "SHA-256", salt: encoder.encode(salt), iterations: 100_000 },
-    key,
-    256,
-  );
-  return Array.from(new Uint8Array(bits), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
 function base64Bytes(bytes: Uint8Array): string {
@@ -427,13 +403,6 @@ async function claudeRequest(env: Env, userId: string, body: Record<string, unkn
   });
 }
 
-function constantTimeEqual(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
-  let difference = 0;
-  for (let index = 0; index < a.length; index += 1) difference |= a.charCodeAt(index) ^ b.charCodeAt(index);
-  return difference === 0;
-}
-
 async function currentUser(request: Request, env: Env): Promise<User | null> {
   const token = cookieValue(request, SESSION_COOKIE);
   if (!token) return null;
@@ -453,18 +422,6 @@ async function createSession(env: Env, userId: string): Promise<string> {
   return token;
 }
 
-async function withinRateLimit(env: Env, key: string, limit: number, windowSeconds: number): Promise<boolean> {
-  const window = Math.floor(Date.now() / 1000 / windowSeconds);
-  await env.DB.prepare(
-    `INSERT INTO rate_limits (key, window, count) VALUES (?, ?, 1)
-     ON CONFLICT(key) DO UPDATE SET
-       count = CASE WHEN rate_limits.window = excluded.window THEN rate_limits.count + 1 ELSE 1 END,
-       window = excluded.window`,
-  ).bind(key, window).run();
-  const row = await env.DB.prepare("SELECT count FROM rate_limits WHERE key = ?").bind(key).first<{ count: number }>();
-  return (row?.count ?? limit + 1) <= limit;
-}
-
 async function requestBody(request: Request): Promise<Record<string, string>> {
   const contentType = request.headers.get("content-type") ?? "";
   if (contentType.includes("application/json")) return (await request.json()) as Record<string, string>;
@@ -472,14 +429,6 @@ async function requestBody(request: Request): Promise<Record<string, string>> {
   const result: Record<string, string> = {};
   form.forEach((value, key) => { result[key] = String(value); });
   return result;
-}
-
-function safeNext(value: string | null): string {
-  return value?.startsWith("/") && !value.startsWith("//") ? value : "/";
-}
-
-function escapeHtml(value: string): string {
-  return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
 }
 
 const AUTH_HEADERS: HeadersInit = {
@@ -2002,26 +1951,6 @@ function webhookCredential(request: Request, webhook: WebhookRecord, secret: str
   return { endpointUrl, secret, url: `${endpointUrl}?token=${encodeURIComponent(secret)}` };
 }
 
-function sameOrigin(request: Request): boolean {
-  const origin = request.headers.get("origin");
-  const fetchSite = request.headers.get("sec-fetch-site")?.toLowerCase();
-
-  // Fetch Metadata is set by browsers from information that page scripts cannot
-  // alter. It also survives privacy modes and proxies that hide or rewrite Origin.
-  if (fetchSite === "cross-site" || fetchSite === "same-site") return false;
-  if (!origin || origin === "null") return !fetchSite || fetchSite === "same-origin" || fetchSite === "none";
-
-  try {
-    if (new URL(origin).origin === new URL(request.url).origin) return true;
-  } catch {
-    return false;
-  }
-
-  // A proxy can change the URL visible to the Worker while the browser still
-  // correctly identifies the form submission as same-origin.
-  return fetchSite === "same-origin";
-}
-
 async function handleWebhook(request: Request, env: Env, endpointId: string): Promise<Response> {
   const row = await env.DB.prepare("SELECT user_id, secret_hash, data FROM webhooks WHERE endpoint_id = ?")
     .bind(endpointId).first<{ user_id: string; secret_hash: string | null; data: string }>();
@@ -2608,7 +2537,6 @@ async function syncAutonomousWhatsAppAccounts(env: Env) {
 async function api(request: Request, env: Env, user: User, path: string, ctx: ExecutionContext): Promise<Response> {
   if (request.method !== "GET" && !sameOrigin(request)) return json({ error: "Cross-origin request refused" }, 403);
   if (path === "/api/auth/me" && request.method === "GET") return json({ user });
-  if (path === "/api/health") return json({ app: "magicbot-web", cloud: "cloudflare" });
   if (path === "/api/work" && request.method === "GET") {
     const requestedWorkspace = new URL(request.url).searchParams.get("workspaceId");
     let workspace = requestedWorkspace ? await env.DB.prepare(`SELECT w.id, w.name, wm.role FROM workspaces w
@@ -2706,7 +2634,7 @@ async function api(request: Request, env: Env, user: User, path: string, ctx: Ex
     if (!access || !["owner", "admin"].includes(access.role)) return json({ error: "Only workspace admins can invite people" }, 403);
     const email = String(body.email ?? "").trim().toLowerCase(); if (!/^\S+@\S+\.\S+$/.test(email)) return json({ error: "Enter a valid email" }, 400);
     if (/@(?:[^@]+\.)?(?:example|invalid|localhost|test)$/i.test(email)) return json({ error: "Use a real email address, not a reserved test domain" }, 400);
-    if (!await withinRateLimit(env, `workspace-invite:${user.id}`, 100, 60 * 60)) return json({ error: "Invitation limit reached. Try again in an hour." }, 429);
+    if (!await withinRateLimit(env.DB, `workspace-invite:${user.id}`, 100, 60 * 60)) return json({ error: "Invitation limit reached. Try again in an hour." }, 429);
     const existingMember = await env.DB.prepare(`SELECT 1 FROM workspace_members wm JOIN users u ON u.id = wm.user_id
       WHERE wm.workspace_id = ? AND lower(u.email) = ?`).bind(workspaceId, email).first();
     if (existingMember) return json({ error: "This person is already a workspace member" }, 409);
@@ -2922,7 +2850,7 @@ async function api(request: Request, env: Env, user: User, path: string, ctx: Ex
   if (path === "/api/codex/login" && request.method === "POST") {
     const body: { consentVersion?: string } = await request.json<{ consentVersion?: string }>().catch(() => ({}));
     if (body.consentVersion !== CODEX_CONSENT_VERSION) return json({ error: "Review and accept the current Codex connection notice" }, 400);
-    if (!await withinRateLimit(env, `codex-login:${user.id}`, 5, 60 * 60)) return json({ error: "Too many connection attempts. Please try again later." }, 429);
+    if (!await withinRateLimit(env.DB, `codex-login:${user.id}`, 5, 60 * 60)) return json({ error: "Too many connection attempts. Please try again later." }, 429);
     try {
       const device = await requestDeviceCode(codexConfig);
       await saveCredential(env, user.id, CODEX_PENDING_SECRET, device.deviceAuthId);
@@ -3017,7 +2945,7 @@ async function api(request: Request, env: Env, user: User, path: string, ctx: Ex
     return json({ ok: true });
   }
   if (path === "/api/claude/login" && request.method === "POST") {
-    if (!await withinRateLimit(env, `claude-login:${user.id}`, 10, 60 * 60)) return json({ error: "Too many connection attempts. Please try again later." }, 429);
+    if (!await withinRateLimit(env.DB, `claude-login:${user.id}`, 10, 60 * 60)) return json({ error: "Too many connection attempts. Please try again later." }, 429);
     const verifier = randomUrlSafe(64);
     const state = randomUrlSafe(32);
     const params = new URLSearchParams({
@@ -4178,7 +4106,7 @@ async function api(request: Request, env: Env, user: User, path: string, ctx: Ex
     const body = await request.json<{ text?: string }>();
     const text = body.text?.trim() ?? "";
     if (!text || text.length > 20_000) return json({ error: "Message must be between 1 and 20,000 characters" }, 400);
-    if (!await withinRateLimit(env, `chat:${user.id}`, 20, 60)) return json({ error: "Too many messages. Please wait a minute." }, 429);
+    if (!await withinRateLimit(env.DB, `chat:${user.id}`, 20, 60)) return json({ error: "Too many messages. Please wait a minute." }, 429);
     const userMessage: Message = { id: crypto.randomUUID(), role: "user", kind: "text", text, at: Date.now(), parentId: group.messages.at(-1)?.id ?? null };
     const produced: Message[] = [userMessage];
     group.messages.push(userMessage);
@@ -4950,7 +4878,7 @@ async function api(request: Request, env: Env, user: User, path: string, ctx: Ex
     const bot = await loadBot(env, user.id, botId);
     if (!bot) return json({ error: "Bot not found" }, 404);
     if (activeTaskClosed(bot)) return json({ error: "This task is closed. Continue in a new task." }, 409);
-    if (!await withinRateLimit(env, `chat:${user.id}`, 20, 60)) {
+    if (!await withinRateLimit(env.DB, `chat:${user.id}`, 20, 60)) {
       return json({ error: "Too many messages. Please wait a minute and try again." }, 429);
     }
     const body = await request.json<{ text?: string; clientMessageId?: string }>();
@@ -4991,6 +4919,11 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
     }
     if (url.pathname === "/accept-invite" && request.method === "POST") {
       if (!sameOrigin(request)) return new Response("Cross-origin request refused", { status: 403 });
+      // This path can create an account, so it gets the same per-address budget as /signup.
+      const addressKey = await sha256(request.headers.get("cf-connecting-ip") ?? "unknown");
+      if (!await withinRateLimit(env.DB, `accept-invite:${addressKey}`, 5, 60 * 60)) {
+        return authPage("Too many attempts", "Please wait a while before trying this invitation again.", '<p class="switch"><a href="/login">Go to sign in</a></p>', 429);
+      }
       const body = await requestBody(request); const token = body.token ?? "";
       const invite = /^[A-Za-z0-9_-]{40,64}$/.test(token) ? await env.DB.prepare(`SELECT wi.id, wi.workspace_id, wi.email, wi.role, w.name AS workspace_name, inviter.name AS inviter_name
         FROM workspace_invites wi JOIN workspaces w ON w.id = wi.workspace_id JOIN users inviter ON inviter.id = wi.invited_by
@@ -5013,6 +4946,8 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
       ]);
       return redirect(`/?view=work&workspaceId=${encodeURIComponent(invite.workspace_id)}`, createdSession ? { "set-cookie": sessionCookie(createdSession) } : undefined);
     }
+    // Uptime probes need this before the session gate; it discloses nothing but the app name.
+    if (url.pathname === "/api/health" && request.method === "GET") return json({ app: "magicbot-web", cloud: "cloudflare" });
     if (url.pathname === "/login" && request.method === "GET") return loginPage();
     if (url.pathname === "/signup" && request.method === "GET") return loginPage("", "signup");
     if (url.pathname === "/forgot-password" && request.method === "GET") return forgotPasswordPage();
@@ -5024,8 +4959,8 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
       const addressKey = await sha256(clientAddress);
       const emailKey = await sha256(email);
       const validEmail = /^\S+@\S+\.\S+$/.test(email) && email.length <= 254;
-      const allowedByAddress = await withinRateLimit(env, `password-reset-ip:${addressKey}`, 5, 60 * 60);
-      const allowedByAccount = await withinRateLimit(env, `password-reset-email:${emailKey}`, 3, 60 * 60);
+      const allowedByAddress = await withinRateLimit(env.DB, `password-reset-ip:${addressKey}`, 5, 60 * 60);
+      const allowedByAccount = await withinRateLimit(env.DB, `password-reset-email:${emailKey}`, 3, 60 * 60);
       if (validEmail && allowedByAddress && allowedByAccount) {
         const user = await env.DB.prepare("SELECT id, email, name FROM users WHERE email = ?")
           .bind(email).first<User>();
@@ -5093,8 +5028,8 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
       const addressKey = await sha256(clientAddress);
       const emailKey = await sha256(email);
       const allowed = url.pathname === "/signup"
-        ? await withinRateLimit(env, `signup:${addressKey}`, 5, 60 * 60)
-        : await withinRateLimit(env, `login:${addressKey}:${emailKey}`, 10, 15 * 60);
+        ? await withinRateLimit(env.DB, `signup:${addressKey}`, 5, 60 * 60)
+        : await withinRateLimit(env.DB, `login:${addressKey}:${emailKey}`, 10, 15 * 60);
       if (!allowed) return loginPage("Too many attempts. Please wait and try again.", url.pathname === "/signup" ? "signup" : "login");
       let user: User | null = null;
       if (url.pathname === "/signup") {
@@ -5155,6 +5090,28 @@ function requestFailure(request: Request, error: unknown): Response {
   });
 }
 
+/** Every minute-tick job runs to completion independently: one failing job
+ * is logged by name instead of hiding the others behind a single rejection. */
+async function runScheduledJobs(env: Env): Promise<void> {
+  const now = Date.now();
+  const jobs: Array<[name: string, run: () => Promise<unknown>]> = [
+    ["routines", () => runDueRoutines(env)],
+    ["workflow_triggers", () => runDueWorkflowTriggers(env)],
+    ["workflow_resume", () => resumeActiveWorkflows(env)],
+    ["whatsapp_sync", () => syncAutonomousWhatsAppAccounts(env)],
+    ["context_sources", () => syncDueContextSources(env)],
+    ["password_reset_purge", () => env.DB.prepare("DELETE FROM password_reset_tokens WHERE expires_at <= ?").bind(now).run()],
+    ["session_purge", () => env.DB.prepare("DELETE FROM sessions WHERE expires_at <= ?").bind(now).run()],
+    ["rate_limit_purge", () => purgeExpiredRateLimits(env.DB, now)],
+  ];
+  const results = await Promise.allSettled(jobs.map(([, run]) => run()));
+  results.forEach((result, index) => {
+    if (result.status !== "rejected") return;
+    const error = result.reason;
+    console.error(JSON.stringify({ event: "scheduled_job_failed", job: jobs[index][0], error: error instanceof Error ? error.message : String(error) }));
+  });
+}
+
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     try {
@@ -5164,13 +5121,6 @@ export default {
     }
   },
   async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext) {
-    ctx.waitUntil(Promise.all([
-      runDueRoutines(env),
-      runDueWorkflowTriggers(env),
-      resumeActiveWorkflows(env),
-      syncAutonomousWhatsAppAccounts(env),
-      syncDueContextSources(env),
-      env.DB.prepare("DELETE FROM password_reset_tokens WHERE expires_at <= ?").bind(Date.now()).run(),
-    ]));
+    ctx.waitUntil(runScheduledJobs(env));
   },
 } satisfies ExportedHandler<Env>;

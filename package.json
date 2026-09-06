@@ -29,8 +29,8 @@
     "dev:server": "node --experimental-strip-types server/index.ts",
     "dev:desktop": "electron .",
     "build": "tsc -b && tsc -p tsconfig.server.json && vite build",
-    "typecheck": "tsc -b && tsc -p tsconfig.server.json",
-    "test": "node scripts/test-floor.mjs && pnpm broker:test && pnpm test:updater && pnpm test:desktop-viewer && pnpm test:packaged-server",
+    "typecheck": "tsc -b && tsc -p tsconfig.server.json && pnpm web:check",
+    "test": "node scripts/test-floor.mjs && pnpm broker:test && pnpm web:test && pnpm test:updater && pnpm test:desktop-viewer && pnpm test:packaged-server",
     "test:updater": "node --test electron/updater-coordinator.node-test.mjs",
     "test:desktop-viewer": "node --test electron/desktop-viewer.node-test.mjs",
     "bench:observation": "node --experimental-strip-types scripts/bench-observation.ts",
@@ -61,8 +61,11 @@
     "broker:check": "pnpm broker:types && tsc -p cloudflare/composio-broker/tsconfig.json",
     "broker:test": "vitest run --config cloudflare/composio-broker/vitest.config.ts",
     "broker:deploy": "wrangler deploy --config cloudflare/composio-broker/wrangler.jsonc",
+    "web:check": "tsc -p cloudflare/web/tsconfig.json",
+    "web:test": "vitest run --config cloudflare/web/vitest.config.ts",
+    "computer:check": "pnpm --dir cf-computer typecheck",
     "web:migrate": "wrangler d1 migrations apply magicbot-web --remote --config cloudflare/web/wrangler.jsonc",
-    "web:deploy": "pnpm build && wrangler deploy --config cloudflare/web/wrangler.jsonc"
+    "web:deploy": "pnpm web:check && pnpm build && wrangler deploy --config cloudflare/web/wrangler.jsonc"
   },
   "dependencies": {
     "@opencoredev/loginwithchatgpt-core": "0.2.0",
