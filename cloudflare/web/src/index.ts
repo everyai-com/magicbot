@@ -164,6 +164,7 @@ const SESSION_COOKIE = "magicbot_session";
 const SESSION_AGE = 60 * 60 * 24 * 30;
 const PASSWORD_RESET_AGE = 30 * 60;
 const PASSWORD_RESET_SENDER = "noreply@mail.magicteams.ai";
+const BETTER_AUTH_BASE_URL = "https://magicteams-voice-api.everyai-com.workers.dev/api/auth/better";
 const MODEL = "@cf/moonshotai/kimi-k2.6";
 const IMAGE_MODEL = "@cf/black-forest-labs/flux-1-schnell";
 const VOICE_MODEL = "@cf/deepgram/aura-2-en";
@@ -2526,10 +2527,13 @@ async function handleBetterAuthApi(request: Request, env: Env, path: string): Pr
     if (!await withinRateLimit(env, `login:${addressKey}:${emailKey}`, 10, 15 * 60)) {
       return json({ error: "Too many attempts. Please wait and try again." }, 429);
     }
+    const external = await externalBetterAuth("/login", { email, password });
+    if (external.ok) return hostedAuthSession(env, external.body, email);
+
     const row = await env.DB.prepare("SELECT id, email, name, password_hash, password_salt FROM users WHERE email = ?")
       .bind(email).first<User & { password_hash: string; password_salt: string }>();
     if (!row || !constantTimeEqual(row.password_hash, await passwordHash(password, row.password_salt))) {
-      return json({ error: "Email or password is incorrect" }, 401);
+      return json({ error: authError(external.body, "Email or password is incorrect") }, external.status || 401);
     }
     const token = await createSession(env, row.id);
     return json({ token, user: { id: row.id, email: row.email, name: row.name } }, 200);
@@ -2543,6 +2547,9 @@ async function handleBetterAuthApi(request: Request, env: Env, path: string): Pr
     if (!await withinRateLimit(env, `signup:${addressKey}`, 5, 60 * 60)) {
       return json({ error: "Too many attempts. Please wait and try again." }, 429);
     }
+    const external = await externalBetterAuth("/signup", { email, password, fullName });
+    if (external.ok) return hostedAuthSession(env, external.body, email, fullName, 201);
+
     const existing = await env.DB.prepare("SELECT id FROM users WHERE email = ?").bind(email).first();
     if (existing) return json({ error: "An account already exists for this email." }, 409);
     const id = crypto.randomUUID();
@@ -2555,6 +2562,12 @@ async function handleBetterAuthApi(request: Request, env: Env, path: string): Pr
   }
 
   if (request.method === "POST" && path === "/api/auth/better/password-reset/request") {
+    const external = await externalBetterAuth("/password-reset/request", {
+      email,
+      redirectOrigin: String(body.redirectOrigin ?? ""),
+    });
+    if (external.ok) return json(external.body, 200);
+
     const redirectOrigin = String(body.redirectOrigin ?? "").replace(/\/+$/, "");
     const validEmail = /^\S+@\S+\.\S+$/.test(email) && email.length <= 254;
     const allowedByAddress = await withinRateLimit(env, `password-reset-ip:${addressKey}`, 5, 60 * 60);
@@ -2578,6 +2591,12 @@ async function handleBetterAuthApi(request: Request, env: Env, path: string): Pr
   }
 
   if (request.method === "POST" && path === "/api/auth/better/password-reset/confirm") {
+    const external = await externalBetterAuth("/password-reset/confirm", {
+      token: String(body.token ?? "").trim(),
+      password,
+    });
+    if (external.ok) return json(external.body, 200);
+
     const token = String(body.token ?? "").trim();
     if (!/^[A-Za-z0-9_-]{40,64}$/.test(token) || password.length < 8) {
       return json({ error: "This reset link is invalid or has expired." }, 400);
@@ -2597,6 +2616,54 @@ async function handleBetterAuthApi(request: Request, env: Env, path: string): Pr
   }
 
   return json({ error: "Not found" }, 404);
+}
+
+function authError(body: unknown, fallback: string): string {
+  if (body && typeof body === "object") {
+    const error = (body as { error?: unknown; message?: unknown }).error ?? (body as { message?: unknown }).message;
+    if (typeof error === "string" && error) return error;
+  }
+  return fallback;
+}
+
+async function externalBetterAuth(path: string, payload: Record<string, unknown>): Promise<{ ok: boolean; status: number; body: Record<string, unknown> }> {
+  try {
+    const response = await fetch(`${BETTER_AUTH_BASE_URL}${path}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const body = await response.json().catch(() => ({})) as Record<string, unknown>;
+    return { ok: response.ok, status: response.status, body };
+  } catch {
+    return { ok: false, status: 0, body: {} };
+  }
+}
+
+async function hostedAuthSession(
+  env: Env,
+  source: Record<string, unknown>,
+  fallbackEmail: string,
+  fallbackName = "",
+  status = 200,
+): Promise<Response> {
+  const sourceUser = source.user && typeof source.user === "object" ? source.user as Record<string, unknown> : {};
+  const email = String(sourceUser.email ?? fallbackEmail).trim().toLowerCase();
+  const name = String(sourceUser.name ?? fallbackName ?? email.split("@")[0] ?? "MagicTeams user").trim().slice(0, 80) || "MagicTeams user";
+  let user = await env.DB.prepare("SELECT id, email, name FROM users WHERE email = ?").bind(email).first<User>();
+  if (!user) {
+    const externalId = String(sourceUser.id ?? "").trim();
+    const id = externalId || crypto.randomUUID();
+    const salt = randomToken(18);
+    await env.DB.prepare("INSERT INTO users (id, email, name, password_hash, password_salt, created_at) VALUES (?, ?, ?, ?, ?, ?)")
+      .bind(id, email, name, "external-auth", salt, Date.now()).run();
+    user = { id, email, name };
+  } else if (user.name !== name || user.email !== email) {
+    await env.DB.prepare("UPDATE users SET email = ?, name = ? WHERE id = ?").bind(email, name, user.id).run();
+    user = { ...user, email, name };
+  }
+  const token = await createSession(env, user.id);
+  return json({ token, user }, status);
 }
 
 function requestFailure(request: Request, error: unknown): Response {
