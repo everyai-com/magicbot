@@ -108,9 +108,6 @@
       ]
     }
   },
-  "directories": {
-    "doc": "docs"
-  },
   "keywords": [],
   "bugs": {
     "url": "https://github.com/milind-soni/OpenMausBot/issues"
