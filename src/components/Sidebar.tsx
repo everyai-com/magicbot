@@ -19,11 +19,13 @@ import {
   Pencil,
   PanelLeftClose,
   PanelLeftOpen,
+  PanelsTopLeft,
   Pin,
   PinOff,
   Plus,
   RefreshCw,
   Search,
+  SunMedium,
   Sparkles,
   Settings,
   Puzzle,
@@ -43,6 +45,7 @@ import { downloadAllBots } from "@/lib/team-files";
 import { useDesktopCapabilities } from "./DesktopCapabilities";
 import { MIN_QUERY, SearchResults } from "./SearchResults";
 import { TeamLibraryPanel, type TeamImportResult } from "./TeamLibraryPanel";
+import { AgentLibraryPanel } from "./AgentLibraryPanel";
 import { RenameTitle } from "./RenameTitle";
 import { BotPickerList } from "./BotPickerList";
 import {
@@ -419,7 +422,7 @@ function NewRoomPanel({ onClose }: { onClose: () => void }) {
       className="fixed inset-0 z-40 flex items-center justify-center bg-black/40"
       onMouseDown={(e) => e.target === e.currentTarget && onClose()}
     >
-      <div className="w-[340px] rounded-2xl border border-hairline/50 bg-card p-4 shadow-2xl">
+      <div className="w-[min(340px,calc(100vw-2rem))] rounded-2xl border border-hairline/50 bg-card p-4 shadow-2xl">
         <div className="mb-3 text-[15px] font-semibold text-ink">New Team</div>
         <input
           autoFocus
@@ -1013,6 +1016,7 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
   const [plusOpen, setPlusOpen] = useState(false);
   const [newRoom, setNewRoom] = useState(false);
   const [teamLibraryOpen, setTeamLibraryOpen] = useState(false);
+  const [agentLibraryOpen, setAgentLibraryOpen] = useState(false);
   const [archivedBotsOpen, setArchivedBotsOpen] = useState(false);
   const [exportingTeam, setExportingTeam] = useState(false);
   const [teamFeedback, setTeamFeedback] = useState<{
@@ -1046,6 +1050,12 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
       setDensity("icons");
     }
   };
+
+  useEffect(() => {
+    const toggleFromWorkspace = () => toggleCollapsed();
+    window.addEventListener("magicteams-sidebar-toggle", toggleFromWorkspace);
+    return () => window.removeEventListener("magicteams-sidebar-toggle", toggleFromWorkspace);
+  });
 
   // Esc closes the drawer, mirroring ApiKeys.tsx:75-85. Bound only while the
   // drawer is open — on mobile, exactly when a bot/room context menu or the
@@ -1339,6 +1349,16 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
                 <button
                   onClick={() => {
                     setPlusOpen(false);
+                    setAgentLibraryOpen(true);
+                  }}
+                  className="flex w-full items-center gap-3 px-3.5 py-2 text-left text-[14px] text-ink hover:bg-raised/70"
+                >
+                  <Sparkles size={16} className="text-ink-secondary" />
+                  Agent library
+                </button>
+                <button
+                  onClick={() => {
+                    setPlusOpen(false);
                     track("bot_created");
                     dispatch({ type: "newBot" });
                   }}
@@ -1489,6 +1509,45 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
 
       {/* Footer */}
       <div className={cn("pb-3 pt-2", density === "icons" ? "px-2" : "px-3")}>
+        <button
+          onClick={() => dispatch({ type: "showToday" })}
+          aria-label={density === "icons" ? "Today" : undefined}
+          title={density === "icons" ? "Today" : undefined}
+          className={cn(
+            "flex min-h-10 w-full items-center rounded-xl py-2 text-left transition-colors",
+            density === "icons" ? "justify-center px-2" : "gap-3 px-3",
+            state.activeView === "today" ? "bg-raised text-ink" : "text-ink hover:bg-raised/50",
+          )}
+        >
+          <SunMedium size={20} className={state.activeView === "today" ? "text-accent" : "text-ink-secondary"} />
+          <span className={cn("flex-1 text-[14px]", density === "icons" && "hidden")}>Today</span>
+        </button>
+        <button
+          onClick={() => dispatch({ type: "showWork" })}
+          aria-label={density === "icons" ? "Work" : undefined}
+          title={density === "icons" ? "Work" : undefined}
+          className={cn(
+            "flex min-h-10 w-full items-center rounded-xl py-2 text-left transition-colors",
+            density === "icons" ? "justify-center px-2" : "gap-3 px-3",
+            state.activeView === "work" ? "bg-raised text-ink" : "text-ink hover:bg-raised/50",
+          )}
+        >
+          <PanelsTopLeft size={20} className={state.activeView === "work" ? "text-accent" : "text-ink-secondary"} />
+          <span className={cn("flex-1 text-[14px]", density === "icons" && "hidden")}>Work</span>
+        </button>
+        <button
+          onClick={() => dispatch({ type: "showPeople" })}
+          aria-label={density === "icons" ? "People" : undefined}
+          title={density === "icons" ? "People" : undefined}
+          className={cn(
+            "flex min-h-10 w-full items-center rounded-xl py-2 text-left transition-colors",
+            density === "icons" ? "justify-center px-2" : "gap-3 px-3",
+            state.activeView === "people" ? "bg-raised text-ink" : "text-ink hover:bg-raised/50",
+          )}
+        >
+          <Users size={20} className={state.activeView === "people" ? "text-accent" : "text-ink-secondary"} />
+          <span className={cn("flex-1 text-[14px]", density === "icons" && "hidden")}>People</span>
+        </button>
         {skillRecorderEnabled(state.config) && (
           <button
             onClick={() => dispatch({ type: "showSkillRecorder" })}
@@ -1622,6 +1681,9 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
             );
           }}
         />
+      )}
+      {agentLibraryOpen && (
+        <AgentLibraryPanel returnFocusRef={importReturnRef} onClose={() => setAgentLibraryOpen(false)} />
       )}
       {teamFeedback &&
         createPortal(

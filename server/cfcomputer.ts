@@ -1,7 +1,7 @@
 // Harness client for the MagicBots cloud computer (cf-computer/ Worker).
 // The hosted sibling of box.ts: same shape (run a command, read/write files,
-// and persist files), backed by an official @cloudflare/computer Workspace
-// and Linux runtime per bot. Selected when cfg.cfComputer.url + token are set.
+// and persist files), backed by one shared @cloudflare/computer Workspace and
+// one shared Browser Run profile. Each bot receives its own browser page.
 import type { AppConfig } from "./config.ts";
 import { SPAWNED_PROXIES } from "./proxy-paths.ts";
 
@@ -32,7 +32,8 @@ export function status(cfg: AppConfig) {
     configured: cfConfigured(cfg),
     ready: cfConfigured(cfg),
     container: cfConfigured(cfg) ? "cloudflare" : null,
-    headless: true,
+    headless: false,
+    shared: true,
   };
 }
 
@@ -72,6 +73,11 @@ export function writeFile(cfg: AppConfig, botId: string, path: string, content: 
 
 export function readFile(cfg: AppConfig, botId: string, path: string) {
   return call(cfg, botId, "readFile", { path }) as Promise<{ ok: boolean; content: unknown }>;
+}
+
+export async function screenshot(cfg: AppConfig, botId: string) {
+  const shot = await call(cfg, botId, "browserScreenshot", {});
+  return { png: String(shot.image ?? ""), format: String(shot.mimeType ?? "image/jpeg") };
 }
 
 export function destroy(cfg: AppConfig, botId: string) {

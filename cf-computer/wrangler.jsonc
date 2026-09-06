@@ -4,7 +4,8 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-08-01",
   "compatibility_flags": ["nodejs_compat"],
-  // One official Cloudflare Computer workspace + container per bot.
+  "browser": { "binding": "MYBROWSER" },
+  // One shared Cloudflare Computer workspace + container per deployment/team.
   "containers": [
     {
       "class_name": "Computer",
@@ -14,11 +15,15 @@
     }
   ],
   "durable_objects": {
-    "bindings": [{ "class_name": "Computer", "name": "Computer" }]
+    "bindings": [
+      { "class_name": "Computer", "name": "Computer" },
+      { "class_name": "BrowserComputer", "name": "BrowserComputer" }
+    ]
   },
   "migrations": [
     { "new_sqlite_classes": ["Sandbox"], "tag": "v1" },
-    { "new_sqlite_classes": ["Computer"], "tag": "v2" }
+    { "new_sqlite_classes": ["Computer"], "tag": "v2" },
+    { "new_sqlite_classes": ["BrowserComputer"], "tag": "v3" }
   ],
   // Set with: wrangler secret put MAGICBOT_COMPUTER_TOKEN
   // The MagicBots harness sends this as a Bearer token on every request.

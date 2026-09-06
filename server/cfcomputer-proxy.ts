@@ -26,6 +26,8 @@ async function callWorker(action: string, body: unknown, timeoutMs = 120_000): P
 const send = (obj: unknown) => process.stdout.write(JSON.stringify(obj) + "\n");
 const text = (id: unknown, t: string, isError = false) =>
   send({ jsonrpc: "2.0", id, result: { content: [{ type: "text", text: t }], ...(isError ? { isError: true } : {}) } });
+const image = (id: unknown, data: string, mimeType: string, caption: string) =>
+  send({ jsonrpc: "2.0", id, result: { content: [{ type: "text", text: caption }, { type: "image", data, mimeType }] } });
 
 const TOOLS = [
   {
@@ -60,6 +62,50 @@ const TOOLS = [
     name: "read_file",
     description: "Read a text file from the cloud computer.",
     inputSchema: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
+  },
+  {
+    name: "open_url",
+    description: "Open an http(s) URL on this bot's screen in the team's shared cloud browser.",
+    inputSchema: { type: "object", properties: { url: { type: "string" } }, required: ["url"] },
+  },
+  {
+    name: "browser_state",
+    description: "Read this bot's current browser title and URL.",
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
+    name: "browser_text",
+    description: "Read the visible text from this bot's current browser page.",
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
+    name: "browser_snapshot",
+    description: "List visible interactive elements on this bot's browser page with fresh refs for clicking and filling.",
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
+    name: "browser_click",
+    description: "Click an element ref from the latest browser_snapshot.",
+    inputSchema: { type: "object", properties: { ref: { type: "string" } }, required: ["ref"] },
+  },
+  {
+    name: "browser_fill",
+    description: "Replace the text in a field ref from the latest browser_snapshot.",
+    inputSchema: {
+      type: "object",
+      properties: { ref: { type: "string" }, text: { type: "string" } },
+      required: ["ref", "text"],
+    },
+  },
+  {
+    name: "browser_press",
+    description: "Press a keyboard key or Playwright key chord on this bot's browser page.",
+    inputSchema: { type: "object", properties: { key: { type: "string" } }, required: ["key"] },
+  },
+  {
+    name: "screenshot",
+    description: "Capture this bot's browser screen as a fresh JPEG.",
+    inputSchema: { type: "object", properties: {} },
   },
 ];
 
@@ -103,6 +149,41 @@ async function call(id: unknown, name: string, args: any) {
     const inner = out.content?.content ?? out.content;
     const content = typeof inner === "string" ? inner : JSON.stringify(inner);
     return text(id, content.slice(0, 100_000));
+  }
+  if (name === "open_url") {
+    const out = await callWorker("browserOpen", { url: String(args.url ?? "") });
+    return text(id, `Opened ${out.title || "Untitled"}: ${out.url}`);
+  }
+  if (name === "browser_state") {
+    const out = await callWorker("browserState", {});
+    return text(id, `${out.title || "Untitled"}: ${out.url || "about:blank"}`);
+  }
+  if (name === "browser_text") {
+    const out = await callWorker("browserText", {});
+    return text(id, `${out.title || "Untitled"}: ${out.url}\n${String(out.text ?? "")}`.slice(0, 100_000));
+  }
+  if (name === "browser_snapshot") {
+    const out = await callWorker("browserSnapshot", {});
+    const lines = (out.elements ?? []).map((element: any) =>
+      `${element.ref} ${element.role || element.tag}${element.name ? ` "${element.name}"` : ""}`
+    );
+    return text(id, `${out.title || "Untitled"}: ${out.url}\n${lines.join("\n") || "No visible interactive elements."}`);
+  }
+  if (name === "browser_click") {
+    const out = await callWorker("browserClick", { ref: String(args.ref ?? "") });
+    return text(id, `${out.title || "Untitled"}: ${out.url}`);
+  }
+  if (name === "browser_fill") {
+    const out = await callWorker("browserFill", { ref: String(args.ref ?? ""), text: String(args.text ?? "") });
+    return text(id, `${out.title || "Untitled"}: ${out.url}`);
+  }
+  if (name === "browser_press") {
+    const out = await callWorker("browserPress", { key: String(args.key ?? "Enter") });
+    return text(id, `${out.title || "Untitled"}: ${out.url}`);
+  }
+  if (name === "screenshot") {
+    const out = await callWorker("browserScreenshot", {});
+    return image(id, String(out.image ?? ""), String(out.mimeType ?? "image/jpeg"), `${out.title || "Untitled"}: ${out.url}`);
   }
   return text(id, `unknown tool ${name}`, true);
 }
