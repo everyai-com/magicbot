@@ -459,7 +459,7 @@ function constantTimeEqual(a: string, b: string): boolean {
 }
 
 async function currentUser(request: Request, env: Env): Promise<User | null> {
-  const token = bearerToken(request) ?? cookieValue(request, SESSION_COOKIE);
+  const token = bearerToken(request) ?? urlToken(request) ?? cookieValue(request, SESSION_COOKIE);
   if (!token) return null;
   const tokenHash = await sha256(token);
   const row = await env.DB.prepare(
@@ -474,6 +474,11 @@ function bearerToken(request: Request): string | null {
   const header = request.headers.get("authorization") ?? "";
   const match = header.match(/^Bearer\s+(.+)$/i);
   const token = match?.[1]?.trim() ?? "";
+  return token || null;
+}
+
+function urlToken(request: Request): string | null {
+  const token = new URL(request.url).searchParams.get("token")?.trim() ?? "";
   return token || null;
 }
 
