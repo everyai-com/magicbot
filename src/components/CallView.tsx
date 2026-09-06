@@ -190,6 +190,7 @@ export function CallTargetButton({
   const demoCallIdRef = useRef<string | null>(null);
   const demoLogIdRef = useRef<string | null>(null);
   const demoTranscriptsRef = useRef<DemoTranscriptItem[]>([]);
+  const demoStartInFlightRef = useRef(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const helpId = useId();
@@ -354,6 +355,7 @@ export function CallTargetButton({
     setDemoStarting(false);
     setDemoEnding(false);
     setDemoInCallOpen(false);
+    demoStartInFlightRef.current = false;
   }, []);
 
   const endDemoCall = useCallback(async (finalStatus: "completed" | "failed" | "cancelled" = "completed") => {
@@ -371,6 +373,7 @@ export function CallTargetButton({
   }, [finalizeDemoCall, resetDemoCall]);
 
   const startDemoCall = useCallback(async () => {
+    if (demoStartInFlightRef.current || demoStarting || demoEnding || demoStatus !== "disconnected") return;
     const agent = demoAgents.find((candidate) => candidate.id === selectedDemoAgentId);
     const remoteId = agent?.remoteAgentId ?? (agent?.id === targetId ? remoteAgentId : undefined);
     if (!remoteId) {
@@ -382,12 +385,19 @@ export function CallTargetButton({
       return;
     }
 
+    demoStartInFlightRef.current = true;
     setDemoStarting(true);
+    setDemoStatus("connecting");
     setDemoError("");
     setDemoTranscripts([]);
     demoTranscriptsRef.current = [];
     try {
-      await endDemoCall("cancelled").catch(() => undefined);
+      if (demoSessionRef.current) {
+        await endDemoCall("cancelled").catch(() => undefined);
+        demoStartInFlightRef.current = true;
+        setDemoStarting(true);
+        setDemoStatus("connecting");
+      }
       const created = await api(`/api/platform/agents/${encodeURIComponent(remoteId)}/demo-call`, {
         method: "POST",
         body: JSON.stringify({
@@ -438,8 +448,9 @@ export function CallTargetButton({
       resetDemoCall();
     } finally {
       setDemoStarting(false);
+      demoStartInFlightRef.current = false;
     }
-  }, [browserCanJoinDemo, demoAgents, endDemoCall, finalizeDemoCall, onStart, remoteAgentId, resetDemoCall, selectedDemoAgentId, targetId]);
+  }, [browserCanJoinDemo, demoAgents, demoEnding, demoStarting, demoStatus, endDemoCall, finalizeDemoCall, onStart, remoteAgentId, resetDemoCall, selectedDemoAgentId, targetId]);
 
   useEffect(() => {
     return () => {
@@ -984,8 +995,8 @@ function CallOptionsDialog({
                 <select
                   value={selectedDemoAgentId}
                   onChange={(event) => onDemoAgentChange(event.target.value)}
-                  disabled={demoAgents.length === 0}
-                  className="mt-2 h-11 w-full rounded-xl border border-hairline bg-card px-4 text-[14px] text-ink outline-none focus:border-accent disabled:opacity-60"
+                  disabled={demoAgents.length === 0 || demoStarting || demoLive}
+                  className="mt-2 h-11 w-full rounded-xl border border-hairline bg-card px-4 text-[14px] text-ink outline-none focus:border-accent disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {!selectedDemoAgentId && <option value="">Select an agent</option>}
                   {demoAgents.map((agent) => (
@@ -1008,10 +1019,11 @@ function CallOptionsDialog({
                 type="button"
                 onClick={onDemoCall}
                 disabled={!demoAvailable || !selectedDemoAgentId || demoLive || demoStarting || demoEnding}
-                className="inline-flex min-w-[150px] items-center justify-center gap-2 rounded-xl bg-accent px-4 py-2.5 text-[13px] font-semibold text-white hover:brightness-110 disabled:bg-raised disabled:text-ink-secondary"
+                aria-busy={demoStarting}
+                className="inline-flex min-w-[150px] items-center justify-center gap-2 rounded-xl bg-accent px-4 py-2.5 text-[13px] font-semibold text-white shadow-sm transition-all hover:brightness-110 disabled:cursor-not-allowed disabled:bg-raised disabled:text-ink-secondary disabled:opacity-45 disabled:blur-[0.3px] disabled:saturate-50"
               >
                 {demoStarting ? <Loader2 size={16} className="animate-spin" /> : <Mic size={16} />}
-                {demoStarting ? "Starting..." : "Start Demo Call"}
+                {demoStarting ? "Connecting..." : "Start Demo Call"}
               </button>
               <button
                 type="button"
