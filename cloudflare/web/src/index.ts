@@ -15,6 +15,7 @@ interface Env {
   FILES: R2Bucket;
   EMAIL: SendEmail;
   CREDENTIAL_KEY: string;
+  ULTRAVOX_API_KEY?: string;
   CONNECTORS: {
     request(userId: string, apiKey: string, path: string, method?: string, body?: string, mcpSession?: string): Promise<{ status: number; body: string; contentType?: string; mcpSession?: string }>;
   };
@@ -166,6 +167,7 @@ const PASSWORD_RESET_SENDER = "noreply@mail.magicteams.ai";
 const MODEL = "@cf/moonshotai/kimi-k2.6";
 const IMAGE_MODEL = "@cf/black-forest-labs/flux-1-schnell";
 const VOICE_MODEL = "@cf/deepgram/aura-2-en";
+const ULTRAVOX_API = "https://api.ultravox.ai/api";
 const CODEX_CREDENTIAL = "codex_subscription";
 const CODEX_PENDING_SECRET = "codex_pending_secret";
 const CODEX_MODELS_CACHE = "codex_models";
@@ -293,6 +295,64 @@ async function credentialConfigured(env: Env, userId: string, kind: string): Pro
     .bind(userId, kind).first());
 }
 
+async function ultravoxApiKey(env: Env, userId: string): Promise<string> {
+  return env.ULTRAVOX_API_KEY || (await credentialValue(env, userId, "ultravox")) || "";
+}
+
+function ultravoxMessage(status: number, body: unknown): string {
+  if (body && typeof body === "object") {
+    const record = body as { error?: unknown; detail?: unknown; message?: unknown };
+    const text = record.error ?? record.detail ?? record.message;
+    if (typeof text === "string" && text) return text;
+  }
+  if (typeof body === "string" && body) return body;
+  return `Ultravox returned ${status}`;
+}
+
+async function listUltravoxVoices(env: Env, userId: string): Promise<unknown[]> {
+  const key = await ultravoxApiKey(env, userId);
+  if (!key) throw new Error("Ultravox API key is not configured in the backend");
+  const voices: unknown[] = [];
+  let cursor = "";
+  for (let page = 0; page < 8; page += 1) {
+    const url = new URL(`${ULTRAVOX_API}/voices`);
+    url.searchParams.set("pageSize", "100");
+    if (cursor) url.searchParams.set("cursor", cursor);
+    const res = await fetch(url, { headers: { "X-API-Key": key } });
+    const contentType = res.headers.get("content-type") ?? "";
+    const body = contentType.includes("application/json") ? await res.json().catch(() => ({})) : await res.text().catch(() => "");
+    if (!res.ok) throw new Error(ultravoxMessage(res.status, body));
+    if (body && typeof body === "object" && Array.isArray((body as { results?: unknown }).results)) {
+      voices.push(...(body as { results: unknown[] }).results);
+    }
+    const next = body && typeof body === "object" ? (body as { next?: unknown }).next : null;
+    if (typeof next !== "string" || !next) break;
+    cursor = new URL(next).searchParams.get("cursor") ?? "";
+    if (!cursor) break;
+  }
+  return voices;
+}
+
+async function previewUltravoxVoice(env: Env, userId: string, voiceId: string): Promise<Response> {
+  if (!/^[\w-]+$/.test(voiceId)) return json({ error: "voiceId must be a valid voice id" }, 400);
+  const key = await ultravoxApiKey(env, userId);
+  if (!key) return json({ error: "Ultravox API key is not configured in the backend" }, 409);
+  const response = await fetch(`${ULTRAVOX_API}/voices/${encodeURIComponent(voiceId)}/preview`, {
+    headers: { "X-API-Key": key },
+  });
+  if (!response.ok) {
+    const contentType = response.headers.get("content-type") ?? "";
+    const body = contentType.includes("application/json") ? await response.json().catch(() => ({})) : await response.text().catch(() => "");
+    return json({ error: ultravoxMessage(response.status, body) }, response.status);
+  }
+  return new Response(response.body, {
+    headers: {
+      "content-type": response.headers.get("content-type") || "audio/wav",
+      "cache-control": "no-store",
+    },
+  });
+}
+
 async function codexTokens(env: Env, userId: string): Promise<ChatGPTTokens | null> {
   const raw = await credentialValue(env, userId, CODEX_CREDENTIAL);
   if (!raw) return null;
@@ -398,7 +458,7 @@ function constantTimeEqual(a: string, b: string): boolean {
 }
 
 async function currentUser(request: Request, env: Env): Promise<User | null> {
-  const token = cookieValue(request, SESSION_COOKIE);
+  const token = bearerToken(request) ?? cookieValue(request, SESSION_COOKIE);
   if (!token) return null;
   const tokenHash = await sha256(token);
   const row = await env.DB.prepare(
@@ -407,6 +467,13 @@ async function currentUser(request: Request, env: Env): Promise<User | null> {
       WHERE sessions.token_hash = ? AND sessions.expires_at > ?`,
   ).bind(tokenHash, Date.now()).first<User>();
   return row ?? null;
+}
+
+function bearerToken(request: Request): string | null {
+  const header = request.headers.get("authorization") ?? "";
+  const match = header.match(/^Bearer\s+(.+)$/i);
+  const token = match?.[1]?.trim() ?? "";
+  return token || null;
 }
 
 async function createSession(env: Env, userId: string): Promise<string> {
@@ -1698,6 +1765,21 @@ async function api(request: Request, env: Env, user: User, path: string): Promis
     const ids = ["luna", "apollo", "athena", "atlas", "aurora", "cora", "hermes", "iris", "juno", "mars", "orpheus", "thalia"];
     return json({ voices: ids.map((id) => ({ id, label: id[0].toUpperCase() + id.slice(1), description: "Cloudflare Aura 2" })) });
   }
+  if (path === "/api/ultravox/voices" && request.method === "GET") {
+    try {
+      return json({ configured: Boolean(await ultravoxApiKey(env, user.id)), voices: await listUltravoxVoices(env, user.id) });
+    } catch (error) {
+      return json({
+        configured: Boolean(await ultravoxApiKey(env, user.id)),
+        voices: [],
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+  {
+    const match = path.match(/^\/api\/ultravox\/voices\/([\w-]+)\/preview$/);
+    if (match && request.method === "GET") return previewUltravoxVoice(env, user.id, match[1]);
+  }
   if (path === "/api/tts/prepare" && request.method === "POST") {
     const body = await request.json<{ text?: string }>();
     const text = body.text?.trim().slice(0, 10_000) ?? "";
@@ -2313,6 +2395,7 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
     const hookMatch = url.pathname.match(/^\/hooks\/([A-Za-z0-9_-]+)$/);
     if (hookMatch && request.method === "POST") return handleWebhook(request, env, hookMatch[1]);
+    if (url.pathname.startsWith("/api/auth/better/")) return handleBetterAuthApi(request, env, url.pathname);
     if (url.pathname === "/login" && request.method === "GET") return loginPage();
     if (url.pathname === "/signup" && request.method === "GET") return loginPage("", "signup");
     if (url.pathname === "/forgot-password" && request.method === "GET") return forgotPasswordPage();
@@ -2424,8 +2507,96 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
       if (url.pathname.startsWith("/api/")) return json({ error: "Authentication required" }, 401);
       return redirect(`/login?next=${encodeURIComponent(url.pathname + url.search)}`);
     }
-    if (url.pathname.startsWith("/api/")) return api(request, env, user, url.pathname);
-    return env.ASSETS.fetch(request);
+  if (url.pathname.startsWith("/api/")) return api(request, env, user, url.pathname);
+  return env.ASSETS.fetch(request);
+}
+
+async function handleBetterAuthApi(request: Request, env: Env, path: string): Promise<Response> {
+  const body = await request.json<Record<string, unknown>>().catch(() => ({}));
+  const email = String(body.email ?? "").trim().toLowerCase();
+  const password = String(body.password ?? "");
+  const clientAddress = request.headers.get("cf-connecting-ip") ?? "unknown";
+  const addressKey = await sha256(clientAddress);
+  const emailKey = await sha256(email);
+
+  if (request.method === "POST" && path === "/api/auth/better/login") {
+    if (!/^\S+@\S+\.\S+$/.test(email) || password.length < 8) {
+      return json({ error: "Email or password is incorrect" }, 401);
+    }
+    if (!await withinRateLimit(env, `login:${addressKey}:${emailKey}`, 10, 15 * 60)) {
+      return json({ error: "Too many attempts. Please wait and try again." }, 429);
+    }
+    const row = await env.DB.prepare("SELECT id, email, name, password_hash, password_salt FROM users WHERE email = ?")
+      .bind(email).first<User & { password_hash: string; password_salt: string }>();
+    if (!row || !constantTimeEqual(row.password_hash, await passwordHash(password, row.password_salt))) {
+      return json({ error: "Email or password is incorrect" }, 401);
+    }
+    const token = await createSession(env, row.id);
+    return json({ token, user: { id: row.id, email: row.email, name: row.name } }, 200);
+  }
+
+  if (request.method === "POST" && path === "/api/auth/better/signup") {
+    const fullName = String(body.fullName ?? body.name ?? "").trim().slice(0, 80);
+    if (!/^\S+@\S+\.\S+$/.test(email) || password.length < 8) {
+      return json({ error: "Use a valid email and a password of at least 8 characters." }, 400);
+    }
+    if (!await withinRateLimit(env, `signup:${addressKey}`, 5, 60 * 60)) {
+      return json({ error: "Too many attempts. Please wait and try again." }, 429);
+    }
+    const existing = await env.DB.prepare("SELECT id FROM users WHERE email = ?").bind(email).first();
+    if (existing) return json({ error: "An account already exists for this email." }, 409);
+    const id = crypto.randomUUID();
+    const name = fullName || email.split("@")[0] || "MagicTeams user";
+    const salt = randomToken(18);
+    await env.DB.prepare("INSERT INTO users (id, email, name, password_hash, password_salt, created_at) VALUES (?, ?, ?, ?, ?, ?)")
+      .bind(id, email, name, await passwordHash(password, salt), salt, Date.now()).run();
+    const token = await createSession(env, id);
+    return json({ token, user: { id, email, name } }, 201);
+  }
+
+  if (request.method === "POST" && path === "/api/auth/better/password-reset/request") {
+    const redirectOrigin = String(body.redirectOrigin ?? "").replace(/\/+$/, "");
+    const validEmail = /^\S+@\S+\.\S+$/.test(email) && email.length <= 254;
+    const allowedByAddress = await withinRateLimit(env, `password-reset-ip:${addressKey}`, 5, 60 * 60);
+    const allowedByAccount = await withinRateLimit(env, `password-reset-email:${emailKey}`, 3, 60 * 60);
+    if (validEmail && allowedByAddress && allowedByAccount) {
+      const user = await env.DB.prepare("SELECT id, email, name FROM users WHERE email = ?")
+        .bind(email).first<User>();
+      if (user) {
+        const token = randomToken();
+        const tokenHash = await sha256(token);
+        await env.DB.batch([
+          env.DB.prepare("DELETE FROM password_reset_tokens WHERE user_id = ? OR expires_at <= ?").bind(user.id, Date.now()),
+          env.DB.prepare("INSERT INTO password_reset_tokens (token_hash, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)")
+            .bind(tokenHash, user.id, Date.now() + PASSWORD_RESET_AGE * 1000, Date.now()),
+        ]);
+        const origin = redirectOrigin || new URL(request.url).origin;
+        await sendPasswordResetEmail(env, user, `${origin}/reset-password?token=${encodeURIComponent(token)}`);
+      }
+    }
+    return json({ success: true, emailSent: true }, 200);
+  }
+
+  if (request.method === "POST" && path === "/api/auth/better/password-reset/confirm") {
+    const token = String(body.token ?? "").trim();
+    if (!/^[A-Za-z0-9_-]{40,64}$/.test(token) || password.length < 8) {
+      return json({ error: "This reset link is invalid or has expired." }, 400);
+    }
+    const claimed = await env.DB.prepare(
+      "DELETE FROM password_reset_tokens WHERE token_hash = ? AND expires_at > ? RETURNING user_id",
+    ).bind(await sha256(token), Date.now()).first<{ user_id: string }>();
+    if (!claimed) return json({ error: "This reset link is invalid or has expired." }, 400);
+    const salt = randomToken(18);
+    await env.DB.batch([
+      env.DB.prepare("UPDATE users SET password_hash = ?, password_salt = ? WHERE id = ?")
+        .bind(await passwordHash(password, salt), salt, claimed.user_id),
+      env.DB.prepare("DELETE FROM password_reset_tokens WHERE user_id = ?").bind(claimed.user_id),
+      env.DB.prepare("DELETE FROM sessions WHERE user_id = ?").bind(claimed.user_id),
+    ]);
+    return json({ success: true }, 200);
+  }
+
+  return json({ error: "Not found" }, 404);
 }
 
 function requestFailure(request: Request, error: unknown): Response {
