@@ -30,6 +30,7 @@ import {
   generateAvatarImage,
   snapshotAvatarGenerationState,
 } from "./avatar-image.ts";
+import { generateAnalysisText } from "./analysis.ts";
 import { parseBotProfilePatch } from "./bot-profile.ts";
 import { groupTurnCwd } from "./room-cwd.ts";
 import { RoomTurnStallRegistry, roomTurnTimeoutMessage, scheduleRoomTurnTimeout } from "./room-turn-timeout.ts";
@@ -78,6 +79,7 @@ import { RETRY_MAX_ATTEMPTS } from "./drivers/retry.ts";
 import { BUILT_IN_DRIVERS } from "./drivers/builtIn.ts";
 import { getOrCreateChannel, mirrorActivity, mirrorExchange, mirrorReply, type CommsBus } from "./comms-visibility.ts";
 import { searchMessages } from "./message-db.ts";
+import { createWhatsappAudience, deleteWhatsappAudience, deleteWhatsappContact, listWhatsappAudiences, listWhatsappContacts, updateWhatsappAudience, updateWhatsappContact, upsertWhatsappContact, upsertWhatsappContacts, type WhatsAppContactInput } from "./whatsapp-db.ts";
 import { _loadPending, discardDelegations, drainDelegations, pendingThreads, queueDelegation, type QueueResult } from "./delegations.ts";
 import { drainSteeredMessages, queueSteeredMessage } from "./steer-queue.ts";
 import { EventBus } from "./harness/bus.ts";
@@ -88,12 +90,14 @@ import {
   roomResponders,
   sectionKey,
   Store,
+  type BotRecord,
   type GroupDefaultResponder,
   type GroupRecord,
   type Message,
   type TaskRecord,
 } from "./store.ts";
 import * as tts from "./tts/index.ts";
+import * as ultravox from "./ultravox.ts";
 import { narrateTool, toUtterances } from "./tts/speech-text.ts";
 import { buildTurnContext, engineIsFresh } from "./turn-context.ts";
 import { TurnWatchdog } from "./turn-watchdog.ts";
@@ -127,7 +131,14 @@ import { shouldMountLocalComputer } from "./local-routing.ts";
 
 const PORT = Number(process.env.OMB_PORT || process.env.OGB_PORT || 8799);
 const WEBHOOK_PORT = Number(process.env.OMB_WEBHOOK_PORT || PORT + 1);
-const STATIC_DIR = process.env.OMB_STATIC_DIR || null;
+const LOCAL_STATIC_DIR = join(process.cwd(), "dist");
+const STATIC_DIR = process.env.OMB_STATIC_DIR || (existsSync(join(LOCAL_STATIC_DIR, "index.html")) ? LOCAL_STATIC_DIR : null);
+const DEFAULT_BETTER_AUTH_BASE_URL = "https://magicteams-voice-api.everyai-com.workers.dev/api/auth/better";
+const BETTER_AUTH_LOGIN_URL = process.env.BETTER_AUTH_LOGIN_URL || `${DEFAULT_BETTER_AUTH_BASE_URL}/login`;
+const BETTER_AUTH_BASE_URL = process.env.BETTER_AUTH_BASE_URL || BETTER_AUTH_LOGIN_URL.replace(/\/login\/?$/, "");
+const BETTER_AUTH_API_ORIGIN =
+  process.env.BETTER_AUTH_API_ORIGIN || BETTER_AUTH_BASE_URL.replace(/\/api\/auth\/better\/?$/, "");
+const BETTER_AUTH_API_KEY = process.env.BETTER_AUTH_API_KEY || "";
 const MIME: Record<string, string> = {
   ".html": "text/html",
   ".js": "text/javascript",
@@ -259,7 +270,99 @@ function askBotAndWait(targetBotId: string, message: string, depth: number, from
   });
 }
 
-// default selection for new bots: first available instance, claude preferred
+type ApiPeerAssignment = { botId: string; message: string };
+
+function jsonObjectFromText(text: string): unknown {
+  const trimmed = text.trim();
+  if (!trimmed) return null;
+  try {
+    return JSON.parse(trimmed);
+  } catch {}
+  const match = trimmed.match(/\{[\s\S]*\}/);
+  if (!match) return null;
+  try {
+    return JSON.parse(match[0]);
+  } catch {
+    return null;
+  }
+}
+
+async function planApiPeerAssignments(
+  bot: BotRecord,
+  request: string,
+  peers: BotRecord[],
+): Promise<ApiPeerAssignment[]> {
+  if (!bot.chiefOfStaff || peers.length === 0) return [];
+  const roster = peers.slice(0, 20).map((peer) => ({
+    id: peer.id,
+    name: peer.name,
+    role: peer.title || "General assistant",
+    description: (peer.description || "").slice(0, 400),
+    busy: Boolean(peer.busy),
+  }));
+  try {
+    const result = await generateAnalysisText(cfg, {
+      prompt: [
+        "You are routing work inside MagicTeams. Decide whether this user request needs help from teammate bots.",
+        "Return JSON only, with this exact shape: {\"assignments\":[{\"botId\":\"...\",\"message\":\"...\"}]}",
+        "Use at most 3 assignments. Use only botId values from the roster. Do not assign trivial work. Do not assign to busy bots.",
+        `User request: ${request}`,
+        `Roster: ${JSON.stringify(roster)}`,
+      ].join("\n\n"),
+    });
+    const parsed = jsonObjectFromText(result.text) as { assignments?: unknown } | null;
+    const rows = Array.isArray(parsed?.assignments) ? parsed.assignments : [];
+    const allowed = new Set(peers.filter((peer) => !peer.busy).map((peer) => peer.id));
+    return rows.flatMap((row): ApiPeerAssignment[] => {
+      if (!row || typeof row !== "object") return [];
+      const rec = row as Record<string, unknown>;
+      const botId = typeof rec.botId === "string" ? rec.botId : "";
+      const message = typeof rec.message === "string" ? rec.message.trim() : "";
+      if (!allowed.has(botId) || !message) return [];
+      return [{ botId, message: message.slice(0, 4000) }];
+    }).slice(0, 3);
+  } catch (error) {
+    console.error("connected API peer planning failed", error);
+    return [];
+  }
+}
+
+function responseLanguageSystemPrompt(): string {
+  const language = cfg.analysis?.language?.trim();
+  return language
+    ? ` Respond in ${language}. Keep user-facing answers, teammate summaries, task assignments, and task results in ${language} unless the user explicitly asks for another language.`
+    : "";
+}
+
+function agentLanguageName(language: string | undefined): string {
+  const value = language?.trim().toLowerCase();
+  if (!value) return "";
+  const labels: Record<string, string> = {
+    en: "English",
+    english: "English",
+    tel: "Telugu",
+    te: "Telugu",
+    telugu: "Telugu",
+    hi: "Hindi",
+    hindi: "Hindi",
+    es: "Spanish",
+    spanish: "Spanish",
+    fr: "French",
+    french: "French",
+    de: "German",
+    german: "German",
+  };
+  return labels[value] ?? language?.trim() ?? "";
+}
+
+function agentLanguageSystemPrompt(bot: BotRecord): string {
+  const language = agentLanguageName(bot.agentConfig?.language);
+  return language
+    ? ` Respond in ${language}. Keep every user-facing answer, teammate summary, task assignment, and task result in ${language} unless the user explicitly asks for another language.`
+    : "";
+}
+
+// default selection for new bots: first available instance, connected API preferred
 async function defaultSelection() {
   const described = await registry.describe();
   const available = described.filter((d) => d.snapshot.state === "available");
@@ -268,13 +371,24 @@ async function defaultSelection() {
   // spawn ENOENT — the single worst first-run experience, and the one every
   // user with no CLIs used to get. An empty selection is honest: the UI shows
   // the setup path instead of a bot that cannot answer.
-  const pick = available.find((d) => d.driverKind === "claudeAgent") ?? available[0];
+  const pick = available.find((d) => d.instanceId === "analysisApi") ?? available[0];
   return { instanceId: pick?.instanceId ?? "", model: pick?.models.default ?? "" };
 }
 let bootSelection = { instanceId: "", model: "" };
 const store = new Store(() => bootSelection);
 bootSelection = await defaultSelection();
-store.seedIfEmpty();
+store.ensureMainBot();
+
+async function moveClaudeBotsToConnectedApi() {
+  const selection = await defaultSelection();
+  if (selection.instanceId !== "analysisApi") return;
+  for (const bot of store.bots) {
+    if (bot.modelSelection.instanceId === "claude" || bot.modelSelection.instanceId === "claude-subscription") {
+      store.patchBot(bot.id, { modelSelection: selection });
+    }
+  }
+}
+await moveClaudeBotsToConnectedApi();
 
 /** A bot as a client may see it: no provider session bookkeeping.
  *
@@ -1647,34 +1761,61 @@ async function startTurn(
           !candidate.hidden &&
           sectionKey(candidate.section) === sectionKey(bot.section),
       );
+      const canUseAgentBridge = instance.adapter.capabilities.agentsMcp === true;
+      const canUseBackendCoordination = instance.driverKind === "analysis-api";
       if (
         commsDepth < MAX_COMMS_DEPTH &&
-        instance.adapter.capabilities.agentsMcp === true &&
+        canUseAgentBridge &&
         (bot.chiefOfStaff || sectionPeers.length > 0)
       ) {
         integrations.agents = agentsIntegration(bot.id, threadId, commsDepth);
       }
       // @mentions in the user's message (the composer's tagging UI) become
-      // an explicit delegation nudge — the agent still does the ask_bot call
-      // itself, so the harness stays the single owner of turns/permissions
-      const tagged = integrations.agents
+      // an explicit delegation nudge. CLI/ACP engines receive the agents MCP
+      // tool; connected API engines get backend-run coordination below.
+      const tagged = (integrations.agents || canUseBackendCoordination)
         ? mentionedBots(
             text,
             sectionPeers,
           )
         : [];
       const coordinationPrompt = bot.chiefOfStaff
-        ? chiefOfStaffSystemPrompt(bot.id, store.bots, Boolean(integrations.agents))
+        ? chiefOfStaffSystemPrompt(bot.id, store.bots, Boolean(integrations.agents) || canUseBackendCoordination)
         : integrations.agents
           ? "You can work with the other bots in your section through the agents tools — list_bots shows who's available, ask_bot sends one of them a message and returns their reply."
           : "";
+
+      let augmentedTurnText = turnText;
+      if (canUseBackendCoordination && commsDepth < MAX_COMMS_DEPTH && (bot.chiefOfStaff || tagged.length > 0)) {
+        const planned = bot.chiefOfStaff ? await planApiPeerAssignments(bot, text, sectionPeers) : [];
+        const assignments = new Map<string, ApiPeerAssignment>();
+        for (const tag of tagged) assignments.set(tag.id, { botId: tag.id, message: text });
+        for (const assignment of planned) {
+          if (!assignments.has(assignment.botId)) assignments.set(assignment.botId, assignment);
+        }
+        const replies: string[] = [];
+        for (const assignment of [...assignments.values()].slice(0, 3)) {
+          const peer = sectionPeers.find((candidate) => candidate.id === assignment.botId);
+          if (!peer || peer.busy) continue;
+          const reply = await askBotAndWait(peer.id, assignment.message, commsDepth, bot.id);
+          replies.push(`@${peer.name} replied:\n${reply}`);
+        }
+        if (replies.length > 0) {
+          augmentedTurnText = [
+            turnText,
+            "Teammate results gathered by MagicTeams before this answer:",
+            replies.join("\n\n"),
+            "Use these teammate results when answering the user's request. Do not claim a teammate did work unless its reply is included above.",
+          ].join("\n\n");
+        }
+      }
 
       // (activeVpsThreads was already claimed above, before the provision or
       // reuse await, so the backend guards saw this turn the whole time.)
       watchdog.watch(threadId, bot.id);
       await instance.adapter.sendTurn({
         threadId,
-        text: turnText,
+        text: augmentedTurnText,
         model,
         effort,
         // a rewound thread never resumes the abandoned branch's session
@@ -1706,6 +1847,7 @@ async function startTurn(
             ? " The user's connected apps (Gmail, Calendar, Slack, Notion, and the rest) are reachable through the composio tools — find the right one with COMPOSIO_SEARCH_TOOLS, read its arguments with COMPOSIO_GET_TOOL_SCHEMAS, then run it with COMPOSIO_MULTI_EXECUTE_TOOL. Reach for them before telling the user you have no access to a service."
             : "") +
           (coordinationPrompt ? ` ${coordinationPrompt}` : "") +
+          (agentLanguageSystemPrompt(bot) || responseLanguageSystemPrompt()) +
           (privateWorkspace ? memorySystemPrompt(bot.id) : "") +
           skillInstructions +
           (opts?.automationSource === "webhook"
@@ -2329,7 +2471,60 @@ async function perBotLocalVmCountForModeChange(): Promise<number | null> {
   return existingPerBotLocalVmCount(runtime.runtime);
 }
 
+const WHATSAPP_WEBHOOK_BASE_URL = "https://magicteams-voice-api.everyai-com.workers.dev";
+const REDDY_WHATSAPP_EMAIL = "reddyvamsi587@gmail.com";
+const REDDY_WHATSAPP_WEBHOOK_KEY = "b5def507-2eea-402c-acb3-76dc0f851ce4";
+const REDDY_WHATSAPP_VERIFY_TOKEN = "996688";
+
+function generateVerifyToken(): string {
+  const value = 100000 + (randomBytes(4).readUInt32BE(0) % 900000);
+  return String(value);
+}
+
+function validWebhookKey(value: unknown): value is string {
+  return typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9-]{7,127}$/.test(value);
+}
+
+function ensureWhatsappWebhookForAccount() {
+  const email = (cfg.profile?.email ?? "").trim().toLowerCase();
+  const savedEmail = (cfg.whatsapp?.webhookAccountEmail ?? "").trim().toLowerCase();
+  const accountChanged = email !== savedEmail;
+  const needsKey = !validWebhookKey(cfg.whatsapp?.webhookKey);
+  const needsToken = !cfg.whatsapp?.verifyToken?.trim();
+  if (!accountChanged && !needsKey && !needsToken) return;
+
+  const webhookKey = email === REDDY_WHATSAPP_EMAIL ? REDDY_WHATSAPP_WEBHOOK_KEY : randomUUID();
+  const verifyToken = email === REDDY_WHATSAPP_EMAIL ? REDDY_WHATSAPP_VERIFY_TOKEN : generateVerifyToken();
+  saveConfig({
+    whatsapp: {
+      webhookKey,
+      verifyToken,
+      webhookAccountEmail: email,
+    },
+  });
+  Object.assign(cfg, loadConfig());
+}
+
+function whatsappWebhookUrl() {
+  const key = cfg.whatsapp?.webhookKey ?? "";
+  return key ? `${WHATSAPP_WEBHOOK_BASE_URL}/api/webhooks/whatsapp/${key}` : "";
+}
+
 function configStatus() {
+  ensureWhatsappWebhookForAccount();
+  const analysisKeys = cfg.analysis?.keys ?? {};
+  const analysisConfigured = {
+    gemini: Boolean(analysisKeys.gemini),
+    chatgpt: Boolean(analysisKeys.chatgpt),
+    perplexity: Boolean(analysisKeys.perplexity),
+    grok: Boolean(analysisKeys.grok),
+    deepseek: Boolean(analysisKeys.deepseek),
+    cloudflare: Boolean(analysisKeys.cloudflare && cfg.analysis?.cloudflareAccountId),
+    claude: Boolean(analysisKeys.claude),
+    nvidia: Boolean(analysisKeys.nvidia),
+    mistral: Boolean(analysisKeys.mistral),
+    ollama: Boolean(cfg.analysis?.ollamaBaseUrl),
+  };
   return {
     xai: { configured: Boolean(cfg.xai?.key) },
     composio: {
@@ -2339,16 +2534,40 @@ function configStatus() {
     cfComputer: { configured: cfComputer.cfConfigured(cfg), url: cfg.cfComputer?.url ?? "" },
     vps: { configured: Boolean(vpsSshAlias(cfg)), sshAlias: vpsSshAlias(cfg) ?? "" },
     opencodeGo: { configured: Boolean(cfg.opencodeGo?.apiKey) },
+    ultravox: { configured: ultravox.configured(cfg) },
     // the chosen voice is a setting, not a secret; the key is reported the
     // same configured-or-not way as every other credential
     tts: tts.describeVoice(cfg),
     imageGen: { configured: Boolean(cfg.imageGen?.key) },
+    analysis: {
+      provider: cfg.analysis?.provider ?? "gemini",
+      model: cfg.analysis?.model ?? "",
+      language: cfg.analysis?.language ?? "",
+      cloudflareAccountId: cfg.analysis?.cloudflareAccountId ?? "",
+      ollamaBaseUrl: cfg.analysis?.ollamaBaseUrl ?? "",
+      configured: analysisConfigured,
+    },
     // not a secret — the sidebar shows it
     profile: { name: cfg.profile?.name ?? "", email: cfg.profile?.email ?? "" },
     rooms: { turnTimeoutMinutes: roomTurnTimeoutMinutes(cfg) },
     localVm: {
       mode: localVmMode(cfg),
       maxInstances: localVmMaxInstances(cfg),
+    },
+    whatsapp: {
+      autoReplyEnabled: cfg.whatsapp?.autoReplyEnabled === true,
+      autoReplyWebhookUrl: cfg.whatsapp?.autoReplyWebhookUrl ?? "",
+      apiConfigured: Boolean(cfg.whatsapp?.metaAccessToken && cfg.whatsapp?.metaPhoneNumberId && cfg.whatsapp?.metaBusinessAccountId),
+      metaPhoneNumberId: cfg.whatsapp?.metaPhoneNumberId ?? "",
+      metaBusinessAccountId: cfg.whatsapp?.metaBusinessAccountId ?? "",
+      metaAppId: cfg.whatsapp?.metaAppId ?? "",
+      displayPhoneNumber: cfg.whatsapp?.displayPhoneNumber ?? "",
+      verifiedName: cfg.whatsapp?.verifiedName ?? "",
+      validatedAt: cfg.whatsapp?.validatedAt ?? null,
+      webhookKey: cfg.whatsapp?.webhookKey ?? "",
+      webhookUrl: whatsappWebhookUrl(),
+      verifyToken: cfg.whatsapp?.verifyToken ?? "",
+      webhookAccountEmail: cfg.whatsapp?.webhookAccountEmail ?? "",
     },
     features: { skillRecorder: skillRecorderEnabled(cfg) },
   };
@@ -2438,6 +2657,429 @@ function readBody(req: IncomingMessage): Promise<any> {
   });
 }
 
+function normalizeWhitespace(text: string): string {
+  return text.replace(/\s+/g, " ").trim();
+}
+
+function readableTextFromHtml(html: string): string {
+  const withoutNoise = html
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, " ")
+    .replace(/<noscript\b[^>]*>[\s\S]*?<\/noscript>/gi, " ")
+    .replace(/<!--[\s\S]*?-->/g, " ");
+  const withBreaks = withoutNoise
+    .replace(/<\/(p|div|section|article|header|footer|main|aside|li|h[1-6]|tr)>/gi, "\n")
+    .replace(/<br\s*\/?>/gi, "\n");
+  const text = withBreaks
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, "\"")
+    .replace(/&#39;/g, "'")
+    .replace(/&apos;/gi, "'");
+  return text
+    .split(/\r?\n/)
+    .map(normalizeWhitespace)
+    .filter(Boolean)
+    .join("\n")
+    .slice(0, 120_000);
+}
+
+async function extractWebsiteText(url: string): Promise<string> {
+  let target: URL;
+  try {
+    target = new URL(url);
+  } catch {
+    throw Object.assign(new Error("Enter a valid URL, including https://"), { status: 400 });
+  }
+  if (target.protocol !== "https:" && target.protocol !== "http:") {
+    throw Object.assign(new Error("Only http and https URLs can be added to knowledge base"), { status: 400 });
+  }
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 12_000);
+  try {
+    const response = await fetch(target, {
+      headers: {
+        accept: "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.5",
+        "user-agent": "MagicTeamsKnowledgeBot/1.0",
+      },
+      redirect: "follow",
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      throw Object.assign(new Error(`Could not fetch URL (${response.status})`), { status: response.status });
+    }
+    const contentType = response.headers.get("content-type") ?? "";
+    const raw = await response.text();
+    const text = contentType.includes("html") ? readableTextFromHtml(raw) : normalizeWhitespace(raw).slice(0, 120_000);
+    if (!text) throw Object.assign(new Error("No readable text was found at that URL"), { status: 422 });
+    return text;
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      throw Object.assign(new Error("URL fetch timed out"), { status: 408 });
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function betterAuthUrl(path: string): URL {
+  const base = BETTER_AUTH_BASE_URL.replace(/\/+$/, "");
+  return new URL(`${base}${path}`);
+}
+
+async function betterAuthRequest(path: string, payload: Record<string, unknown>) {
+  const target = betterAuthUrl(path);
+  if (
+    !process.env.BETTER_AUTH_LOGIN_URL &&
+    !process.env.BETTER_AUTH_BASE_URL &&
+    Number(target.port || (target.protocol === "https:" ? 443 : 80)) === PORT
+  ) {
+    throw Object.assign(new Error("BETTER_AUTH_BASE_URL must point at the Better Auth API server"), { status: 501 });
+  }
+  const headers: Record<string, string> = { "content-type": "application/json" };
+  if (BETTER_AUTH_API_KEY) {
+    headers.authorization = `Bearer ${BETTER_AUTH_API_KEY}`;
+    headers["x-api-key"] = BETTER_AUTH_API_KEY;
+  }
+  const response = await fetch(target, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(payload),
+  });
+  const body = await response.json().catch(() => ({})) as Record<string, unknown>;
+  if (!response.ok) {
+    throw Object.assign(
+      new Error(typeof body.error === "string" ? body.error : `Better Auth request failed (${response.status})`),
+      { status: response.status },
+    );
+  }
+  return body;
+}
+
+async function betterAuthLogin(email: string, password: string) {
+  if (!email || !password) throw Object.assign(new Error("email and password required"), { status: 400 });
+  return betterAuthRequest("/login", { email, password });
+}
+
+async function betterAuthSignup(email: string, password: string, fullName: string) {
+  if (!email || !password || password.length < 8) {
+    throw Object.assign(new Error("email and password (min 8 chars) required"), { status: 400 });
+  }
+  return betterAuthRequest("/signup", { email, password, fullName });
+}
+
+async function betterAuthPasswordResetRequest(email: string, redirectOrigin: string) {
+  if (!email) throw Object.assign(new Error("email required"), { status: 400 });
+  return betterAuthRequest("/password-reset/request", { email, redirectOrigin });
+}
+
+async function betterAuthPasswordResetConfirm(token: string, password: string) {
+  if (!token || !password || password.length < 8) {
+    throw Object.assign(new Error("token and password (min 8 chars) required"), { status: 400 });
+  }
+  return betterAuthRequest("/password-reset/confirm", { token, password });
+}
+
+interface RemoteAgentRow {
+  id: string;
+  name?: string | null;
+  system_prompt?: string | null;
+  model?: string | null;
+  ai_provider?: string | null;
+  is_active?: number | boolean | null;
+}
+
+const ACCOUNT_BOT_COLORS: Array<BotRecord["color"]> = ["blue", "red", "orange", "purple", "cyan", "pink", "yellow", "teal", "coral"];
+
+function betterAuthApiUrl(path: string): URL {
+  const base = BETTER_AUTH_API_ORIGIN.replace(/\/+$/, "");
+  return new URL(path, `${base}/`);
+}
+
+function usableBearer(header: string | string[] | undefined): string | null {
+  if (typeof header !== "string") return null;
+  return /^Bearer\s+\S+/i.test(header.trim()) ? header.trim() : null;
+}
+
+function remoteAgentRows(value: unknown): RemoteAgentRow[] {
+  const rows =
+    Array.isArray(value) ? value : value && typeof value === "object" ? (value as { agents?: unknown }).agents : [];
+  if (!Array.isArray(rows)) return [];
+  return rows.filter((row): row is RemoteAgentRow => {
+    if (!row || typeof row !== "object") return false;
+    const active = (row as { is_active?: unknown }).is_active;
+    return (
+      typeof (row as { id?: unknown }).id === "string" &&
+      Boolean((row as { id: string }).id.trim()) &&
+      active !== false &&
+      active !== 0
+    );
+  });
+}
+
+async function platformJson(
+  path: string,
+  options: { method?: string; authorization?: string | string[]; body?: unknown } = {},
+): Promise<unknown> {
+  const bearer = usableBearer(options.authorization);
+  if (!bearer) throw Object.assign(new Error("Sign in to load connected MagicTeams resources"), { status: 401 });
+  const headers: Record<string, string> = {
+    authorization: bearer,
+    "content-type": "application/json",
+  };
+  const response = await fetch(betterAuthApiUrl(path), {
+    method: options.method ?? "GET",
+    headers,
+    body: options.body === undefined ? undefined : JSON.stringify(options.body),
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const message = body && typeof body === "object" && typeof (body as { error?: unknown }).error === "string"
+      ? (body as { error: string }).error
+      : `MagicTeams request failed (${response.status})`;
+    throw Object.assign(new Error(message), { status: response.status });
+  }
+  return body;
+}
+
+function platformRecordId(value: unknown): string {
+  if (!value || typeof value !== "object") return "";
+  const record = value as Record<string, unknown>;
+  const direct = record.id ?? record._id;
+  if (typeof direct === "string" && direct.trim()) return direct.trim();
+  const webhook = record.webhook;
+  if (webhook && typeof webhook === "object") {
+    const nested = (webhook as Record<string, unknown>).id ?? (webhook as Record<string, unknown>)._id;
+    if (typeof nested === "string" && nested.trim()) return nested.trim();
+  }
+  return "";
+}
+
+function firstStringField(value: unknown, fields: string[]): string {
+  if (!value || typeof value !== "object") return "";
+  const record = value as Record<string, unknown>;
+  for (const field of fields) {
+    const direct = record[field];
+    if (typeof direct === "string" && direct.trim()) return direct.trim();
+  }
+  for (const nested of ["call", "demoCall", "data", "result"]) {
+    const found = firstStringField(record[nested], fields);
+    if (found) return found;
+  }
+  return "";
+}
+
+function normalizeDemoCallResponse(value: unknown): Record<string, unknown> {
+  const joinUrl = firstStringField(value, ["joinUrl", "join_url"]);
+  if (!joinUrl) throw Object.assign(new Error("Demo call did not return a join URL"), { status: 502 });
+  return {
+    success: true,
+    joinUrl,
+    callId: firstStringField(value, ["callId", "call_id", "ultravoxCallId", "ultravox_call_id"]) || null,
+    logId: firstStringField(value, ["logId", "log_id"]) || null,
+    provider: firstStringField(value, ["provider"]) || "ultravox",
+  };
+}
+
+function platformRows(value: unknown, keys: string[]): Array<Record<string, unknown>> {
+  if (Array.isArray(value)) return value.filter((row): row is Record<string, unknown> => Boolean(row && typeof row === "object"));
+  if (!value || typeof value !== "object") return [];
+  const record = value as Record<string, unknown>;
+  for (const key of keys) {
+    const rows = record[key];
+    if (Array.isArray(rows)) {
+      return rows.filter((row): row is Record<string, unknown> => Boolean(row && typeof row === "object"));
+    }
+  }
+  return [];
+}
+
+async function syncPlatformWebhooks(agentId: string, scope: string, authorization: string | string[] | undefined): Promise<{ sync: unknown; syncError?: string }> {
+  try {
+    const sync = await platformJson(`/api/agents/${encodeURIComponent(scope === "global" ? "global" : agentId)}/sync-ultravox`, {
+      method: "POST",
+      authorization,
+      body: {},
+    });
+    return { sync };
+  } catch (error) {
+    return { sync: null, syncError: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+type PlatformComposioToolkit = {
+  slug?: unknown;
+  name?: unknown;
+  description?: unknown;
+  logo?: unknown;
+  id?: unknown;
+  authConfigId?: unknown;
+  auth_config_id?: unknown;
+  authConfig?: unknown;
+  auth_config?: unknown;
+  connected?: unknown;
+  connectionStatus?: unknown;
+  connectedAccountId?: unknown;
+  noAuth?: unknown;
+};
+
+type PlatformComposioConnection = {
+  id?: unknown;
+  slug?: unknown;
+  status?: unknown;
+};
+
+function platformComposioToolkitItems(value: unknown): PlatformComposioToolkit[] {
+  const items = value && typeof value === "object" ? (value as { items?: unknown }).items : undefined;
+  return Array.isArray(items) ? items.filter((item): item is PlatformComposioToolkit => Boolean(item && typeof item === "object")) : [];
+}
+
+function platformComposioConnectionItems(value: unknown): PlatformComposioConnection[] {
+  const items = value && typeof value === "object" ? (value as { items?: unknown }).items : undefined;
+  return Array.isArray(items) ? items.filter((item): item is PlatformComposioConnection => Boolean(item && typeof item === "object")) : [];
+}
+
+function platformConnectorCatalog(value: unknown): {
+  cards: composio.ToolkitCard[];
+  services: Record<string, composio.ConnectorServiceState>;
+} {
+  const services: Record<string, composio.ConnectorServiceState> = {};
+  const cards = platformComposioToolkitItems(value).map((toolkit) => {
+    const slug = String(toolkit.slug ?? "").trim().toLowerCase();
+    const status = typeof toolkit.connectionStatus === "string" ? toolkit.connectionStatus : "";
+    const connectedAccountId = typeof toolkit.connectedAccountId === "string" ? toolkit.connectedAccountId : "";
+    const authConfigRecord = toolkit.authConfig && typeof toolkit.authConfig === "object"
+      ? toolkit.authConfig as { id?: unknown }
+      : toolkit.auth_config && typeof toolkit.auth_config === "object"
+        ? toolkit.auth_config as { id?: unknown }
+        : null;
+    const authConfigId = [
+      toolkit.authConfigId,
+      toolkit.auth_config_id,
+      authConfigRecord?.id,
+      String(toolkit.id ?? "").startsWith("ac_") ? toolkit.id : "",
+    ].find((value) => typeof value === "string" && value.trim());
+    const connected = toolkit.connected === true || toolkit.noAuth === true || /^active$/i.test(status);
+    const activeAccount = connectedAccountId && /^active$/i.test(status || "ACTIVE")
+      ? [{ id: connectedAccountId, status: status || "ACTIVE" }]
+      : [];
+    if (slug) {
+      services[slug] = {
+        connected,
+        pending: /^(initiated|initializing|pending)$/i.test(status),
+        status: status || (connected ? "ACTIVE" : "not_connected"),
+        accounts: activeAccount,
+      };
+    }
+    return {
+      slug,
+      label: String(toolkit.name ?? toolkit.slug ?? ""),
+      blurb: String(toolkit.description ?? "").slice(0, 90),
+      logo: typeof toolkit.logo === "string" && toolkit.logo.trim() ? toolkit.logo : null,
+      authConfigId: typeof authConfigId === "string" ? authConfigId.trim() : undefined,
+      domain: null,
+    };
+  }).filter((card) => card.slug && card.label);
+  return { cards, services };
+}
+
+function platformConnectorServices(value: unknown): Record<string, composio.ConnectorServiceState> {
+  const grouped = new Map<string, composio.ConnectedAccountSummary[]>();
+  for (const account of platformComposioConnectionItems(value)) {
+    const slug = String(account.slug ?? "").trim().toLowerCase();
+    const id = String(account.id ?? "").trim();
+    if (!slug || !id) continue;
+    const status = typeof account.status === "string" && account.status.trim() ? account.status : "ACTIVE";
+    if (!/^active$/i.test(status)) continue;
+    grouped.set(slug, [...(grouped.get(slug) ?? []), { id, status }]);
+  }
+  return Object.fromEntries([...grouped.entries()].map(([slug, accounts]) => {
+    const active = accounts.some((account) => /^active$/i.test(account.status));
+    const pending = accounts.some((account) => /^(initiated|initializing|pending)$/i.test(account.status));
+    return [slug, {
+      connected: active,
+      pending,
+      status: active ? "ACTIVE" : pending ? "INITIATED" : accounts[0]?.status ?? "not_connected",
+      accounts,
+    }];
+  }));
+}
+
+async function fetchAccountAgents(authorization: string | string[] | undefined): Promise<RemoteAgentRow[] | null> {
+  const bearer = usableBearer(authorization);
+  if (!bearer) return null;
+  const response = await fetch(betterAuthApiUrl("/api/agents?activeOnly=true"), {
+    headers: { authorization: bearer },
+  });
+  if (response.status === 401 || response.status === 403) return null;
+  const body = await response.json().catch(() => []);
+  if (!response.ok) {
+    throw Object.assign(new Error(`Account bots request failed (${response.status})`), { status: response.status });
+  }
+  return remoteAgentRows(body);
+}
+
+function accountBotColor(agentId: string): BotRecord["color"] {
+  let hash = 0;
+  for (let index = 0; index < agentId.length; index++) {
+    hash = (hash * 31 + agentId.charCodeAt(index)) >>> 0;
+  }
+  return ACCOUNT_BOT_COLORS[hash % ACCOUNT_BOT_COLORS.length] ?? "blue";
+}
+
+function remoteAgentBotProfile(
+  agent: RemoteAgentRow,
+  index: number,
+): Pick<BotRecord, "name" | "title" | "description" | "remoteAgentId" | "hidden" | "color"> {
+  const name = agent.name?.trim() || "Account bot";
+  const modelParts = [agent.ai_provider, agent.model].map((part) => part?.trim()).filter(Boolean);
+  const prompt = agent.system_prompt?.trim() ?? "";
+  return {
+    remoteAgentId: agent.id,
+    name,
+    title: modelParts.length ? modelParts.join(" · ") : "Account bot",
+    description: prompt,
+    color: ACCOUNT_BOT_COLORS[index % ACCOUNT_BOT_COLORS.length] ?? accountBotColor(agent.id),
+    hidden: false,
+  };
+}
+
+function normalizeAccountBotColors(): void {
+  const accountBots = store.bots.filter((bot) => bot.remoteAgentId && !bot.hidden);
+  for (const [index, bot] of accountBots.entries()) {
+    const color = ACCOUNT_BOT_COLORS[index % ACCOUNT_BOT_COLORS.length] ?? accountBotColor(bot.remoteAgentId ?? "");
+    if (bot.color !== color || bot.chiefOfStaff) {
+      store.patchBot(bot.id, { color, chiefOfStaff: false });
+    }
+  }
+}
+
+async function syncAccountAgentsToBots(authorization: string | string[] | undefined): Promise<void> {
+  normalizeAccountBotColors();
+  const agents = await fetchAccountAgents(authorization);
+  if (!agents) return;
+  const remoteIds = new Set<string>();
+  for (const [index, agent] of agents.entries()) {
+    remoteIds.add(agent.id);
+    const existing = store.bots.find((bot) => bot.remoteAgentId === agent.id);
+    const profile = remoteAgentBotProfile(agent, index);
+    if (existing) {
+      store.patchBot(existing.id, { ...profile, chiefOfStaff: false });
+      continue;
+    }
+    store.createBot({ ...profile, mascotExpression: "idle" }, { seedMessages: false });
+  }
+  for (const bot of store.bots) {
+    if (bot.remoteAgentId && !remoteIds.has(bot.remoteAgentId)) {
+      store.patchBot(bot.id, { hidden: true, chiefOfStaff: false });
+    }
+  }
+}
+
 // Loopback-only enforcement: the harness runs on 127.0.0.1 but accepts
 // requests from any loopback connection and any web page that DNS-rebinds
 // onto it. Reject non-loopback Hosts outright (defeats rebinding) and
@@ -2490,6 +3132,25 @@ const server = createServer(async (req, res) => {
     const origin = req.headers.origin;
     if (origin && !isAllowedOrigin(origin)) {
       return json(res, 403, { error: "forbidden: cross-origin request" });
+    }
+    if (method === "POST" && path === "/api/auth/better/login") {
+      const { email: rawEmail, password } = await readBody(req);
+      const email = String(rawEmail ?? "").trim().toLowerCase();
+      return json(res, 200, await betterAuthLogin(email, String(password ?? "")));
+    }
+    if (method === "POST" && path === "/api/auth/better/signup") {
+      const { email: rawEmail, password, fullName } = await readBody(req);
+      const email = String(rawEmail ?? "").trim().toLowerCase();
+      return json(res, 201, await betterAuthSignup(email, String(password ?? ""), String(fullName ?? "").trim()));
+    }
+    if (method === "POST" && path === "/api/auth/better/password-reset/request") {
+      const { email: rawEmail, redirectOrigin } = await readBody(req);
+      const email = String(rawEmail ?? "").trim().toLowerCase();
+      return json(res, 200, await betterAuthPasswordResetRequest(email, String(redirectOrigin ?? "")));
+    }
+    if (method === "POST" && path === "/api/auth/better/password-reset/confirm") {
+      const { token, password } = await readBody(req);
+      return json(res, 200, await betterAuthPasswordResetConfirm(String(token ?? "").trim(), String(password ?? "")));
     }
     // ── internal peer-agent comms (localhost + shared token only) ──────
     // The agents-proxy (spawned inside a bot's agent process) calls these to
@@ -2920,6 +3581,11 @@ const server = createServer(async (req, res) => {
     if (method === "GET" && path === "/api/bots") {
       const limit = pageSize(url.searchParams.get("messages"));
       if (limit === null) return json(res, 400, { error: "messages must be a non-negative whole number" });
+      try {
+        await syncAccountAgentsToBots(req.headers.authorization);
+      } catch (error) {
+        console.error("account bots sync failed", error);
+      }
       return json(res, 200, {
         bots: store.bots.map((bot) => ({ ...publicBot(bot), ...messagePage(bot.threadId, limit) })),
         groups: store.groups.map((g) => ({ ...g, ...messagePage(g.threadId, limit) })),
@@ -3931,8 +4597,12 @@ const server = createServer(async (req, res) => {
       // next request is handled
       if (bot.busy) return json(res, 409, { error: "the bot is working — stop it before editing" });
       const source = store.messagesFor(bot.threadId).find((msg) => msg.id === messageId);
-      if (!source || source.role !== "user" || source.kind !== "text") {
-        return json(res, 404, { error: "only user messages can be edited" });
+      if (!source || source.kind !== "text") {
+        return json(res, 404, { error: "only text messages can be edited" });
+      }
+      if (source.role !== "user") {
+        const message = store.patchMessage(bot.threadId, messageId, { text });
+        return json(res, 200, { ok: true, threadId: bot.threadId, message });
       }
       if (!registry.get(bot.modelSelection.instanceId)) {
         return json(res, 409, {
@@ -3944,6 +4614,21 @@ const server = createServer(async (req, res) => {
       store.patchBot(bot.id, { rewound: true });
       await startTurn(bot.id, text, { userMessage: message });
       return json(res, 202, { ok: true });
+    }
+
+    m = path.match(/^\/api\/bots\/([\w-]+)\/messages\/([\w-]+)$/);
+    if (m && method === "DELETE") {
+      const bot = store.bot(m[1]);
+      if (!bot) return json(res, 404, { error: "no such bot" });
+      if (bot.busy) return json(res, 409, { error: "the bot is working — stop it before deleting messages" });
+      const result = store.deleteMessage(bot.threadId, m[2]);
+      if (!result) return json(res, 404, { error: "no such message" });
+      return json(res, 200, {
+        ok: true,
+        threadId: bot.threadId,
+        messageIds: result.deletedIds,
+        activeLeafId: result.activeLeafId,
+      });
     }
 
     // switch which fork of the conversation is visible (no new turn)
@@ -4317,6 +5002,348 @@ const server = createServer(async (req, res) => {
     if (method === "GET" && path === "/api/config") {
       return json(res, 200, configStatus());
     }
+    if (method === "GET" && path === "/api/whatsapp/configs") {
+      ensureWhatsappWebhookForAccount();
+      return json(res, 200, {
+        autoReply: {
+          is_enabled: cfg.whatsapp?.autoReplyEnabled === true,
+          webhook_url: cfg.whatsapp?.autoReplyWebhookUrl ?? "",
+        },
+        api: {
+          configured: Boolean(cfg.whatsapp?.metaAccessToken && cfg.whatsapp?.metaPhoneNumberId && cfg.whatsapp?.metaBusinessAccountId),
+          access_token: cfg.whatsapp?.metaAccessToken ?? "",
+          phone_number_id: cfg.whatsapp?.metaPhoneNumberId ?? "",
+          business_account_id: cfg.whatsapp?.metaBusinessAccountId ?? "",
+          app_id: cfg.whatsapp?.metaAppId ?? "",
+          display_phone_number: cfg.whatsapp?.displayPhoneNumber ?? "",
+          verified_name: cfg.whatsapp?.verifiedName ?? "",
+          validated_at: cfg.whatsapp?.validatedAt ?? null,
+        },
+        webhook: {
+          webhook_key: cfg.whatsapp?.webhookKey ?? "",
+          webhook_url: whatsappWebhookUrl(),
+          verify_token: cfg.whatsapp?.verifyToken ?? "",
+          account_email: cfg.whatsapp?.webhookAccountEmail ?? "",
+        },
+      });
+    }
+    if (method === "GET" && path === "/api/whatsapp/configs/api") {
+      return json(res, 200, {
+        configured: Boolean(cfg.whatsapp?.metaAccessToken && cfg.whatsapp?.metaPhoneNumberId && cfg.whatsapp?.metaBusinessAccountId),
+        access_token: cfg.whatsapp?.metaAccessToken ?? "",
+        phone_number_id: cfg.whatsapp?.metaPhoneNumberId ?? "",
+        business_account_id: cfg.whatsapp?.metaBusinessAccountId ?? "",
+        app_id: cfg.whatsapp?.metaAppId ?? "",
+        display_phone_number: cfg.whatsapp?.displayPhoneNumber ?? "",
+        verified_name: cfg.whatsapp?.verifiedName ?? "",
+        validated_at: cfg.whatsapp?.validatedAt ?? null,
+      });
+    }
+    if (method === "GET" && path === "/api/whatsapp/configs/webhook") {
+      ensureWhatsappWebhookForAccount();
+      return json(res, 200, {
+        webhook_key: cfg.whatsapp?.webhookKey ?? "",
+        webhook_url: whatsappWebhookUrl(),
+        verify_token: cfg.whatsapp?.verifyToken ?? "",
+        account_email: cfg.whatsapp?.webhookAccountEmail ?? "",
+      });
+    }
+    if (method === "GET" && path === "/api/whatsapp/configs/auto-reply") {
+      return json(res, 200, {
+        is_enabled: cfg.whatsapp?.autoReplyEnabled === true,
+        webhook_url: cfg.whatsapp?.autoReplyWebhookUrl ?? "",
+      });
+    }
+    if (method === "GET" && path === "/api/whatsapp/contacts") {
+      return json(res, 200, { contacts: listWhatsappContacts() });
+    }
+    const parseWhatsappContactInput = (entry: unknown, fallbackId: string = randomUUID()): WhatsAppContactInput | null => {
+      const record = entry && typeof entry === "object" && !Array.isArray(entry) ? entry as Record<string, unknown> : {};
+      const phone = typeof record.phone === "string"
+        ? record.phone.trim()
+        : typeof record.phone_number === "string"
+          ? record.phone_number.trim()
+          : "";
+      const label = typeof record.name === "string" ? record.name.trim() : "";
+      if (!phone) return null;
+      return {
+        id: typeof record.id === "string" && /^[\w.-]{3,120}$/.test(record.id) ? record.id : fallbackId,
+        name: (label || phone).slice(0, 120),
+        phone: phone.slice(0, 60),
+      };
+    };
+    if (method === "POST" && path === "/api/whatsapp/contacts") {
+      const body = await readBody(req);
+      const contact = parseWhatsappContactInput(body);
+      if (!contact) return json(res, 400, { error: "phone number is required" });
+      try {
+        return json(res, 201, { contact: upsertWhatsappContact(contact) });
+      } catch (error) {
+        return json(res, 500, { error: error instanceof Error ? error.message : "could not save contact" });
+      }
+    }
+    if (method === "POST" && path === "/api/whatsapp/contacts/bulk") {
+      const body = await readBody(req);
+      const rawContacts: unknown[] = Array.isArray(body.contacts) ? body.contacts : [];
+      if (rawContacts.length > 1000) return json(res, 400, { error: "contact import is limited to 1000 contacts" });
+      const contacts = rawContacts
+        .map((entry: unknown) => parseWhatsappContactInput(entry))
+        .filter((entry: WhatsAppContactInput | null): entry is WhatsAppContactInput => entry !== null);
+      const deduped: WhatsAppContactInput[] = [...new Map<string, WhatsAppContactInput>(contacts.map((contact: WhatsAppContactInput) => [contact.phone.toLowerCase(), contact])).values()];
+      if (!deduped.length) return json(res, 400, { error: "no valid contacts were found" });
+      try {
+        return json(res, 201, { contacts: upsertWhatsappContacts(deduped) });
+      } catch (error) {
+        return json(res, 500, { error: error instanceof Error ? error.message : "could not import contacts" });
+      }
+    }
+    const contactUpdateMatch = path.match(/^\/api\/whatsapp\/contacts\/([^/]+)$/);
+    if ((method === "PUT" || method === "PATCH") && contactUpdateMatch) {
+      const contactId = decodeURIComponent(contactUpdateMatch[1] ?? "");
+      if (!/^[\w.-]{3,120}$/.test(contactId)) return json(res, 400, { error: "invalid contact id" });
+      const contact = parseWhatsappContactInput({ ...(await readBody(req)), id: contactId }, contactId);
+      if (!contact) return json(res, 400, { error: "phone number is required" });
+      try {
+        return json(res, 200, { contact: updateWhatsappContact(contact) });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "could not update contact";
+        return json(res, message === "contact not found" ? 404 : message === "phone number already exists" ? 409 : 500, { error: message });
+      }
+    }
+    if (method === "DELETE" && contactUpdateMatch) {
+      const contactId = decodeURIComponent(contactUpdateMatch[1] ?? "");
+      if (!/^[\w.-]{3,120}$/.test(contactId)) return json(res, 400, { error: "invalid contact id" });
+      try {
+        deleteWhatsappContact(contactId);
+        return json(res, 200, { ok: true });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "could not delete contact";
+        return json(res, message === "contact not found" ? 404 : 500, { error: message });
+      }
+    }
+    if (method === "GET" && path === "/api/whatsapp/audiences") {
+      return json(res, 200, { audiences: listWhatsappAudiences() });
+    }
+    if (method === "POST" && path === "/api/whatsapp/audiences") {
+      const body = await readBody(req);
+      const name = typeof body.name === "string" ? body.name.trim() : "";
+      const description = typeof body.description === "string" ? body.description.trim() : "";
+      const rawContactIds = Array.isArray(body.contactIds) ? body.contactIds : [];
+      const rawContacts = Array.isArray(body.contacts) ? body.contacts : [];
+      if (!name) return json(res, 400, { error: "audience name is required" });
+      if (name.length > 100) return json(res, 400, { error: "audience name must be at most 100 characters" });
+      if (description.length > 1000) return json(res, 400, { error: "description must be at most 1000 characters" });
+      if (rawContacts.length > 1000 || rawContactIds.length > 1000) return json(res, 400, { error: "audience contact list is limited to 1000 contacts" });
+      const contacts: WhatsAppContactInput[] = rawContacts
+        .map((entry: unknown) => {
+          const record = entry && typeof entry === "object" && !Array.isArray(entry) ? entry as Record<string, unknown> : {};
+          const phone = typeof record.phone === "string" ? record.phone.trim() : "";
+          const label = typeof record.name === "string" ? record.name.trim() : "";
+          if (!phone) return null;
+          return {
+            id: typeof record.id === "string" && /^[\w.-]{3,120}$/.test(record.id) ? record.id : randomUUID(),
+            name: (label || phone).slice(0, 120),
+            phone: phone.slice(0, 60),
+          };
+        })
+        .filter((entry: WhatsAppContactInput | null): entry is WhatsAppContactInput => entry !== null);
+      const contactIds = rawContactIds
+        .filter((id: unknown): id is string => typeof id === "string" && /^[\w.-]{3,120}$/.test(id))
+        .slice(0, 1000);
+      const audience = createWhatsappAudience({
+        id: randomUUID(),
+        name,
+        description: description || null,
+        contacts,
+        contactIds,
+      });
+      return json(res, 201, { audience });
+    }
+    const audienceUpdateMatch = path.match(/^\/api\/whatsapp\/audiences\/([^/]+)$/);
+    if (method === "DELETE" && audienceUpdateMatch) {
+      const audienceId = decodeURIComponent(audienceUpdateMatch[1] ?? "");
+      if (!/^[\w.-]{3,120}$/.test(audienceId)) return json(res, 400, { error: "invalid audience id" });
+      try {
+        deleteWhatsappAudience(audienceId);
+        return json(res, 200, { ok: true });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "could not delete audience";
+        return json(res, message === "audience not found" ? 404 : 500, { error: message });
+      }
+    }
+    if (method === "PUT" && audienceUpdateMatch) {
+      const audienceId = decodeURIComponent(audienceUpdateMatch[1] ?? "");
+      if (!/^[\w.-]{3,120}$/.test(audienceId)) return json(res, 400, { error: "invalid audience id" });
+      const body = await readBody(req);
+      const name = typeof body.name === "string" ? body.name.trim() : undefined;
+      const description = typeof body.description === "string" ? body.description.trim() : undefined;
+      const rawContactIds = Array.isArray(body.contactIds) ? body.contactIds : [];
+      const rawContacts = Array.isArray(body.contacts) ? body.contacts : [];
+      if (name !== undefined && !name) return json(res, 400, { error: "audience name is required" });
+      if (name !== undefined && name.length > 100) return json(res, 400, { error: "audience name must be at most 100 characters" });
+      if (description !== undefined && description.length > 1000) return json(res, 400, { error: "description must be at most 1000 characters" });
+      if (rawContacts.length > 1000 || rawContactIds.length > 1000) return json(res, 400, { error: "audience contact list is limited to 1000 contacts" });
+      const contacts: WhatsAppContactInput[] = rawContacts
+        .map((entry: unknown) => {
+          const record = entry && typeof entry === "object" && !Array.isArray(entry) ? entry as Record<string, unknown> : {};
+          const phone = typeof record.phone === "string" ? record.phone.trim() : "";
+          const label = typeof record.name === "string" ? record.name.trim() : "";
+          if (!phone) return null;
+          return {
+            id: typeof record.id === "string" && /^[\w.-]{3,120}$/.test(record.id) ? record.id : randomUUID(),
+            name: (label || phone).slice(0, 120),
+            phone: phone.slice(0, 60),
+          };
+        })
+        .filter((entry: WhatsAppContactInput | null): entry is WhatsAppContactInput => entry !== null);
+      const contactIds = rawContactIds
+        .filter((id: unknown): id is string => typeof id === "string" && /^[\w.-]{3,120}$/.test(id))
+        .slice(0, 1000);
+      try {
+        const audience = updateWhatsappAudience({
+          id: audienceId,
+          name,
+          description: description === undefined ? undefined : description || null,
+          contacts,
+          contactIds,
+        });
+        return json(res, 200, { audience });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "could not update audience";
+        return json(res, message === "audience not found" ? 404 : 500, { error: message });
+      }
+    }
+    if (method === "POST" && path === "/api/whatsapp/configs/validate") {
+      const body = await readBody(req);
+      const accessToken = typeof body.accessToken === "string" ? body.accessToken.trim() : "";
+      const phoneNumberId = typeof body.phoneNumberId === "string" ? body.phoneNumberId.trim() : "";
+      const businessAccountId = typeof body.businessAccountId === "string" ? body.businessAccountId.trim() : "";
+      if (!accessToken || !phoneNumberId || !businessAccountId) {
+        return json(res, 400, { error: "Meta access token, phone number ID, and business account ID are required" });
+      }
+      const graphBase = "https://graph.facebook.com/v20.0";
+      const phonesRes = await fetch(`${graphBase}/${encodeURIComponent(businessAccountId)}/phone_numbers?access_token=${encodeURIComponent(accessToken)}`);
+      const phonesBodyRaw = await phonesRes.json().catch(() => ({}));
+      const phonesBody = phonesBodyRaw && typeof phonesBodyRaw === "object" && !Array.isArray(phonesBodyRaw)
+        ? phonesBodyRaw as Record<string, unknown>
+        : {};
+      if (!phonesRes.ok) {
+        const metaError = phonesBody.error && typeof phonesBody.error === "object" && !Array.isArray(phonesBody.error)
+          ? phonesBody.error as Record<string, unknown>
+          : {};
+        return json(res, 400, { error: typeof metaError.message === "string" ? metaError.message : "Meta credential validation failed" });
+      }
+      const phone = Array.isArray(phonesBody.data)
+        ? phonesBody.data.find((entry: Record<string, unknown>) => entry.id === phoneNumberId) ?? phonesBody.data[0]
+        : null;
+      return json(res, 200, {
+        valid: true,
+        display_phone_number: typeof phone?.display_phone_number === "string" ? phone.display_phone_number : "",
+        verified_name: typeof phone?.verified_name === "string" ? phone.verified_name : "",
+      });
+    }
+    if (method === "POST" && path === "/api/whatsapp/configs/auto-reply") {
+      const body = await readBody(req);
+      const webhookUrl = typeof body.webhook_url === "string" ? body.webhook_url.trim() : "";
+      saveConfig({
+        whatsapp: {
+          autoReplyEnabled: body.is_enabled === true,
+          autoReplyWebhookUrl: webhookUrl,
+        },
+      });
+      Object.assign(cfg, loadConfig());
+      return json(res, 200, {
+        autoReply: {
+          is_enabled: cfg.whatsapp?.autoReplyEnabled === true,
+          webhook_url: cfg.whatsapp?.autoReplyWebhookUrl ?? "",
+        },
+      });
+    }
+    if (method === "POST" && path === "/api/whatsapp/configs/api") {
+      ensureWhatsappWebhookForAccount();
+      const body = await readBody(req);
+      const metaAccessToken = typeof body.meta_access_token === "string" ? body.meta_access_token.trim() : "";
+      const metaPhoneNumberId = typeof body.meta_phone_number_id === "string" ? body.meta_phone_number_id.trim() : "";
+      const metaBusinessAccountId = typeof body.meta_business_account_id === "string" ? body.meta_business_account_id.trim() : "";
+      const metaAppId = typeof body.meta_app_id === "string" ? body.meta_app_id.trim() : "";
+      const displayPhoneNumber = typeof body.display_phone_number === "string" ? body.display_phone_number.trim() : "";
+      const verifiedName = typeof body.verified_name === "string" ? body.verified_name.trim() : "";
+      const hasAccessToken = Boolean(metaAccessToken || cfg.whatsapp?.metaAccessToken);
+      saveConfig({
+        whatsapp: {
+          ...(metaAccessToken ? { metaAccessToken } : {}),
+          metaPhoneNumberId,
+          metaBusinessAccountId,
+          metaAppId,
+          displayPhoneNumber,
+          verifiedName,
+          webhookKey: cfg.whatsapp?.webhookKey ?? "",
+          verifyToken: cfg.whatsapp?.verifyToken ?? "",
+          validatedAt: hasAccessToken && metaPhoneNumberId && metaBusinessAccountId
+            ? metaAccessToken ? Date.now() : cfg.whatsapp?.validatedAt
+            : undefined,
+        },
+      });
+      Object.assign(cfg, loadConfig());
+      return json(res, 200, {
+        api: {
+          configured: Boolean(cfg.whatsapp?.metaAccessToken && cfg.whatsapp?.metaPhoneNumberId && cfg.whatsapp?.metaBusinessAccountId),
+          access_token: cfg.whatsapp?.metaAccessToken ?? "",
+          phone_number_id: cfg.whatsapp?.metaPhoneNumberId ?? "",
+          business_account_id: cfg.whatsapp?.metaBusinessAccountId ?? "",
+          app_id: cfg.whatsapp?.metaAppId ?? "",
+          display_phone_number: cfg.whatsapp?.displayPhoneNumber ?? "",
+          verified_name: cfg.whatsapp?.verifiedName ?? "",
+          validated_at: cfg.whatsapp?.validatedAt ?? null,
+        },
+        webhook: {
+          webhook_key: cfg.whatsapp?.webhookKey ?? "",
+          webhook_url: whatsappWebhookUrl(),
+          verify_token: cfg.whatsapp?.verifyToken ?? "",
+          account_email: cfg.whatsapp?.webhookAccountEmail ?? "",
+        },
+      });
+    }
+    if (method === "POST" && path === "/api/ai/generate-prompt") {
+      const body = await readBody(req);
+      const prompt = [
+        body.role || body.agentRole ? `Role: ${body.role || body.agentRole}` : "",
+        body.businessName ? `Business: ${body.businessName}` : "",
+        body.goal ? `Goal: ${body.goal}` : "",
+        body.tone ? `Tone: ${body.tone}` : "",
+        body.instructions ? `Instructions: ${body.instructions}` : "",
+        body.prompt ? String(body.prompt) : "",
+      ].filter(Boolean).join("\n\n");
+      const result = await generateAnalysisText(cfg, {
+        prompt,
+        provider: body.provider,
+        model: body.model,
+        userKey: body.userKey,
+      });
+      return json(res, 200, result);
+    }
+    if (method === "POST" && path === "/api/ai/test-connection") {
+      const body = await readBody(req);
+      try {
+        const result = await generateAnalysisText(cfg, {
+          prompt: "Reply with OK only.",
+          provider: body.provider,
+          model: body.model,
+          userKey: body.userKey,
+        });
+        return json(res, 200, {
+          connected: true,
+          provider: result.provider,
+          model: result.model,
+          message: "Connected",
+        });
+      } catch (error) {
+        return json(res, 200, {
+          connected: false,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
     if ((method === "PUT" || method === "PATCH") && path === "/api/config") {
       const body = await readBody(req);
       const patch = parseConfigPatch(body);
@@ -4394,8 +5421,14 @@ const server = createServer(async (req, res) => {
         if (persisted.composio?.apiKey !== undefined) persisted.composio.apiKey = "";
         if (persisted.box?.token !== undefined) persisted.box.token = "";
         if (persisted.opencodeGo?.apiKey !== undefined) persisted.opencodeGo.apiKey = "";
+        if (persisted.ultravox?.apiKey !== undefined) persisted.ultravox.apiKey = "";
         if (persisted.tts?.key !== undefined) persisted.tts.key = "";
         if (persisted.imageGen?.key !== undefined) persisted.imageGen.key = "";
+        if (persisted.analysis?.keys) {
+          persisted.analysis.keys = Object.fromEntries(
+            Object.keys(persisted.analysis.keys).map((key) => [key, ""]),
+          ) as typeof persisted.analysis.keys;
+        }
         saveConfig(persisted);
         syncCredentialEnv(patch);
         Object.assign(cfg, loadConfig());
@@ -4414,19 +5447,593 @@ const server = createServer(async (req, res) => {
         (key) =>
           key !== "profile" &&
           key !== "tts" &&
+          key !== "ultravox" &&
           key !== "imageGen" &&
           key !== "vps" &&
           key !== "rooms" &&
           key !== "localVm" &&
           key !== "features",
       );
-      if (reloadKeys.length > 0) await reloadProviders();
+      if (reloadKeys.length > 0) {
+        await reloadProviders();
+        await moveClaudeBotsToConnectedApi();
+      }
       const status = configStatus();
       broadcast({ kind: "config", ...status });
       return json(res, 200, status);
       } finally {
         if (changingLocalVmMode) localVmModeChangeBusy = false;
         providerConfigBusy = false;
+      }
+    }
+
+    // ── MagicTeams hosted voice resources ─────────────────────────────
+    if (method === "GET" && path === "/api/platform/phone-configs") {
+      const authorization = Array.isArray(req.headers.authorization) ? req.headers.authorization[0] : req.headers.authorization;
+      const params = new URLSearchParams();
+      params.set("activeOnly", "false");
+      params.set("channel", "voice");
+      return json(res, 200, {
+        phoneConfigs: await platformJson(`/api/phone-configs?${params}`, { authorization }),
+      });
+    }
+    if (method === "POST" && path === "/api/platform/phone-configs") {
+      const authorization = Array.isArray(req.headers.authorization) ? req.headers.authorization[0] : req.headers.authorization;
+      const body = await readBody(req);
+      const phoneConfig = await platformJson("/api/phone-configs", {
+        method: "POST",
+        authorization,
+        body,
+      });
+      return json(res, 201, { phoneConfig });
+    }
+    m = path.match(/^\/api\/platform\/phone-configs\/([^/]+)$/);
+    if (m && method === "PATCH") {
+      const authorization = Array.isArray(req.headers.authorization) ? req.headers.authorization[0] : req.headers.authorization;
+      const body = await readBody(req);
+      const phoneConfig = await platformJson(`/api/phone-configs/${encodeURIComponent(m[1])}`, {
+        method: "PATCH",
+        authorization,
+        body,
+      });
+      return json(res, 200, { phoneConfig });
+    }
+    if (m && method === "DELETE") {
+      const authorization = Array.isArray(req.headers.authorization) ? req.headers.authorization[0] : req.headers.authorization;
+      const deleted = await platformJson(`/api/phone-configs/${encodeURIComponent(m[1])}`, {
+        method: "DELETE",
+        authorization,
+      });
+      return json(res, 200, { success: true, deleted });
+    }
+    m = path.match(/^\/api\/platform\/agents\/([^/]+)\/phone-number$/);
+    if (m && method === "PATCH") {
+      const authorization = Array.isArray(req.headers.authorization) ? req.headers.authorization[0] : req.headers.authorization;
+      const body = await readBody(req);
+      const phoneNumberId = typeof body.phone_number_id === "string" && body.phone_number_id.trim()
+        ? body.phone_number_id.trim()
+        : null;
+      const agent = await platformJson(`/api/agents/${encodeURIComponent(m[1])}`, {
+        method: "PATCH",
+        authorization,
+        body: { phone_number_id: phoneNumberId },
+      });
+      return json(res, 200, { agent });
+    }
+    m = path.match(/^\/api\/platform\/agents\/([^/]+)\/call-forwarding$/);
+    if (m && method === "GET") {
+      const authorization = Array.isArray(req.headers.authorization) ? req.headers.authorization[0] : req.headers.authorization;
+      const params = new URLSearchParams();
+      params.set("agent_id", m[1]);
+      const forwardingNumbers = await platformJson(`/api/call-forwarding?${params}`, { authorization });
+      return json(res, 200, { forwardingNumbers });
+    }
+    if (m && method === "POST") {
+      const authorization = Array.isArray(req.headers.authorization) ? req.headers.authorization[0] : req.headers.authorization;
+      const body = await readBody(req);
+      const phoneNumber = typeof body.phone_number === "string" && body.phone_number.trim()
+        ? body.phone_number.trim()
+        : typeof body.phoneNumber === "string" && body.phoneNumber.trim()
+          ? body.phoneNumber.trim()
+          : "";
+      if (!phoneNumber) return json(res, 400, { error: "forwarding phone number required" });
+      const forwardingNumber = await platformJson("/api/call-forwarding", {
+        method: "POST",
+        authorization,
+        body: {
+          agent_id: m[1],
+          phone_number: phoneNumber,
+          label: typeof body.label === "string" && body.label.trim() ? body.label.trim() : null,
+          priority: typeof body.priority === "number" ? body.priority : undefined,
+        },
+      });
+      let sync: unknown = null;
+      let syncError = "";
+      try {
+        sync = await platformJson(`/api/agents/${encodeURIComponent(m[1])}/sync-ultravox`, {
+          method: "POST",
+          authorization,
+          body: {},
+        });
+      } catch (error) {
+        syncError = error instanceof Error ? error.message : String(error);
+      }
+      return json(res, syncError ? 200 : 201, {
+        forwardingNumber,
+        sync,
+        ...(syncError ? { syncError } : {}),
+      });
+    }
+    m = path.match(/^\/api\/platform\/agents\/([^/]+)\/call-forwarding\/([^/]+)$/);
+    if (m && method === "DELETE") {
+      const authorization = Array.isArray(req.headers.authorization) ? req.headers.authorization[0] : req.headers.authorization;
+      const deleted = await platformJson(`/api/call-forwarding/${encodeURIComponent(m[2])}`, {
+        method: "DELETE",
+        authorization,
+      });
+      let sync: unknown = null;
+      let syncError = "";
+      try {
+        sync = await platformJson(`/api/agents/${encodeURIComponent(m[1])}/sync-ultravox`, {
+          method: "POST",
+          authorization,
+          body: {},
+        });
+      } catch (error) {
+        syncError = error instanceof Error ? error.message : String(error);
+      }
+      return json(res, 200, {
+        success: true,
+        deleted,
+        sync,
+        ...(syncError ? { syncError } : {}),
+      });
+    }
+    if (method === "GET" && path === "/api/platform/calendar/integrations") {
+      const authorization = Array.isArray(req.headers.authorization) ? req.headers.authorization[0] : req.headers.authorization;
+      const integrations = await platformJson("/api/calendar/integrations", { authorization });
+      return json(res, 200, { integrations });
+    }
+    m = path.match(/^\/api\/platform\/agents\/([^/]+)\/appointment-tools$/);
+    if (m && method === "GET") {
+      const authorization = Array.isArray(req.headers.authorization) ? req.headers.authorization[0] : req.headers.authorization;
+      const params = new URLSearchParams();
+      params.set("agent_id", m[1]);
+      const appointmentTools = await platformJson(`/api/calendar/appointment-tools?${params}`, { authorization });
+      return json(res, 200, { appointmentTools });
+    }
+    if (m && method === "POST") {
+      const authorization = Array.isArray(req.headers.authorization) ? req.headers.authorization[0] : req.headers.authorization;
+      const body = await readBody(req);
+      const name = typeof body.name === "string" && body.name.trim() ? body.name.trim() : "";
+      if (!name) return json(res, 400, { error: "appointment tool name required" });
+      const appointmentTool = await platformJson("/api/calendar/appointment-tools", {
+        method: "POST",
+        authorization,
+        body: {
+          agent_id: m[1],
+          calendar_integration_id: typeof body.calendar_integration_id === "string" && body.calendar_integration_id.trim()
+            ? body.calendar_integration_id.trim()
+            : null,
+          name,
+          provider: typeof body.provider === "string" && body.provider.trim() ? body.provider.trim() : "google_calendar",
+          business_hours: body.business_hours && typeof body.business_hours === "object" ? body.business_hours : {},
+          appointment_types: Array.isArray(body.appointment_types) ? body.appointment_types : [],
+          is_active: body.is_active ?? true,
+        },
+      });
+      let sync: unknown = null;
+      let syncError = "";
+      try {
+        sync = await platformJson(`/api/agents/${encodeURIComponent(m[1])}/sync-ultravox`, {
+          method: "POST",
+          authorization,
+          body: {},
+        });
+      } catch (error) {
+        syncError = error instanceof Error ? error.message : String(error);
+      }
+      return json(res, syncError ? 200 : 201, {
+        appointmentTool,
+        sync,
+        ...(syncError ? { syncError } : {}),
+      });
+    }
+    m = path.match(/^\/api\/platform\/agents\/([^/]+)\/appointment-tools\/([^/]+)$/);
+    if (m && method === "PATCH") {
+      const authorization = Array.isArray(req.headers.authorization) ? req.headers.authorization[0] : req.headers.authorization;
+      const body = await readBody(req);
+      const patch: Record<string, unknown> = {};
+      for (const key of ["calendar_integration_id", "name", "provider", "business_hours", "appointment_types", "is_active"]) {
+        if (key in body) patch[key] = body[key];
+      }
+      const appointmentTool = await platformJson(`/api/calendar/appointment-tools/${encodeURIComponent(m[2])}`, {
+        method: "PATCH",
+        authorization,
+        body: patch,
+      });
+      let sync: unknown = null;
+      let syncError = "";
+      try {
+        sync = await platformJson(`/api/agents/${encodeURIComponent(m[1])}/sync-ultravox`, {
+          method: "POST",
+          authorization,
+          body: {},
+        });
+      } catch (error) {
+        syncError = error instanceof Error ? error.message : String(error);
+      }
+      return json(res, 200, {
+        appointmentTool,
+        sync,
+        ...(syncError ? { syncError } : {}),
+      });
+    }
+    if (m && method === "DELETE") {
+      const authorization = Array.isArray(req.headers.authorization) ? req.headers.authorization[0] : req.headers.authorization;
+      let deleted: unknown = null;
+      let alreadyDeleted = false;
+      try {
+        deleted = await platformJson(`/api/calendar/appointment-tools/${encodeURIComponent(m[2])}`, {
+          method: "DELETE",
+          authorization,
+        });
+      } catch (error) {
+        const status = typeof (error as { status?: unknown }).status === "number" ? (error as { status: number }).status : 0;
+        const message = error instanceof Error ? error.message : String(error);
+        if (status === 404 && /appointment_tools row not found/i.test(message)) {
+          alreadyDeleted = true;
+        } else {
+          throw error;
+        }
+      }
+      let sync: unknown = null;
+      let syncError = "";
+      try {
+        sync = await platformJson(`/api/agents/${encodeURIComponent(m[1])}/sync-ultravox`, {
+          method: "POST",
+          authorization,
+          body: {},
+        });
+      } catch (error) {
+        syncError = error instanceof Error ? error.message : String(error);
+      }
+      return json(res, 200, {
+        success: true,
+        deleted,
+        alreadyDeleted,
+        sync,
+        ...(syncError ? { syncError } : {}),
+      });
+    }
+    m = path.match(/^\/api\/platform\/agents\/([^/]+)\/knowledge-base$/);
+    if (m && method === "GET") {
+      const authorization = Array.isArray(req.headers.authorization) ? req.headers.authorization[0] : req.headers.authorization;
+      const params = new URLSearchParams();
+      params.set("agent_id", m[1]);
+      const items = await platformJson(`/api/knowledge/knowledge-base?${params}`, { authorization });
+      return json(res, 200, { items });
+    }
+    if (m && method === "POST") {
+      const authorization = Array.isArray(req.headers.authorization) ? req.headers.authorization[0] : req.headers.authorization;
+      const body = await readBody(req);
+      const title = String(body.title ?? "").trim();
+      if (!title) return json(res, 400, { error: "knowledge base name required" });
+      const type = String(body.type ?? "text").trim() || "text";
+      const websiteUrl = typeof body.website_url === "string" && body.website_url.trim() ? body.website_url.trim() : null;
+      const suppliedContent = typeof body.content === "string" && body.content.trim() ? body.content.trim() : null;
+      let extractedWebsiteContent: string | null = null;
+      if (websiteUrl) {
+        extractedWebsiteContent = await extractWebsiteText(websiteUrl);
+      }
+      const content = [suppliedContent, extractedWebsiteContent]
+        .filter((part): part is string => Boolean(part?.trim()))
+        .join("\n\n")
+        .trim() || null;
+      const payload = {
+        agent_id: m[1],
+        title,
+        type,
+        content,
+        file_path: typeof body.file_path === "string" && body.file_path.trim() ? body.file_path : null,
+        website_url: websiteUrl,
+        processing_status: "completed",
+      };
+      const item = await platformJson("/api/knowledge/knowledge-base", {
+        method: "POST",
+        authorization,
+        body: payload,
+      });
+      let ultravoxKnowledge: unknown = null;
+      let ultravoxError = "";
+      try {
+        ultravoxKnowledge = await ultravox.createKnowledgeCorpus(cfg, {
+          name: title,
+          description: typeof body.description === "string" && body.description.trim() ? body.description.trim() : null,
+          content: payload.content,
+          fileName: payload.file_path || (websiteUrl ? `${new URL(websiteUrl).hostname}.txt` : `${title}.txt`),
+          websiteUrl: payload.website_url,
+        });
+      } catch (error) {
+        ultravoxError = error instanceof Error ? error.message : String(error);
+      }
+      let sync: unknown = null;
+      let syncError = "";
+      try {
+        sync = await platformJson(`/api/agents/${encodeURIComponent(m[1])}/sync-ultravox`, {
+          method: "POST",
+          authorization,
+          body: {},
+        });
+      } catch (error) {
+        syncError = error instanceof Error ? error.message : String(error);
+      }
+      return json(res, ultravoxError || syncError ? 200 : 201, {
+        item,
+        sync,
+        ultravoxKnowledge,
+        ultravoxCorpusCreated: Boolean(ultravoxKnowledge && !ultravoxError),
+        ...(ultravoxError ? { ultravoxError } : {}),
+        ...(syncError ? { syncError } : {}),
+      });
+    }
+    m = path.match(/^\/api\/platform\/agents\/([^/]+)\/knowledge-base\/([^/]+)$/);
+    if (m && method === "DELETE") {
+      const authorization = Array.isArray(req.headers.authorization) ? req.headers.authorization[0] : req.headers.authorization;
+      let body: Record<string, unknown> = {};
+      try {
+        body = await readBody(req);
+      } catch {
+        body = {};
+      }
+      const corpusId = typeof body.ultravox_corpus_id === "string" ? body.ultravox_corpus_id.trim() : "";
+      const deleted = await platformJson(`/api/knowledge/knowledge-base/${encodeURIComponent(m[2])}`, {
+        method: "DELETE",
+        authorization,
+      });
+      let ultravoxDeleted = false;
+      let ultravoxError = "";
+      if (corpusId) {
+        try {
+          await ultravox.deleteKnowledgeCorpus(cfg, corpusId);
+          ultravoxDeleted = true;
+        } catch (error) {
+          ultravoxError = error instanceof Error ? error.message : String(error);
+        }
+      }
+      let sync: unknown = null;
+      try {
+        sync = await platformJson(`/api/agents/${encodeURIComponent(m[1])}/sync-ultravox`, {
+          method: "POST",
+          authorization,
+          body: {},
+        });
+      } catch (error) {
+        return json(res, 200, {
+          success: true,
+          deleted,
+          ultravoxDeleted,
+          sync,
+          ...(ultravoxError ? { ultravoxError } : {}),
+          syncError: error instanceof Error ? error.message : String(error),
+        });
+      }
+      return json(res, 200, {
+        success: true,
+        deleted,
+        ultravoxDeleted,
+        sync,
+        ...(ultravoxError ? { ultravoxError } : {}),
+      });
+    }
+    m = path.match(/^\/api\/platform\/agents\/([^/]+)\/webhooks$/);
+    if (m && method === "GET") {
+      const authorization = Array.isArray(req.headers.authorization) ? req.headers.authorization[0] : req.headers.authorization;
+      const params = new URLSearchParams({ includeGlobal: "true", agent_id: m[1] });
+      const listed = await platformJson(`/api/knowledge/webhooks?${params.toString()}`, { authorization });
+      return json(res, 200, { webhooks: platformRows(listed, ["webhooks", "items", "results"]) });
+    }
+    m = path.match(/^\/api\/platform\/agents\/([^/]+)\/webhooks$/);
+    if (m && method === "POST") {
+      const authorization = Array.isArray(req.headers.authorization) ? req.headers.authorization[0] : req.headers.authorization;
+      const body = await readBody(req);
+      const url = typeof body.url === "string" && body.url.trim() ? body.url.trim() : "";
+      if (!url) return json(res, 400, { error: "webhook destination URL required" });
+      const events = Array.isArray(body.events)
+        ? body.events.map((event: unknown) => String(event).trim()).filter(Boolean)
+        : ["call.ended"];
+      const scope = typeof body.scope === "string" ? body.scope : "agent";
+      const agentId = scope === "global" ? null : m[1];
+      const webhook = await platformJson("/api/knowledge/webhooks", {
+        method: "POST",
+        authorization,
+        body: {
+          name: typeof body.name === "string" && body.name.trim() ? body.name.trim() : url,
+          url,
+          agent_id: agentId,
+          events: events.length ? events : ["call.ended"],
+          secret: typeof body.secret === "string" && body.secret.trim() ? body.secret.trim() : null,
+          is_active: body.is_active ?? true,
+        },
+      });
+      const { sync, syncError } = await syncPlatformWebhooks(m[1], scope, authorization);
+      return json(res, syncError ? 200 : 201, {
+        webhook,
+        sync,
+        ...(syncError ? { syncError } : {}),
+      });
+    }
+    m = path.match(/^\/api\/platform\/agents\/([^/]+)\/webhooks\/([^/]+)$/);
+    if (m && method === "PATCH") {
+      const agentId = m[1];
+      const authorization = Array.isArray(req.headers.authorization) ? req.headers.authorization[0] : req.headers.authorization;
+      const body = await readBody(req);
+      const url = typeof body.url === "string" && body.url.trim() ? body.url.trim() : "";
+      if (!url) return json(res, 400, { error: "webhook destination URL required" });
+      const events = Array.isArray(body.events)
+        ? body.events.map((event: unknown) => String(event).trim()).filter(Boolean)
+        : ["call.ended"];
+      const scope = typeof body.scope === "string" ? body.scope : "agent";
+      let webhookId = decodeURIComponent(m[2]);
+      if (webhookId === "by-url") {
+        const previousUrl = typeof body.previous_url === "string" && body.previous_url.trim() ? body.previous_url.trim() : url;
+        const previousScope = typeof body.previous_scope === "string" ? body.previous_scope : scope;
+        const params = new URLSearchParams({ includeGlobal: "true", agent_id: agentId });
+        const listed = await platformJson(`/api/knowledge/webhooks?${params.toString()}`, { authorization });
+        const rows = platformRows(listed, ["webhooks", "items", "results"]);
+        const match = rows.find((row) => {
+          const rowUrl = typeof row.url === "string" ? row.url.trim() : "";
+          const rowAgentId = typeof row.agent_id === "string"
+            ? row.agent_id
+            : typeof row.agentId === "string"
+              ? row.agentId
+              : "";
+          const globalRow = !rowAgentId;
+          return rowUrl === previousUrl && (previousScope === "global" ? globalRow : rowAgentId === agentId);
+        });
+        webhookId = platformRecordId(match);
+        if (!webhookId) return json(res, 404, { error: "hosted webhook not found" });
+      }
+      const webhook = await platformJson(`/api/knowledge/webhooks/${encodeURIComponent(webhookId)}`, {
+        method: "PATCH",
+        authorization,
+        body: {
+          name: typeof body.name === "string" && body.name.trim() ? body.name.trim() : url,
+          url,
+          agent_id: scope === "global" ? null : agentId,
+          events: events.length ? events : ["call.ended"],
+          secret: typeof body.secret === "string" && body.secret.trim() ? body.secret.trim() : null,
+          is_active: body.is_active ?? true,
+        },
+      });
+      const { sync, syncError } = await syncPlatformWebhooks(agentId, scope, authorization);
+      return json(res, 200, {
+        webhook,
+        sync,
+        ...(syncError ? { syncError } : {}),
+      });
+    }
+    m = path.match(/^\/api\/platform\/agents\/([^/]+)\/webhooks\/([^/]+)$/);
+    if (m && method === "DELETE") {
+      const agentId = m[1];
+      const authorization = Array.isArray(req.headers.authorization) ? req.headers.authorization[0] : req.headers.authorization;
+      const body = await readBody(req);
+      const scope = typeof body.scope === "string" ? body.scope : "agent";
+      let webhookId = decodeURIComponent(m[2]);
+      if (webhookId === "by-url") {
+        const urlToDelete = typeof body.url === "string" && body.url.trim() ? body.url.trim() : "";
+        if (!urlToDelete) return json(res, 400, { error: "webhook URL required" });
+        const params = new URLSearchParams({ includeGlobal: "true", agent_id: agentId });
+        const listed = await platformJson(`/api/knowledge/webhooks?${params.toString()}`, { authorization });
+        const rows = platformRows(listed, ["webhooks", "items", "results"]);
+        const match = rows.find((row) => {
+          const rowUrl = typeof row.url === "string" ? row.url.trim() : "";
+          const rowAgentId = typeof row.agent_id === "string"
+            ? row.agent_id
+            : typeof row.agentId === "string"
+              ? row.agentId
+              : "";
+          const globalRow = !rowAgentId;
+          return rowUrl === urlToDelete && (scope === "global" ? globalRow : rowAgentId === agentId);
+        });
+        webhookId = platformRecordId(match);
+        if (!webhookId) return json(res, 404, { error: "hosted webhook not found" });
+      }
+      const deleted = await platformJson(`/api/knowledge/webhooks/${encodeURIComponent(webhookId)}`, {
+        method: "DELETE",
+        authorization,
+      });
+      const { sync, syncError } = await syncPlatformWebhooks(agentId, scope, authorization);
+      return json(res, 200, {
+        deleted,
+        sync,
+        ...(syncError ? { syncError } : {}),
+      });
+    }
+    m = path.match(/^\/api\/platform\/agents\/([^/]+)\/outbound-call$/);
+    if (m && method === "POST") {
+      const authorization = Array.isArray(req.headers.authorization) ? req.headers.authorization[0] : req.headers.authorization;
+      const body = await readBody(req);
+      const phoneConfigId = typeof body.phone_config_id === "string" && body.phone_config_id.trim()
+        ? body.phone_config_id.trim()
+        : "";
+      const recipientNumber = typeof body.recipient_number === "string" && body.recipient_number.trim()
+        ? body.recipient_number.trim()
+        : "";
+      if (!phoneConfigId) return json(res, 400, { error: "caller phone config required" });
+      if (!recipientNumber) return json(res, 400, { error: "recipient phone number required" });
+      const call = await platformJson("/api/calls/outbound", {
+        method: "POST",
+        authorization,
+        body: {
+          agent_id: m[1],
+          phone_config_id: phoneConfigId,
+          recipient_number: recipientNumber,
+        },
+      });
+      return json(res, 201, { call });
+    }
+    m = path.match(/^\/api\/platform\/agents\/([^/]+)\/demo-call$/);
+    if (m && method === "POST") {
+      const authorization = Array.isArray(req.headers.authorization) ? req.headers.authorization[0] : req.headers.authorization;
+      const body = await readBody(req);
+      const voice = typeof body.voice === "string" ? body.voice.trim() : "";
+      const maxDurationSeconds = typeof body.maxDurationSeconds === "number" && Number.isFinite(body.maxDurationSeconds)
+        ? Math.max(1, Math.floor(body.maxDurationSeconds))
+        : undefined;
+
+      if (usableBearer(authorization)) {
+        try {
+          const hosted = await platformJson("/api/demo-calls", {
+            method: "POST",
+            authorization,
+            body: { agent_id: m[1] },
+          });
+          return json(res, 201, normalizeDemoCallResponse(hosted));
+        } catch (error) {
+          if (!ultravox.configured(cfg)) {
+            const status = error && typeof error === "object" && typeof (error as { status?: unknown }).status === "number"
+              ? (error as { status: number }).status
+              : 502;
+            return json(res, status, { error: error instanceof Error ? error.message : String(error) });
+          }
+        }
+      }
+
+      try {
+        const direct = await ultravox.createAgentCall(cfg, {
+          agentId: m[1],
+          voice,
+          maxDurationSeconds,
+          metadata: {
+            source: "magicteams-demo-call",
+            localAgentId: m[1],
+          },
+        });
+        return json(res, 201, { success: true, provider: "ultravox", ...direct, logId: null });
+      } catch (error) {
+        const status = error && typeof error === "object" && typeof (error as { status?: unknown }).status === "number"
+          ? (error as { status: number }).status
+          : 502;
+        return json(res, status, { error: error instanceof Error ? error.message : String(error) });
+      }
+    }
+    if (method === "POST" && path === "/api/platform/demo-calls/finalize") {
+      const authorization = Array.isArray(req.headers.authorization) ? req.headers.authorization[0] : req.headers.authorization;
+      if (!usableBearer(authorization)) return json(res, 200, { success: true, skipped: true });
+      const body = await readBody(req);
+      try {
+        const finalized = await platformJson("/api/demo-calls/finalize", {
+          method: "POST",
+          authorization,
+          body,
+        });
+        return json(res, 200, finalized);
+      } catch (error) {
+        const status = error && typeof error === "object" && typeof (error as { status?: unknown }).status === "number"
+          ? (error as { status: number }).status
+          : 502;
+        return json(res, status, { error: error instanceof Error ? error.message : String(error) });
       }
     }
 
@@ -4447,6 +6054,44 @@ const server = createServer(async (req, res) => {
         return json(res, 200, { voices: await tts.listVoices(cfg) });
       } catch (e) {
         return json(res, 200, { voices: [], error: e instanceof Error ? e.message : String(e) });
+      }
+    }
+    if (method === "GET" && path === "/api/ultravox/voices") {
+      const authorization = Array.isArray(req.headers.authorization) ? req.headers.authorization[0] : req.headers.authorization;
+      try {
+        return json(res, 200, {
+          configured: ultravox.configured(cfg),
+          voices: await ultravox.listVoices(cfg, {
+            search: url.searchParams.get("search") ?? "",
+            primaryLanguage: url.searchParams.get("primaryLanguage") ?? "",
+          }, authorization),
+        });
+      } catch (e) {
+        return json(res, 200, {
+          configured: ultravox.configured(cfg),
+          voices: [],
+          error: e instanceof Error ? e.message : String(e),
+        });
+      }
+    }
+    m = path.match(/^\/api\/ultravox\/voices\/([\w-]+)\/preview$/);
+    if (m && method === "GET") {
+      const authorization = Array.isArray(req.headers.authorization) ? req.headers.authorization[0] : req.headers.authorization;
+      try {
+        const audio = await ultravox.previewVoice(cfg, m[1], authorization);
+        res.writeHead(200, {
+          "content-type": audio.mime,
+          "content-length": String(audio.bytes.byteLength),
+          "cache-control": "no-store",
+        });
+        return res.end(Buffer.from(audio.bytes));
+      } catch (e) {
+        const status = e && typeof e === "object" && typeof (e as { status?: unknown }).status === "number"
+          ? (e as { status: number }).status
+          : ultravox.configured(cfg)
+            ? 502
+            : 409;
+        return json(res, status, { error: e instanceof Error ? e.message : String(e) });
       }
     }
     if (method === "POST" && path === "/api/tts/speak") {
@@ -4475,10 +6120,41 @@ const server = createServer(async (req, res) => {
 
     // ── connectors (Composio) ──
     if (method === "GET" && path === "/api/connectors/catalog") {
+      const authorization = Array.isArray(req.headers.authorization) ? req.headers.authorization[0] : req.headers.authorization;
+      if (usableBearer(authorization)) {
+        const search = url.searchParams.get("search")?.trim();
+        const category = url.searchParams.get("category")?.trim();
+        const params = new URLSearchParams({ limit: "500" });
+        if (search) params.set("search", search);
+        if (category) params.set("category", category);
+        const catalog = await platformJson(`/api/composio/catalog?${params}`, { authorization });
+        const { cards, services } = platformConnectorCatalog(catalog);
+        if (composio.configured(cfg)) {
+          const localServices = await composio.connectedServices(cfg).catch(() => ({}));
+          return json(res, 200, {
+            configured: true,
+            mode: composio.connectionMode(cfg),
+            source: "api",
+            cards,
+            services: { ...services, ...localServices },
+          });
+        }
+        return json(res, 200, { configured: true, mode: "managed", source: "api", cards, services });
+      }
       const { cards, source } = await composio.listToolkits(cfg);
       return json(res, 200, { configured: composio.configured(cfg), mode: composio.connectionMode(cfg), source, cards });
     }
     if (method === "GET" && path === "/api/connectors/connected") {
+      if (composio.configured(cfg)) {
+        return json(res, 200, { configured: true, services: await composio.connectedServices(cfg) });
+      }
+      const authorization = Array.isArray(req.headers.authorization) ? req.headers.authorization[0] : req.headers.authorization;
+      if (usableBearer(authorization)) {
+        const connections = await platformJson("/api/composio/connections", { authorization });
+        const catalog = await platformJson("/api/composio/catalog?limit=500", { authorization });
+        const { services } = platformConnectorCatalog(catalog);
+        return json(res, 200, { configured: true, services: { ...services, ...platformConnectorServices(connections) } });
+      }
       if (!composio.configured(cfg)) {
         return json(res, 200, { configured: false, services: {} });
       }
@@ -4486,6 +6162,24 @@ const server = createServer(async (req, res) => {
     }
     if (method === "GET" && path === "/api/connectors") {
       const services = (url.searchParams.get("services") ?? "").split(",").filter(Boolean);
+      if (composio.configured(cfg)) {
+        const status = await composio.connectionStatus(cfg, services.length ? services : composio.CURATED_SLUGS);
+        return json(res, 200, { configured: true, services: status });
+      }
+      const authorization = Array.isArray(req.headers.authorization) ? req.headers.authorization[0] : req.headers.authorization;
+      if (usableBearer(authorization)) {
+        const params = new URLSearchParams({ limit: "500" });
+        if (services.length) params.set("slugs", services.join(","));
+        const catalog = await platformJson(`/api/composio/catalog?${params}`, { authorization });
+        const { services: platformServices } = platformConnectorCatalog(catalog);
+        const result = services.length
+          ? Object.fromEntries(services.map((slug) => {
+              const key = slug.toLowerCase();
+              return [slug, platformServices[key] ?? { connected: false, pending: false, status: "not_connected", accounts: [] }];
+            }))
+          : platformServices;
+        return json(res, 200, { configured: true, services: result });
+      }
       if (!composio.configured(cfg)) {
         return json(res, 200, { configured: false, services: {} });
       }
@@ -4495,12 +6189,80 @@ const server = createServer(async (req, res) => {
     m = path.match(/^\/api\/connectors\/([\w-]+)\/authorize$/);
     if (m && method === "POST") {
       const body = await readBody(req);
-      return json(res, 200, await composio.authorizeService(cfg, m[1], body.alias));
+      const authConfigId = typeof body.authConfigId === "string" && body.authConfigId.trim()
+        ? body.authConfigId.trim()
+        : typeof body.auth_config_id === "string" && body.auth_config_id.trim()
+          ? body.auth_config_id.trim()
+          : "";
+      const authorization = Array.isArray(req.headers.authorization) ? req.headers.authorization[0] : req.headers.authorization;
+      if (usableBearer(authorization)) {
+        const origin = typeof req.headers.origin === "string" ? req.headers.origin : "";
+        let connected: unknown;
+        try {
+          connected = await platformJson("/api/composio/connect", {
+            method: "POST",
+            authorization,
+            body: {
+              toolkit: m[1],
+              callbackUrl: origin || undefined,
+              ...(authConfigId ? { authConfigId, auth_config_id: authConfigId } : {}),
+            },
+          });
+        } catch (error) {
+          if (composio.configured(cfg)) {
+            try {
+              return json(res, 200, await composio.authorizeService(cfg, m[1], body.alias, authConfigId || undefined));
+            } catch {
+              // Preserve the platform error below if the local connector
+              // service is also unavailable or not configured for this app.
+            }
+          }
+          const fallbackBody = body && typeof body === "object" ? body : {};
+          connected = await platformJson(`/api/connectors/${encodeURIComponent(m[1])}/authorize`, {
+            method: "POST",
+            authorization,
+            body: fallbackBody,
+          }).catch(() => {
+            throw error;
+          });
+        }
+        const redirectUrl = connected && typeof connected === "object"
+          ? (connected as { redirectUrl?: unknown; url?: unknown }).redirectUrl ?? (connected as { redirectUrl?: unknown; url?: unknown }).url
+          : undefined;
+        if (typeof redirectUrl === "string" && redirectUrl.trim()) return json(res, 200, { url: redirectUrl });
+        const message = connected && typeof connected === "object" && typeof (connected as { message?: unknown }).message === "string"
+          ? (connected as { message: string }).message
+          : "Connected app is not available for one-click setup";
+        return json(res, 409, { error: message });
+      }
+      return json(res, 200, await composio.authorizeService(cfg, m[1], body.alias, authConfigId || undefined));
     }
     m = path.match(/^\/api\/connectors\/([\w-]+)\/accounts\/([A-Za-z0-9][A-Za-z0-9_-]{0,127})$/);
-    if (m && method === "DELETE") return json(res, 200, await composio.removeAccount(cfg, m[1], m[2]));
+    if (m && method === "DELETE") {
+      if (composio.configured(cfg)) {
+        return json(res, 200, await composio.removeAccount(cfg, m[1], m[2]));
+      }
+      const authorization = Array.isArray(req.headers.authorization) ? req.headers.authorization[0] : req.headers.authorization;
+      if (usableBearer(authorization)) {
+        await platformJson(`/api/composio/connections/${encodeURIComponent(m[2])}`, { method: "DELETE", authorization });
+        return json(res, 200, { removed: 1 });
+      }
+      return json(res, 200, await composio.removeAccount(cfg, m[1], m[2]));
+    }
     m = path.match(/^\/api\/connectors\/([\w-]+)$/);
-    if (m && method === "DELETE") return json(res, 200, await composio.removeService(cfg, m[1]));
+    if (m && method === "DELETE") {
+      const authorization = Array.isArray(req.headers.authorization) ? req.headers.authorization[0] : req.headers.authorization;
+      if (usableBearer(authorization)) {
+        const connections = await platformJson("/api/composio/connections", { authorization });
+        const services = platformConnectorServices(connections);
+        const accountIds = services[m[1].toLowerCase()]?.accounts.map((account) => account.id) ?? [];
+        for (const accountId of accountIds) {
+          await platformJson(`/api/composio/connections/${encodeURIComponent(accountId)}`, { method: "DELETE", authorization });
+        }
+        return json(res, 200, { removed: accountIds.length });
+      }
+      return json(res, 200, await composio.removeService(cfg, m[1]));
+    }
 
     // Inline connection cards are bound to both the bot and the exact task
     // or room thread that created them. The browser auth URL is returned
@@ -4651,19 +6413,19 @@ const server = createServer(async (req, res) => {
 
     // packaged app: the server serves the built UI too (window → :8799 for
     // everything, no dev proxy to die). OMB_STATIC_DIR is set by Electron.
-    if (method === "GET" && !path.startsWith("/api/") && STATIC_DIR) {
+    if ((method === "GET" || method === "HEAD") && !path.startsWith("/api/") && STATIC_DIR) {
       const safe = path === "/" ? "/index.html" : path.replace(/\.\./g, "");
       const file = join(STATIC_DIR, safe);
       try {
         const data = readFileSync(file);
         res.writeHead(200, { "content-type": MIME[extname(file)] ?? "application/octet-stream" });
-        return res.end(data);
+        return res.end(method === "HEAD" ? undefined : data);
       } catch {
         // SPA fallback
         try {
           const data = readFileSync(join(STATIC_DIR, "index.html"));
           res.writeHead(200, { "content-type": "text/html" });
-          return res.end(data);
+          return res.end(method === "HEAD" ? undefined : data);
         } catch {
           /* fall through to 404 */
         }

@@ -7,6 +7,10 @@
     {
       "pattern": "bots.magicteams.ai",
       "custom_domain": true
+    },
+    {
+      "pattern": "app.magicteams.ai",
+      "custom_domain": true
     }
   ],
   "compatibility_date": "2026-08-01",
