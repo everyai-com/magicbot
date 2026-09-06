@@ -14,9 +14,12 @@ publish:
     owner: milind-soni
     repo: openmausbot-releases
 
-directories:
-  buildResources: build
-  output: release
+# electron-builder 26 rejects a root-level "directories" key (fatal), so it
+# lives under "build" even in this dedicated config file.
+build:
+  directories:
+    buildResources: build
+    output: release
 
 # electron-builder makes copied directories group-writable by default. The
 # Linux CUA trust boundary requires root-owned package ancestors to be 0755.
