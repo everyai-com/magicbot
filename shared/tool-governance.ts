@@ -1,4 +1,5 @@
 import type { AutonomyRisk } from "./autonomy";
+import { isJsonArray, isJsonRecord, isJsonString, type JsonRecord, type JsonValue } from "./json";
 
 export type HostedToolKind = "computer" | "browser" | "connector" | "image";
 
@@ -19,20 +20,20 @@ function readOnlyShell(command: string): boolean {
   return command.split("|").every((part) => READ_ONLY_COMMAND.test(part.trim()));
 }
 
-function hasSecret(value: unknown, depth = 0): boolean {
-  if (depth > 5 || value == null) return false;
-  if (typeof value === "string") return SECRET_VALUE.test(value);
-  if (Array.isArray(value)) return value.some((entry) => hasSecret(entry, depth + 1));
-  if (typeof value !== "object") return false;
-  return Object.entries(value as Record<string, unknown>).some(([key, entry]) => SECRET_KEY.test(key) || hasSecret(entry, depth + 1));
+function hasSecret(value: JsonValue | undefined, depth = 0): boolean {
+  if (depth > 5 || value === null || value === undefined) return false;
+  if (isJsonString(value)) return SECRET_VALUE.test(value);
+  if (isJsonArray(value)) return value.some((entry) => hasSecret(entry, depth + 1));
+  if (!isJsonRecord(value)) return false;
+  return Object.entries(value).some(([key, entry]) => SECRET_KEY.test(key) || hasSecret(entry, depth + 1));
 }
 
-function compactPreview(value: unknown): string {
-  const text = typeof value === "string" ? value : JSON.stringify(value ?? {});
+function compactPreview(value: JsonValue | undefined): string {
+  const text = isJsonString(value) ? value : JSON.stringify(value ?? {});
   return text.replace(/\s+/g, " ").trim().slice(0, 240);
 }
 
-export function classifyHostedTool(kind: HostedToolKind, toolName: string, args: Record<string, unknown>): ToolClassification {
+export function classifyHostedTool(kind: HostedToolKind, toolName: string, args: JsonRecord): ToolClassification {
   const action = `${kind}.${toolName}`;
   if (hasSecret(args)) return { action, risk: "sensitive", persistable: false, preview: "Sensitive arguments were withheld" };
   if (kind === "computer") {

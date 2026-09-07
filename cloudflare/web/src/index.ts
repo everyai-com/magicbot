@@ -7,7 +7,7 @@ import {
   type ChatGPTTokens,
 } from "@opencoredev/loginwithchatgpt-core";
 import { automaticBotAppearance } from "../../../shared/bot-personality";
-import { isJsonArray, isJsonRecord, type JsonRecord, type JsonValue } from "../../../shared/json";
+import { isJsonArray, isJsonBoolean, isJsonNumber, isJsonRecord, isJsonString, jsonString, optionalJsonString, type JsonRecord, type JsonValue } from "../../../shared/json";
 import {
   decideAutonomy,
   isAutonomyMode,
@@ -274,7 +274,13 @@ const CODEX_RUNTIME_TIMEOUT_MS = 195_000;
 const CODEX_FALLBACK_MODELS = ["gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol"];
 type CodexFallbackModel = "gpt-5.6-luna" | "gpt-5.6-terra" | "gpt-5.6-sol";
 
-const CODEX_MODEL_LABELS: Record<CodexFallbackModel, string> = {
+interface CodexModelLabels {
+  "gpt-5.6-luna": string;
+  "gpt-5.6-terra": string;
+  "gpt-5.6-sol": string;
+}
+
+const CODEX_MODEL_LABELS: CodexModelLabels = {
   "gpt-5.6-luna": "GPT-5.6 Luna",
   "gpt-5.6-terra": "GPT-5.6 Terra",
   "gpt-5.6-sol": "GPT-5.6 Sol",
@@ -1152,10 +1158,10 @@ async function connectorTools(env: Env, userId: string): Promise<{ tools: Connec
   const result = listed.payload.result;
   const toolList = isJsonRecord(result) && Array.isArray(result.tools) ? result.tools : [];
   const tools = toolList.flatMap((tool): ConnectorToolDef[] => {
-    if (!isJsonRecord(tool) || typeof tool.name !== "string") return [];
+    if (!isJsonRecord(tool) || !isJsonString(tool.name)) return [];
     return [{
       name: tool.name,
-      description: typeof tool.description === "string" ? tool.description : `Use connected-app tool ${tool.name}`,
+      description: optionalJsonString(tool.description) ?? `Use connected-app tool ${tool.name}`,
       parameters: tool.inputSchema ?? { type: "object", properties: {} },
     }];
   }).slice(0, 30);
@@ -1303,11 +1309,15 @@ function contextChunks(text: string, maxChunks = 80): string[] {
   return chunks;
 }
 
+function isRequestStringBody(body: BodyInit | null | undefined): body is string {
+  return typeof body === "string";
+}
+
 function connectorText(value: JsonValue | undefined, depth = 0): string {
   if (depth > 6 || value === null || value === undefined) return "";
-  if (typeof value === "string") return value;
-  if (typeof value === "number" || typeof value === "boolean") return String(value);
-  if (Array.isArray(value)) return value.map((item) => connectorText(item, depth + 1)).filter(Boolean).join("\n");
+  if (isJsonString(value)) return value;
+  if (isJsonNumber(value) || isJsonBoolean(value)) return String(value);
+  if (isJsonArray(value)) return value.map((item) => connectorText(item, depth + 1)).filter(Boolean).join("\n");
   if (isJsonRecord(value)) {
     if (value.type === "image" || value.type === "audio") return "";
     return Object.entries(value).map(([key, item]) => {
@@ -1365,7 +1375,7 @@ async function syncContextSource(env: Env, userId: string, source: ContextSource
     const rawConfig = JSON.parse(source.config || "{}") as JsonValue;
     const config = isJsonRecord(rawConfig) ? rawConfig : {};
     const sourceArguments = isJsonRecord(config.arguments) ? config.arguments : {};
-    const attachmentId = typeof config.attachmentId === "string" ? config.attachmentId : "";
+    const attachmentId = optionalJsonString(config.attachmentId) ?? "";
     let text = "";
     if (source.source_type === "attachment") {
       const row = await env.DB.prepare("SELECT object_key, mime, name, bytes FROM attachments WHERE id = ? AND user_id = ?")
@@ -1545,7 +1555,7 @@ async function codexReply(env: Env, userId: string, bot: Bot, text: string, cont
     .map((message) => `${message.role === "bot" ? "Assistant" : "User"}: ${message.text}`)
     .join("\n\n");
   const current = await modelContentForPrompt(env, userId, text);
-  const currentText = typeof current === "string"
+  const currentText = isJsonString(current)
     ? current
     : current.map((part) => part.type === "text" ? part.text : "[An image attachment is available in the MagicTeams conversation but is not mounted in this runtime.]").join("\n");
   const prompt = [
@@ -1610,10 +1620,10 @@ function hostedBrowserTools(schemaKey: "input_schema" | "parameters"): HostedBro
 type HostedToolCall = { id?: string; name?: string; arguments?: JsonRecord | string };
 
 function toolArguments(call: HostedToolCall): JsonRecord {
-  if (typeof call.arguments !== "string") return call.arguments ?? {};
+  if (!isJsonString(call.arguments)) return call.arguments ?? {};
   try {
     const parsed = JSON.parse(call.arguments) as JsonValue;
-    if (typeof parsed === "string") return JSON.parse(parsed) as JsonRecord;
+    if (isJsonString(parsed)) return JSON.parse(parsed) as JsonRecord;
     return isJsonRecord(parsed) ? parsed : {};
   } catch {
     // Some Workers AI models occasionally serialize a tool call as text with
@@ -1639,25 +1649,45 @@ function embeddedToolCall(response: string): HostedToolCall | null {
     const name = source.match(/["']name["']\s*:\s*["']([^"']+)["']/i)?.[1]?.replaceAll("\\_", "_");
     if (name) raw = { name, arguments: source };
   }
-  if (!raw || typeof raw.name !== "string") return null;
+  if (!raw || !isJsonString(raw.name)) return null;
   const name = raw.name.replaceAll("\\_", "_");
   if (!BROWSER_TOOL_SPECS.some((tool) => tool.name === name)) return null;
   const args = raw.arguments;
-  return { name, arguments: isJsonRecord(args) || typeof args === "string" ? args : undefined };
+  return { name, arguments: isJsonRecord(args) || isJsonString(args) ? args : undefined };
+}
+
+type HostedBrowserAction = "open" | "state" | "text" | "snapshot" | "click" | "fill" | "press";
+
+interface HostedBrowserActionMap {
+  open_url: HostedBrowserAction;
+  browser_state: HostedBrowserAction;
+  browser_text: HostedBrowserAction;
+  browser_snapshot: HostedBrowserAction;
+  browser_click: HostedBrowserAction;
+  browser_fill: HostedBrowserAction;
+  browser_press: HostedBrowserAction;
+}
+
+const HOSTED_BROWSER_ACTIONS: HostedBrowserActionMap = {
+  open_url: "open", browser_state: "state", browser_text: "text", browser_snapshot: "snapshot",
+  browser_click: "click", browser_fill: "fill", browser_press: "press",
+};
+
+function hostedBrowserAction(name: string): HostedBrowserAction | undefined {
+  if (name === "open_url" || name === "browser_state" || name === "browser_text" || name === "browser_snapshot" || name === "browser_click" || name === "browser_fill" || name === "browser_press") {
+    return HOSTED_BROWSER_ACTIONS[name];
+  }
+  return undefined;
 }
 
 async function hostedBrowserCall(env: Env, userId: string, botId: string, name: string, args: JsonRecord): Promise<JsonValue | undefined> {
-  const actions: Record<string, "open" | "state" | "text" | "snapshot" | "click" | "fill" | "press"> = {
-    open_url: "open", browser_state: "state", browser_text: "text", browser_snapshot: "snapshot",
-    browser_click: "click", browser_fill: "fill", browser_press: "press",
-  };
-  const action = actions[name];
+  const action = hostedBrowserAction(name);
   if (!action) return undefined;
   return env.COMPUTER.browser(hostedComputerId(userId, botId), action, args);
 }
 
 function anthropicPromptContent(content: string | ModelContentPart[]): JsonValue[] {
-  if (typeof content === "string") return [{ type: "text", text: content }];
+  if (isJsonString(content)) return [{ type: "text", text: content }];
   const blocks: JsonValue[] = [];
   for (const part of content) {
     if (part.type === "text") {
@@ -1693,7 +1723,7 @@ async function anthropicReply(env: Env, userId: string, bot: Bot, text: string, 
       const connected = await connectorTools(env, userId);
       connectorSession = connected.session;
       for (const tool of connected.tools) {
-        if (typeof tool.name !== "string") continue;
+        if (!isJsonString(tool.name)) continue;
         tools.push({ name: tool.name, description: tool.description, input_schema: tool.parameters });
         connectorToolNames.add(tool.name);
       }
@@ -1734,10 +1764,10 @@ async function anthropicReply(env: Env, userId: string, bot: Bot, text: string, 
         result = { ok: false, approvalRequired: Boolean(gate.approvalId), approvalId: gate.approvalId, reason: gate.reason };
       } else if (callIndex >= 3) {
         result = { ok: false, error: "Only three tool actions can run in one step" };
-      } else if (call.name === "computer_exec" && typeof args.command === "string") {
+      } else if (call.name === "computer_exec" && isJsonString(args.command)) {
         result = await env.COMPUTER.exec(hostedComputerId(userId, bot.id), args.command.slice(0, 20_000))
           .catch((error) => ({ ok: false, error: error instanceof Error ? error.message : String(error) }));
-      } else if (call.name === "generate_image" && typeof args.prompt === "string") {
+      } else if (call.name === "generate_image" && isJsonString(args.prompt)) {
         result = await generatedImage(env, userId, args.prompt.slice(0, 2_000))
           .then((url) => ({ ok: true, url, instruction: `Embed with Markdown: ![generated image](${url})` }))
           .catch((error) => ({ ok: false, error: error instanceof Error ? error.message : String(error) }));
@@ -1812,7 +1842,7 @@ async function aiReply(env: Env, userId: string, bot: Bot, text: string, forceBr
       connectorSession = connected.session;
       for (const tool of connected.tools) {
         tools.push(tool);
-        if (typeof tool.name === "string") connectorToolNames.add(tool.name);
+        if (isJsonString(tool.name)) connectorToolNames.add(tool.name);
       }
     } catch { /* a connector outage must not take ordinary chat down */ }
   }
@@ -1850,9 +1880,9 @@ async function aiReply(env: Env, userId: string, bot: Bot, text: string, forceBr
     }
     for (const [callIndex, call] of calls.slice(0, 3).entries()) {
       const args = toolArguments(call);
-      const command = typeof args.command === "string" ? args.command.slice(0, 20_000) : "";
-      const prompt = typeof args.prompt === "string" ? args.prompt.slice(0, 2_000) : "";
-      let toolResult: unknown;
+      const command = jsonString(args.command).slice(0, 20_000);
+      const prompt = jsonString(args.prompt).slice(0, 2_000);
+      let toolResult: JsonValue | undefined;
       const kind: HostedToolKind | null = call.name === "computer_exec" ? "computer" : call.name === "generate_image" ? "image" : call.name && BROWSER_TOOL_SPECS.some((tool) => tool.name === call.name) ? "browser" : call.name && connectorToolNames.has(call.name) ? "connector" : null;
       const gate = kind && call.name ? await governHostedTool(env, userId, bot.id, kind, call.name, args, unattended) : null;
       if (gate && !gate.allow) {
@@ -2186,7 +2216,7 @@ async function connectorRequest(env: Env, userId: string, path: string, init: Re
   // per-user project key overrides it without ever returning either secret.
   const key = await credentialValue(env, userId, "composio") ?? "";
   const method = init.method ?? "GET";
-  const body = typeof init.body === "string" ? init.body : "";
+  const body = isRequestStringBody(init.body) ? init.body : "";
   const result = await env.CONNECTORS.request(userId, key, path, method, body, new Headers(init.headers).get("mcp-session-id") ?? "");
   const headers = new Headers({ "content-type": result.contentType ?? "application/json" });
   if (result.mcpSession) headers.set("mcp-session-id", result.mcpSession);
@@ -2425,7 +2455,7 @@ async function logAutonomyDecision(
   env: Env,
   userId: string,
   decision: AutonomyDecision,
-  detail: { botId?: string; connector: string; subjectKey?: string; action: string; risk: AutonomyRisk; unattended: boolean; metadata?: Record<string, unknown> },
+  detail: { botId?: string; connector: string; subjectKey?: string; action: string; risk: AutonomyRisk; unattended: boolean; metadata?: JsonRecord },
 ) {
   const id = crypto.randomUUID();
   await env.DB.prepare(`INSERT INTO autonomy_decisions
@@ -2443,7 +2473,7 @@ async function governHostedTool(
   botId: string,
   kind: HostedToolKind,
   toolName: string,
-  args: Record<string, unknown>,
+  args: JsonRecord,
   unattended: boolean,
 ): Promise<{ allow: boolean; approvalId?: string; reason: string }> {
   const classification = classifyHostedTool(kind, toolName, args);
@@ -2502,9 +2532,9 @@ async function executeToolApproval(env: Env, userId: string, id: string) {
   const toolArgs = isJsonRecord(args) ? args : {};
   try {
     let result: JsonValue | undefined;
-    if (approval.connector === "computer" && approval.tool_name === "computer_exec" && typeof toolArgs.command === "string") {
+    if (approval.connector === "computer" && approval.tool_name === "computer_exec" && isJsonString(toolArgs.command)) {
       result = await env.COMPUTER.exec(hostedComputerId(userId, approval.bot_id), toolArgs.command.slice(0, 20_000));
-    } else if (approval.connector === "image" && approval.tool_name === "generate_image" && typeof toolArgs.prompt === "string") {
+    } else if (approval.connector === "image" && approval.tool_name === "generate_image" && isJsonString(toolArgs.prompt)) {
       result = { ok: true, url: await generatedImage(env, userId, toolArgs.prompt.slice(0, 2_000)) };
     } else if (approval.connector === "browser") {
       result = await hostedBrowserCall(env, userId, approval.bot_id, approval.tool_name, toolArgs);
@@ -3247,8 +3277,8 @@ async function api(request: Request, env: Env, user: User, path: string, ctx: Ex
     }
     if (action === "retry" && request.method === "POST") {
       if (workflow.status !== "failed") return json({ error: "Only failed workflows can be retried" }, 409);
-      const body: { stepId?: unknown } = await request.json<{ stepId?: unknown }>().catch(() => ({}));
-      const stepId = typeof body.stepId === "string" ? body.stepId : workflow.steps.find((step) => step.status === "failed")?.id;
+      const body = await request.json<{ stepId?: string }>().catch(() => ({ stepId: undefined as string | undefined }));
+      const stepId = body.stepId ?? workflow.steps.find((step) => step.status === "failed")?.id;
       const step = workflow.steps.find((entry) => entry.id === stepId && entry.status === "failed");
       if (!step) return json({ error: "Choose a failed workflow step" }, 400);
       const descendants = new Set([step.id]); let changed = true;
@@ -3447,7 +3477,7 @@ async function api(request: Request, env: Env, user: User, path: string, ctx: Ex
       ...runs.slice(0, 30).map((run) => ({
         id: `run:${run.id}`, kind: "routine" as const, at: run.finishedAt || run.startedAt || run.createdAt,
         title: run.routineName, detail: run.status === "failed" ? (run.error || "Run failed") : `Routine ${run.status}`,
-        status: run.status, botId: run.botId, botName: botNames.get(run.botId) ?? "Bot", threadId: typeof run.threadId === "string" ? run.threadId : null,
+        status: run.status, botId: run.botId, botName: botNames.get(run.botId) ?? "Bot", threadId: run.threadId ?? null,
       })),
       ...(decisions.results ?? []).map((decision) => ({
         id: `decision:${decision.id}`, kind: "autonomy" as const, at: decision.created_at,
@@ -3868,16 +3898,16 @@ async function api(request: Request, env: Env, user: User, path: string, ctx: Ex
     try {
       const response = await connectorRequest(env, user.id, "/v1/catalog");
       if (response.ok) {
-        const raw = await response.json<{ items?: Array<Record<string, unknown>>; data?: Array<Record<string, unknown>> }>();
-        const items = raw.items ?? raw.data ?? [];
+        const raw = await response.json<{ items?: JsonValue[]; data?: JsonValue[] }>();
+        const items = (raw.items ?? raw.data ?? []).filter(isJsonRecord);
         if (items.length) {
           const cards = items.map((item) => {
-            const meta = (item.meta ?? {}) as Record<string, unknown>;
-            const slug = String(item.slug ?? item.key ?? item.name ?? "").toLowerCase();
+            const meta = isJsonRecord(item.meta) ? item.meta : {};
+            const slug = jsonString(item.slug ?? item.key ?? item.name).toLowerCase();
             return {
-              slug, label: String(item.name ?? item.slug ?? slug),
-              blurb: String(meta.description ?? item.description ?? "").slice(0, 90),
-              logo: typeof meta.logo === "string" ? meta.logo : (typeof item.logo === "string" ? item.logo : null), domain: null,
+              slug, label: jsonString(item.name ?? item.slug) || slug,
+              blurb: jsonString(meta.description ?? item.description).slice(0, 90),
+              logo: optionalJsonString(meta.logo) ?? optionalJsonString(item.logo) ?? null, domain: null,
             };
           }).filter((card) => card.slug);
           return json({ configured: true, mode: "managed", source: "api", cards });
@@ -4186,11 +4216,11 @@ async function api(request: Request, env: Env, user: User, path: string, ctx: Ex
   if (groupSetupMatch && request.method === "PATCH") {
     const group = await loadRecord<Group>(env, "groups", user.id, decodeURIComponent(groupSetupMatch[1]));
     if (!group) return json({ error: "Room not found" }, 404);
-    const body = await request.json<Record<string, unknown>>();
+    const body = await request.json<{ action?: string; bulletin?: string; defaultResponder?: Group["defaultResponder"] }>();
     if (body.action === "skip") group.setupSkippedAt = Date.now();
     else {
-      if (typeof body.bulletin === "string") group.bulletin = body.bulletin.slice(0, 12_000);
-      if (body.defaultResponder && typeof body.defaultResponder === "object") group.defaultResponder = body.defaultResponder as Group["defaultResponder"];
+      if (body.bulletin !== undefined) group.bulletin = body.bulletin.slice(0, 12_000);
+      if (body.defaultResponder !== undefined) group.defaultResponder = body.defaultResponder;
       group.setupCompletedAt = Date.now();
     }
     await saveRecord(env, "groups", user.id, group.id, group, group.createdAt);
@@ -4355,8 +4385,8 @@ async function api(request: Request, env: Env, user: User, path: string, ctx: Ex
   const decisionChallengeMatch = path.match(/^\/api\/decisions\/([^/]+)\/challenge$/);
   if (decisionChallengeMatch && request.method === "POST") {
     const id = decodeURIComponent(decisionChallengeMatch[1]);
-    const body = await request.json<{ botId?: unknown }>();
-    const botId = typeof body.botId === "string" ? body.botId : "";
+    const body = await request.json<{ botId?: string }>();
+    const botId = body.botId ?? "";
     const bot = botId ? await loadBot(env, user.id, botId) : null;
     if (!bot) return json({ error: "Choose an available bot to challenge this decision" }, 400);
     const row = await env.DB.prepare("SELECT question, options_json, assumptions_json, choice, rationale FROM decision_journal WHERE id = ? AND user_id = ? AND status != 'archived'")
@@ -4460,8 +4490,8 @@ async function api(request: Request, env: Env, user: User, path: string, ctx: Ex
       return json({ module: { id, ...normalized, slug, enabled: true, source: "custom", installedAt: now, updatedAt: now } }, 201);
     }
     if (moduleId && request.method === "PATCH") {
-      const body = await request.json<{ enabled?: unknown }>();
-      if (typeof body.enabled !== "boolean") return json({ error: "enabled must be true or false" }, 400);
+      const body = await request.json<{ enabled?: boolean }>();
+      if (!isJsonBoolean(body.enabled)) return json({ error: "enabled must be true or false" }, 400);
       const updated = await env.DB.prepare("UPDATE bot_modules SET enabled = ?, updated_at = ? WHERE user_id = ? AND bot_id = ? AND module_id = ?")
         .bind(body.enabled ? 1 : 0, Date.now(), user.id, botId, moduleId).run();
       return (updated.meta.changes ?? 0) === 1 ? json({ ok: true, enabled: body.enabled }) : json({ error: "Module not found" }, 404);
