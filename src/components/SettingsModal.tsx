@@ -39,7 +39,7 @@ const SECTIONS: Array<{
 ];
 
 const HOSTED_SECTIONS = SECTIONS.filter(
-  ({ id }) => id === "general" || id === "connections" || id === "engines",
+  ({ id }) => id === "general" || id === "connections" || id === "engines" || id === "computer" || id === "usage",
 );
 
 function sectionMatches(section: (typeof SECTIONS)[number], query: string): boolean {

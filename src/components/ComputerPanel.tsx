@@ -209,6 +209,11 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
       return;
     }
     if (bot.computer === "local") {
+      if (state.config?.hosted) {
+        setError("Direct control of this computer is a desktop-app feature and is not available in the web app.");
+        setPhase("local-unavailable");
+        return;
+      }
       if (!providerSupportsLocal) {
         setError("This model engine cannot control this computer. Choose Claude or an ACP engine.");
       }
@@ -216,6 +221,11 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
       return;
     }
     if (bot.computer === "vm") {
+      if (state.config?.hosted) {
+        setError("The Local VM is a desktop-app feature and is not available in the web app. Use the Cloudflare computer instead.");
+        setPhase("vm-unavailable");
+        return;
+      }
       if (!vmSupported) {
         setError("This model engine cannot use the Local VM. Choose Claude or an ACP engine.");
         setPhase("vm-unavailable");

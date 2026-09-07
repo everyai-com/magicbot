@@ -36,12 +36,14 @@ describe("default VPS command runner", () => {
   let child: FakeChild;
 
   beforeEach(() => {
-    spawnMock = vi.fn();
-    child = fakeChild();
-    spawn = ((...args: unknown[]) => {
-      spawnMock(...args);
+    spawnMock = vi.fn((...args: unknown[]) => {
+      void args;
       return child;
-    }) as SpawnFn;
+    });
+    child = fakeChild();
+    // SAFETY: the fake is a faithful ChildProcess (EventEmitter + piped
+    // stdio streams); only spawn's call signature is simplified for tests.
+    spawn = spawnMock as unknown as SpawnFn;
   });
 
   afterEach(() => {

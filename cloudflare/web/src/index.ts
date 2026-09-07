@@ -68,6 +68,12 @@ interface Env {
   FILES: R2Bucket;
   EMAIL: SendEmail;
   CREDENTIAL_KEY: string;
+  /** Cloudflare Turnstile secret key (server-side). When set, login/signup
+   * must present a valid `cf-turnstile-response` token; when absent the
+   * widget is omitted and the existing rate limits remain the only gate. */
+  TURNSTILE_SECRET_KEY?: string;
+  /** Cloudflare Turnstile site key (public) rendered into auth forms. */
+  TURNSTILE_SITE_KEY?: string;
   CONNECTORS: {
     request(userId: string, apiKey: string, path: string, method?: string, body?: string, mcpSession?: string): Promise<{ status: number; body: string; contentType?: string; mcpSession?: string }>;
   };
@@ -487,6 +493,26 @@ async function createSession(env: Env, userId: string): Promise<string> {
   return token;
 }
 
+/** Verify a Cloudflare Turnstile token server-side. Returns true when no
+ * secret is configured (widget disabled) so local/dev logins keep working. */
+async function verifyTurnstile(secret: string | undefined, token: string | undefined, remoteIp: string): Promise<boolean> {
+  if (!secret) return true;
+  if (!token) return false;
+  try {
+    const response = await fetch("https://challenges.cloudflare.com/turnstile/v0/siteverify", {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ secret, response: token, remoteip: remoteIp }),
+    });
+    // SAFETY: siteverify always answers a JSON object; a non-object or
+    // network failure fails closed (returns false) below.
+    const result = await response.json() as { success?: boolean };
+    return result.success === true;
+  } catch {
+    return false;
+  }
+}
+
 async function requestBody(request: Request): Promise<Record<string, string>> {
   const contentType = request.headers.get("content-type") ?? "";
   if (contentType.includes("application/json")) return (await request.json()) as Record<string, string>;
@@ -501,15 +527,31 @@ const AUTH_HEADERS: HeadersInit = {
   "cache-control": "no-store",
   "referrer-policy": "no-referrer",
   "x-frame-options": "DENY",
-  "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+  // Auth pages are static HTML with inline styles and (optionally) the
+  // Cloudflare Turnstile widget. Cloudflare's own first-party scripts
+  // (speculation rules, Web Analytics beacon) are explicitly allowed so the
+  // console stays clean; everything else stays blocked.
+  "content-security-policy":
+    "default-src 'none'; style-src 'unsafe-inline'; " +
+    "script-src 'self' https://challenges.cloudflare.com https://static.cloudflareinsights.com https://bots.magicteams.ai; " +
+    "frame-src https://challenges.cloudflare.com; connect-src 'self' https://cloudflareinsights.com; " +
+    "img-src 'self' data:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
 };
+
+/** Turnstile widget markup for auth forms. Rendered only when a site key is
+ * configured; otherwise the form posts exactly as before. */
+function turnstileWidget(siteKey: string | undefined): string {
+  if (!siteKey) return "";
+  return `<div class="cf-turnstile" data-sitekey="${escapeHtml(siteKey)}" data-theme="dark"></div>` +
+    `<script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>`;
+}
 
 function authPage(title: string, subtitle: string, body: string, status = 200): Response {
   return new Response(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(title)}</title><style>
   *{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;background:#090b10;color:#eef1f7;font:15px/1.45 Inter,ui-sans-serif,system-ui,sans-serif}.glow{position:fixed;inset:0;background:radial-gradient(circle at 50% 15%,#7038ff33,transparent 38%),radial-gradient(circle at 10% 90%,#15a6ff18,transparent 34%);pointer-events:none}.card{position:relative;width:min(92vw,420px);padding:34px;border:1px solid #ffffff17;border-radius:24px;background:#141721e8;box-shadow:0 30px 90px #0009;backdrop-filter:blur(18px)}.brand{display:flex;align-items:center;gap:11px;margin-bottom:28px;font-weight:750;letter-spacing:-.02em}.mark{display:grid;place-items:center;width:34px;height:34px;border-radius:11px;background:linear-gradient(135deg,#8b5cff,#4ba9ff);box-shadow:0 8px 26px #744cff66}h1{margin:0 0 7px;font-size:27px;letter-spacing:-.04em}p{margin:0 0 24px;color:#99a2b5}.field{display:grid;gap:7px;margin:14px 0}label{font-size:12px;font-weight:650;color:#bdc4d2}input{width:100%;border:1px solid #ffffff18;border-radius:12px;background:#0c0e14;color:#fff;padding:12px 13px;outline:none}input:focus{border-color:#7a61ff;box-shadow:0 0 0 3px #7555ff22}button{width:100%;margin-top:9px;border:0;border-radius:12px;padding:12px;background:linear-gradient(135deg,#8058ff,#4a9dff);color:white;font-weight:750;cursor:pointer}.error,.success{margin:0 0 16px;border:1px solid #ff657544;border-radius:10px;background:#ff405b14;color:#ff9ca7;padding:10px 12px;font-size:13px}.success{border-color:#57d69a44;background:#29bf7814;color:#8be8ba}.switch{margin:20px 0 0;text-align:center;font-size:13px}.switch a,.forgot a{color:#9d8bff;text-decoration:none;font-weight:700}.forgot{text-align:right;margin:-5px 0 12px;font-size:12px}.fine{margin-top:18px;text-align:center;color:#697185;font-size:11px}</style></head><body><div class="glow"></div><main class="card"><div class="brand"><span class="mark">✦</span> MagicTeams</div><h1>${escapeHtml(title)}</h1><p>${escapeHtml(subtitle)}</p>${body}<div class="fine">Protected by secure, HTTP-only sessions on Cloudflare.</div></main></body></html>`, { status, headers: AUTH_HEADERS });
 }
 
-function loginPage(message = "", mode: "login" | "signup" = "login", status = 200): Response {
+function loginPage(message = "", mode: "login" | "signup" = "login", status = 200, turnstileSiteKey?: string): Response {
   const signup = mode === "signup";
   const title = signup ? "Create your MagicTeams account" : "Welcome back";
   const switchText = signup ? "Already have an account?" : "New to MagicTeams?";
@@ -518,7 +560,7 @@ function loginPage(message = "", mode: "login" | "signup" = "login", status = 20
   const escaped = escapeHtml(message);
   return new Response(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title><style>
   *{box-sizing:border-box}body{margin:0;min-height:100dvh;background:#0d0f12;color:#f3f4f6;font:15px/1.45 ui-sans-serif,system-ui,sans-serif}.shell{min-height:100dvh;display:grid;grid-template-columns:minmax(340px,.9fr) minmax(480px,1.1fr)}.story{position:relative;overflow:hidden;display:flex;flex-direction:column;justify-content:space-between;padding:42px;background:#171a1f}.story:after{content:"";position:absolute;width:520px;height:520px;right:-240px;bottom:-250px;border:1px solid #b7ff6433;border-radius:42%;transform:rotate(25deg);box-shadow:0 0 0 60px #b7ff6409,0 0 0 120px #b7ff6405}.brand{position:relative;z-index:1;display:flex;align-items:center;gap:11px;font-weight:750;letter-spacing:-.03em}.mark{display:grid;place-items:center;width:34px;height:34px;border-radius:10px;background:#b7ee72;color:#12150e;box-shadow:0 8px 28px #86ba4533}.promise{position:relative;z-index:1;max-width:480px}.promise h2{margin:0;font-size:clamp(36px,5vw,66px);line-height:.98;letter-spacing:-.06em;text-wrap:balance}.promise p{max-width:420px;margin:22px 0 0;color:#a7adb7;font-size:16px;line-height:1.65}.proof{position:relative;z-index:1;display:flex;gap:22px;color:#858c97;font-size:11px}.auth{display:grid;place-items:center;padding:32px;background:#0d0f12}.card{width:min(100%,420px)}.eyebrow{margin-bottom:30px;color:#8d949f;font-size:11px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}h1{margin:0 0 9px;font-size:31px;letter-spacing:-.045em}p{margin:0 0 28px;color:#939aa5}.field{display:grid;gap:8px;margin:16px 0}label{font-size:12px;font-weight:650;color:#c7cbd2}input{width:100%;border:1px solid #ffffff1b;border-radius:11px;background:#171a1f;color:#fff;padding:13px 14px;outline:none;transition:.2s}input:hover{border-color:#ffffff2f}input:focus{border-color:#a9dc69;box-shadow:0 0 0 3px #a9dc6918}.submit{width:100%;margin-top:10px;border:0;border-radius:11px;padding:13px;background:#b7ee72;color:#12150e;font-weight:760;cursor:pointer;transition:.2s}.submit:hover{background:#c6f58b;transform:translateY(-1px)}.submit:active{transform:translateY(1px)}.error{margin:0 0 16px;border:1px solid #ff657544;border-radius:10px;background:#ff405b12;color:#ff9ca7;padding:10px 12px;font-size:13px}.switch{margin:22px 0 0;text-align:center;font-size:13px}.switch a,.forgot a{color:#b7ee72;text-decoration:none;font-weight:700}.forgot{text-align:right;margin:-6px 0 13px;font-size:12px}.fine{margin-top:20px;text-align:center;color:#5f6670;font-size:11px}@media(max-width:820px){.shell{grid-template-columns:1fr}.story{min-height:220px;padding:26px}.promise h2{font-size:38px}.promise p,.proof{display:none}.auth{padding:34px 22px}.eyebrow{display:none}}@media(prefers-reduced-motion:reduce){*{transition:none!important}}
-  </style></head><body><main class="shell"><section class="story"><div class="brand"><span class="mark">✦</span> MagicTeams</div><div class="promise"><h2>People and AI,<br>working from one place.</h2><p>Turn conversations into owned work, keep project decisions nearby, and give every teammate a clear next step.</p></div><div class="proof"><span>Cloudflare protected</span><span>Shared project context</span><span>Task-level chat</span></div></section><section class="auth"><div class="card"><div class="eyebrow">Your workspace</div><h1>${title}</h1><p>${signup ? "Set up your workspace. You can invite your team next." : "Pick up where your team left off."}</p>${escaped ? `<div class="error">${escaped}</div>` : ""}<form method="post" action="">${signup ? '<div class="field"><label for="name">Your name</label><input id="name" name="name" autocomplete="name" required maxlength="80" autofocus></div>' : ""}<div class="field"><label for="email">Work email</label><input id="email" name="email" type="email" autocomplete="email" required maxlength="254" ${signup ? "" : "autofocus"}></div><div class="field"><label for="password">Password</label><input id="password" name="password" type="password" autocomplete="${signup ? "new-password" : "current-password"}" minlength="8" required></div>${signup ? "" : '<div class="forgot"><a href="/forgot-password">Forgot password?</a></div>'}<button class="submit" type="submit">${signup ? "Create workspace" : "Sign in"}</button></form><p class="switch">${switchText} <a href="${switchLink}">${switchLabel}</a></p><div class="fine">Secure HTTP-only sessions · Powered by Cloudflare</div></div></section></main></body></html>`, { status, headers: AUTH_HEADERS });
+  </style></head><body><main class="shell"><section class="story"><div class="brand"><span class="mark">✦</span> MagicTeams</div><div class="promise"><h2>People and AI,<br>working from one place.</h2><p>Turn conversations into owned work, keep project decisions nearby, and give every teammate a clear next step.</p></div><div class="proof"><span>Cloudflare protected</span><span>Shared project context</span><span>Task-level chat</span></div></section><section class="auth"><div class="card"><div class="eyebrow">Your workspace</div><h1>${title}</h1><p>${signup ? "Set up your workspace. You can invite your team next." : "Pick up where your team left off."}</p>${escaped ? `<div class="error">${escaped}</div>` : ""}<form method="post" action="">${signup ? '<div class="field"><label for="name">Your name</label><input id="name" name="name" autocomplete="name" required maxlength="80" autofocus></div>' : ""}<div class="field"><label for="email">Work email</label><input id="email" name="email" type="email" autocomplete="email" required maxlength="254" ${signup ? "" : "autofocus"}></div><div class="field"><label for="password">Password</label><input id="password" name="password" type="password" autocomplete="${signup ? "new-password" : "current-password"}" minlength="8" required></div>${signup ? "" : '<div class="forgot"><a href="/forgot-password">Forgot password?</a></div>'}${turnstileWidget(turnstileSiteKey)}<button class="submit" type="submit">${signup ? "Create workspace" : "Sign in"}</button></form><p class="switch">${switchText} <a href="${switchLink}">${switchLabel}</a></p><div class="fine">Secure HTTP-only sessions · Powered by Cloudflare</div></div></section></main></body></html>`, { status, headers: AUTH_HEADERS });
 }
 
 function invitePage(input: { token: string; email: string; workspaceName: string; inviterName: string; existingAccount: boolean; signedIn: boolean; error?: string }, status = 200): Response {
@@ -5077,8 +5119,8 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
     }
     // Uptime probes need this before the session gate; it discloses nothing but the app name.
     if (url.pathname === "/api/health" && request.method === "GET") return json({ app: "magicbot-web", cloud: "cloudflare" });
-    if (url.pathname === "/login" && request.method === "GET") return loginPage();
-    if (url.pathname === "/signup" && request.method === "GET") return loginPage("", "signup");
+    if (url.pathname === "/login" && request.method === "GET") return loginPage("", "login", 200, env.TURNSTILE_SITE_KEY);
+    if (url.pathname === "/signup" && request.method === "GET") return loginPage("", "signup", 200, env.TURNSTILE_SITE_KEY);
     if (url.pathname === "/forgot-password" && request.method === "GET") return forgotPasswordPage();
     if (url.pathname === "/forgot-password" && request.method === "POST") {
       if (!sameOrigin(request)) return forgotPasswordPage(false, "Cross-origin request refused", 403);
@@ -5147,23 +5189,26 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
       return redirect("/", { "set-cookie": sessionCookie(session) });
     }
     if ((url.pathname === "/login" || url.pathname === "/signup") && request.method === "POST") {
-      if (!sameOrigin(request)) return loginPage("Cross-origin request refused", url.pathname === "/signup" ? "signup" : "login", 403);
+      const mode = url.pathname === "/signup" ? "signup" : "login";
+      if (!sameOrigin(request)) return loginPage("Cross-origin request refused", mode, 403, env.TURNSTILE_SITE_KEY);
       const body = await requestBody(request);
+      const human = await verifyTurnstile(env.TURNSTILE_SECRET_KEY, body["cf-turnstile-response"], request.headers.get("cf-connecting-ip") ?? "unknown");
+      if (!human) return loginPage("Please complete the human verification and try again.", mode, 403, env.TURNSTILE_SITE_KEY);
       const email = (body.email ?? "").trim().toLowerCase();
       const password = body.password ?? "";
       const name = (body.name ?? email.split("@")[0] ?? "MagicTeams user").trim().slice(0, 80);
-      if (!/^\S+@\S+\.\S+$/.test(email) || password.length < 8) return loginPage("Use a valid email and a password of at least 8 characters.", url.pathname === "/signup" ? "signup" : "login");
+      if (!/^\S+@\S+\.\S+$/.test(email) || password.length < 8) return loginPage("Use a valid email and a password of at least 8 characters.", mode, 400, env.TURNSTILE_SITE_KEY);
       const clientAddress = request.headers.get("cf-connecting-ip") ?? "unknown";
       const addressKey = await sha256(clientAddress);
       const emailKey = await sha256(email);
       const allowed = url.pathname === "/signup"
         ? await withinRateLimit(env.DB, `signup:${addressKey}`, 5, 60 * 60)
         : await withinRateLimit(env.DB, `login:${addressKey}:${emailKey}`, 10, 15 * 60);
-      if (!allowed) return loginPage("Too many attempts. Please wait and try again.", url.pathname === "/signup" ? "signup" : "login");
+      if (!allowed) return loginPage("Too many attempts. Please wait and try again.", mode, 429, env.TURNSTILE_SITE_KEY);
       let user: User | null = null;
       if (url.pathname === "/signup") {
         const existing = await env.DB.prepare("SELECT id FROM users WHERE email = ?").bind(email).first();
-        if (existing) return loginPage("An account already exists for this email.", "signup");
+        if (existing) return loginPage("An account already exists for this email.", "signup", 409, env.TURNSTILE_SITE_KEY);
         const id = crypto.randomUUID();
         const salt = randomToken(18);
         await env.DB.prepare("INSERT INTO users (id, email, name, password_hash, password_salt, created_at) VALUES (?, ?, ?, ?, ?, ?)")
@@ -5173,7 +5218,7 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
         const row = await env.DB.prepare("SELECT id, email, name, password_hash, password_salt FROM users WHERE email = ?")
           .bind(email).first<User & { password_hash: string; password_salt: string }>();
         if (row && constantTimeEqual(row.password_hash, await passwordHash(password, row.password_salt))) user = row;
-        if (!user) return loginPage("Email or password is incorrect.");
+        if (!user) return loginPage("Email or password is incorrect.", "login", 401, env.TURNSTILE_SITE_KEY);
       }
       const token = await createSession(env, user.id);
       return redirect(safeNext(url.searchParams.get("next")), { "set-cookie": sessionCookie(token) });
@@ -5189,6 +5234,12 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
       return redirect(`/login?next=${encodeURIComponent(url.pathname + url.search)}`);
     }
     if (url.pathname.startsWith("/api/")) return api(request, env, user, url.pathname, ctx);
+    // Static app shell and assets are public bytes: serve them before any
+    // redirect so logged-out crawlers, link previews, and cold loads never
+    // see a 303 to /login for a .js bundle.
+    if (url.pathname === "/" || url.pathname.startsWith("/assets/") || url.pathname === "/favicon.ico" || url.pathname === "/manifest.webmanifest" || url.pathname === "/robots.txt") {
+      return env.ASSETS.fetch(request);
+    }
     return env.ASSETS.fetch(request);
 }
 
