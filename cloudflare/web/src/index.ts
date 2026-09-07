@@ -49,6 +49,7 @@ import {
   sameOrigin,
   sessionCookie,
   sha256,
+  verifyChallengeToken,
   withinRateLimit,
 } from "./auth";
 
@@ -498,19 +499,12 @@ async function createSession(env: Env, userId: string): Promise<string> {
 async function verifyTurnstile(secret: string | undefined, token: string | undefined, remoteIp: string): Promise<boolean> {
   if (!secret) return true;
   if (!token) return false;
-  try {
-    const response = await fetch("https://challenges.cloudflare.com/turnstile/v0/siteverify", {
-      method: "POST",
-      headers: { "content-type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({ secret, response: token, remoteip: remoteIp }),
-    });
-    // SAFETY: siteverify always answers a JSON object; a non-object or
-    // network failure fails closed (returns false) below.
-    const result = await response.json() as { success?: boolean };
-    return result.success === true;
-  } catch {
-    return false;
-  }
+  return verifyChallengeToken(
+    "https://challenges.cloudflare.com/turnstile/v0/siteverify",
+    secret,
+    token,
+    remoteIp,
+  );
 }
 
 async function requestBody(request: Request): Promise<Record<string, string>> {

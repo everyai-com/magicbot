@@ -13,6 +13,7 @@ import {
   sameOrigin,
   sessionCookie,
   sha256,
+  verifyChallengeToken,
   withinRateLimit,
   type RateLimitStore,
 } from "./auth";
@@ -30,10 +31,10 @@ describe("cookies", () => {
     expect(cookieValue(request("https://bots.example"), SESSION_COOKIE)).toBeNull();
   });
 
-  it("issues an HttpOnly, Secure, SameSite session cookie and clears it with Max-Age=0", () => {
+  it("issues an HttpOnly, Secure, SameSite, Partitioned session cookie and clears it with Max-Age=0", () => {
     const set = sessionCookie("tok en");
-    expect(set).toMatch(/^magicbot_session=tok%20en; Path=\/; HttpOnly; Secure; SameSite=Lax; Max-Age=\d+$/);
-    expect(clearSessionCookie()).toBe("magicbot_session=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0");
+    expect(set).toMatch(/^magicbot_session=tok%20en; Path=\/; HttpOnly; Secure; SameSite=Lax; Max-Age=\d+; Partitioned$/);
+    expect(clearSessionCookie()).toBe("magicbot_session=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0; Partitioned");
   });
 });
 
@@ -180,5 +181,41 @@ describe("withinRateLimit", () => {
       prepare: () => ({ bind: () => ({ first: async () => null, run: async () => ({ success: true }) }) }),
     };
     expect(await withinRateLimit(store, "k", 10, 60)).toBe(false);
+  });
+});
+
+describe("verifyChallengeToken", () => {
+  const realFetch = globalThis.fetch;
+
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+    vi.useRealTimers();
+  });
+
+  it("accepts a successful siteverify answer", async () => {
+    globalThis.fetch = (async () => new Response(JSON.stringify({ success: true }))) as typeof fetch;
+    expect(await verifyChallengeToken("https://verify.example", "secret", "token", "1.2.3.4")).toBe(true);
+  });
+
+  it("fails closed on unsuccessful answers, bad payloads, and network errors", async () => {
+    globalThis.fetch = (async () => new Response(JSON.stringify({ success: false }))) as typeof fetch;
+    expect(await verifyChallengeToken("https://verify.example", "secret", "token", "1.2.3.4")).toBe(false);
+    globalThis.fetch = (async () => new Response("not json", { headers: { "content-type": "text/plain" } })) as typeof fetch;
+    expect(await verifyChallengeToken("https://verify.example", "secret", "token", "1.2.3.4")).toBe(false);
+    globalThis.fetch = (async () => { throw new Error("down"); }) as typeof fetch;
+    expect(await verifyChallengeToken("https://verify.example", "secret", "token", "1.2.3.4")).toBe(false);
+  });
+
+  it("posts the secret, token, and client IP as a form body", async () => {
+    let seen: { url: string; body: string } | undefined;
+    globalThis.fetch = (async (url: string, init: { body: URLSearchParams }) => {
+      seen = { url, body: init.body.toString() };
+      return new Response(JSON.stringify({ success: true }));
+    }) as typeof fetch;
+    await verifyChallengeToken("https://verify.example/sub", "s3cret", "tok", "9.9.9.9");
+    expect(seen?.url).toBe("https://verify.example/sub");
+    expect(seen?.body).toContain("secret=s3cret");
+    expect(seen?.body).toContain("response=tok");
+    expect(seen?.body).toContain("remoteip=9.9.9.9");
   });
 });

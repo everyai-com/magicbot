@@ -19,11 +19,11 @@ export function cookieValue(request: Request, name: string): string | null {
 }
 
 export function sessionCookie(token: string): string {
-  return `${SESSION_COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${SESSION_AGE}`;
+  return `${SESSION_COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${SESSION_AGE}; Partitioned`;
 }
 
 export function clearSessionCookie(): string {
-  return `${SESSION_COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`;
+  return `${SESSION_COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0; Partitioned`;
 }
 
 /** URL-safe base64 of `bytes` random bytes: 43 characters for the default 32. */
@@ -113,6 +113,29 @@ export async function withinRateLimit(db: RateLimitStore, key: string, limit: nu
   ).bind(key, windowEnd).first<{ count: number }>();
   // A missing row means the write did not happen; fail closed.
   return (row?.count ?? limit + 1) <= limit;
+}
+
+/** Verify a Cloudflare Turnstile token (or any compatible challenge
+ * response) against the siteverify endpoint. Split out for unit tests. */
+export async function verifyChallengeToken(
+  verifyUrl: string,
+  secret: string,
+  token: string,
+  remoteIp: string,
+): Promise<boolean> {
+  try {
+    const response = await fetch(verifyUrl, {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ secret, response: token, remoteip: remoteIp }),
+    });
+    // SAFETY: siteverify always answers a JSON object; a non-object or
+    // network failure fails closed (returns false) below.
+    const result = (await response.json()) as { success?: boolean };
+    return result.success === true;
+  } catch {
+    return false;
+  }
 }
 
 export async function purgeExpiredRateLimits(db: RateLimitStore, now = Date.now()): Promise<void> {
