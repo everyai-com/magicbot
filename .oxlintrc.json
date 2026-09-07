@@ -57,6 +57,13 @@
       // assertion under test is the evidence.
       "files": ["**/*.test.ts", "**/*.test.tsx", "**/*.test.mjs"],
       "rules": { "anti-slop/require-safety-comment-for-type-assertion": "off" }
+    },
+    {
+      // Electron main-process tests run outside Electron: the `electron`
+      // module does not exist here, so a faithful stub is the only way to
+      // load the module under test. No production seam exists for this.
+      "files": ["**/*.test.mjs"],
+      "rules": { "anti-slop/no-module-mocking": "off" }
     }
   ]
 }
