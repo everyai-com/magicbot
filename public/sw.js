@@ -1,5 +1,5 @@
-const CACHE_NAME = "magicteams-shell-v2";
-const APP_SHELL = ["/", "/app-icon.svg", "/icon-192.png", "/icon-512.png", "/manifest.webmanifest"];
+const CACHE_NAME = "magicteams-shell-v5";
+const APP_SHELL = ["/", "/app-icon.svg?v=transparent-bot-large", "/icon-192.png?v=transparent-bot-large", "/icon-512.png?v=transparent-bot-large", "/manifest.webmanifest"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(APP_SHELL)));

@@ -33,6 +33,9 @@ if (!window.ogb) {
     promptEvent = event as InstallPromptEvent;
     publish();
   });
+  window.matchMedia("(display-mode: standalone)").addEventListener("change", publish);
+  window.addEventListener("pageshow", publish);
+  window.addEventListener("focus", publish);
   window.addEventListener("appinstalled", () => {
     promptEvent = null;
     publish();
@@ -61,9 +64,10 @@ export function useWebAppInstall(): WebAppSnapshot & { install(): Promise<boolea
 async function promptWebAppInstall(): Promise<boolean> {
   const event = promptEvent;
   if (!event) return false;
+  // Each browser prompt can be used only once, even when dismissed.
+  promptEvent = null;
+  publish();
   await event.prompt();
   const choice = await event.userChoice;
-  if (choice.outcome === "accepted") promptEvent = null;
-  publish();
   return choice.outcome === "accepted";
 }

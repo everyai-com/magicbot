@@ -1,3 +1,4 @@
+import { isDemoCallConnected, joinDemoSession } from "@/lib/demo-call-connection";
 // Call mode — the bot on the line.
 //
 // The loop is deliberately HALF-DUPLEX: the microphone is live only when
@@ -18,7 +19,7 @@
 // it happens, which is why waiting feels like listening to someone work
 // rather than listening to nothing.
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
-import { ChevronLeft, Loader2, Mic, MicOff, MonitorSmartphone, Phone, PhoneOff, Volume2, X } from "lucide-react";
+import { ChevronLeft, Loader2, Mic, MicOff, Phone, PhoneOff, Volume2, X } from "lucide-react";
 
 import { api, useStore, visibleMessages, type Bot } from "@/state/store";
 import { currentCall, deferCallCleanup, endCall, useOnCall } from "@/lib/call";
@@ -400,6 +401,7 @@ export function CallTargetButton({
       }
       const created = await api(`/api/platform/agents/${encodeURIComponent(remoteId)}/demo-call`, {
         method: "POST",
+        signal: AbortSignal.timeout(35_000),
         body: JSON.stringify({
           voice: agent?.voice || undefined,
           maxDurationSeconds: agent?.maxDurationSeconds,
@@ -439,12 +441,16 @@ export function CallTargetButton({
       setDemoCallId(created.callId ?? null);
       setDemoLogId(created.logId ?? null);
       setDemoStatus(session.status as DemoCallStatus);
-      session.joinCall(created.joinUrl);
+      await joinDemoSession(session, created.joinUrl);
       setCallOptionsOpen(false);
       setDemoInCallOpen(true);
       onStart();
     } catch (error) {
       setDemoError(error instanceof Error ? error.message : "Demo call could not be started.");
+      const failedSession = demoSessionRef.current;
+      demoCleanupRef.current?.();
+      await failedSession?.leaveCall().catch(() => undefined);
+      await finalizeDemoCall("failed");
       resetDemoCall();
     } finally {
       setDemoStarting(false);
@@ -742,7 +748,10 @@ function DemoCallOverlay({
         <div className="text-[12px] font-semibold uppercase text-ink-secondary">Live Transcript</div>
         <div
           ref={transcriptRef}
-          className="max-h-[220px] min-h-[110px] w-full overflow-y-auto rounded-2xl border border-hairline bg-card/85 p-3 shadow-xl"
+          role="region"
+          aria-label="Live transcript"
+          tabIndex={0}
+          className="max-h-[220px] min-h-[110px] w-full overflow-y-auto rounded-2xl border border-hairline/40 bg-app p-3 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent"
         >
           {transcripts.length === 0 ? (
             <div className="flex min-h-[84px] items-center justify-center text-center text-[14px] text-ink-secondary">
@@ -754,8 +763,8 @@ function DemoCallOverlay({
                 <div
                   key={item.ordinal}
                   className={cn(
-                    "max-w-[88%] rounded-xl px-3 py-2",
-                    item.speaker === "agent" ? "ml-auto bg-accent/15" : "bg-raised",
+                    "max-w-[88%] rounded-xl border px-3 py-2",
+                    item.speaker === "agent" ? "ml-auto border-accent/15 bg-accent/10" : "border-hairline/30 bg-panel",
                   )}
                 >
                   <div className="mb-1 flex items-center gap-2 text-[11px] font-semibold uppercase text-ink-secondary">
@@ -896,14 +905,14 @@ function CallOptionsDialog({
 }) {
   const title = mode === "outbound" ? "Place a Call" : mode === "demo" ? "Demo Call" : "Call options";
   const selectedDemoAgent = demoAgents.find((agent) => agent.id === selectedDemoAgentId);
-  const demoLive = demoStatus !== "disconnected" && demoStatus !== "disconnecting";
+  const demoLive = isDemoCallConnected(demoStatus);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4 backdrop-blur-[2px] sm:p-6">
       <div
         className={cn(
           "animate-pop-in flex max-h-[86vh] w-full flex-col overflow-hidden rounded-2xl border border-hairline bg-panel shadow-2xl",
-          mode === "demo" ? "max-w-[980px]" : "max-w-[560px]",
+          mode === "demo" && demoLive ? "max-w-[980px]" : "max-w-[560px]",
         )}
       >
         <div className="flex items-start justify-between gap-4 border-b border-hairline px-6 py-5">
@@ -922,7 +931,7 @@ function CallOptionsDialog({
             )}
             <div className="min-w-0">
               <div className="text-[18px] font-semibold text-ink">{title}</div>
-              <div className="mt-1 text-[13px] text-ink-secondary">{targetName}</div>
+              {mode !== "demo" && <div className="mt-1 text-[13px] text-ink-secondary">{targetName}</div>}
             </div>
           </div>
           <button
@@ -971,25 +980,7 @@ function CallOptionsDialog({
           </div>
         ) : mode === "demo" ? (
           <div className="space-y-5 overflow-y-auto px-6 py-5">
-            <div className="flex flex-wrap items-start justify-between gap-4">
-              <div className="min-w-0">
-                <div className="flex items-center gap-2 text-[22px] font-semibold text-ink">
-                  <MonitorSmartphone size={24} />
-                  <span>Start Demo Call</span>
-                </div>
-                <div className="mt-1 text-[14px] text-ink-secondary">Use your microphone to talk to the selected agent without placing a phone call.</div>
-              </div>
-              <span
-                className={cn(
-                  "rounded-full px-3 py-1 text-[12px] font-semibold",
-                  demoLive ? "bg-success/15 text-success" : "bg-raised text-ink-secondary",
-                )}
-              >
-                {demoStarting ? "Connecting" : demoStatusLabel(demoStatus)}
-              </span>
-            </div>
-
-            <div className="grid gap-4 lg:grid-cols-[1fr_260px]">
+            <div>
               <label className="block">
                 <span className="text-[13px] font-medium text-ink">Agent</span>
                 <select
@@ -1006,12 +997,7 @@ function CallOptionsDialog({
                   ))}
                 </select>
               </label>
-              <div className="rounded-xl border border-hairline bg-card p-4">
-                <div className="text-[14px] font-semibold text-ink">Selected Agent</div>
-                <div className="mt-2 text-[13px] leading-[1.45] text-ink-secondary">
-                  {selectedDemoAgent ? selectedDemoAgent.name : "Choose an agent to start the browser demo call."}
-                </div>
-              </div>
+
             </div>
 
             <div className="flex flex-wrap gap-2">
@@ -1025,6 +1011,7 @@ function CallOptionsDialog({
                 {demoStarting ? <Loader2 size={16} className="animate-spin" /> : <Mic size={16} />}
                 {demoStarting ? "Connecting..." : "Start Demo Call"}
               </button>
+              {demoLive && <>
               <button
                 type="button"
                 onClick={onEndDemoCall}
@@ -1052,6 +1039,7 @@ function CallOptionsDialog({
                 <Volume2 size={16} />
                 {demoSpeakerMuted ? "Unmute Speaker" : "Mute Speaker"}
               </button>
+              </>}
             </div>
 
             {demoError && (
@@ -1074,6 +1062,7 @@ function CallOptionsDialog({
               </button>
             )}
 
+            {demoLive && (
             <div className="grid gap-4 border-t border-hairline pt-5 lg:grid-cols-[260px_1fr]">
               <div className="rounded-xl border border-hairline bg-card p-4">
                 <div className="text-[14px] font-semibold text-ink">Session Details</div>
@@ -1116,6 +1105,7 @@ function CallOptionsDialog({
                 )}
               </div>
             </div>
+            )}
           </div>
         ) : (
           <div className="space-y-4 px-6 py-5">
@@ -1203,6 +1193,7 @@ function CallOptionsDialog({
           </div>
         )}
 
+        {mode !== "demo" && (
         <div className="flex items-center justify-between gap-3 border-t border-hairline px-6 py-4">
           {mode === "choose" ? (
             <button type="button" onClick={onClose} className="rounded-xl border border-hairline px-4 py-2 text-[13px] font-medium text-ink hover:bg-raised">
@@ -1229,6 +1220,7 @@ function CallOptionsDialog({
             </button>
           )}
         </div>
+        )}
       </div>
     </div>
   );

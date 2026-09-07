@@ -6,7 +6,6 @@ import {
   ArrowDownToLine,
   BellDot,
   Bot as BotIcon,
-  CalendarDays,
   Check,
   ClipboardCopy,
   Copy,
@@ -26,12 +25,13 @@ import {
   Search,
   Sparkles,
   Settings,
-  Puzzle,
   Trash2,
   Users,
   X,
 } from "lucide-react";
 import { api, useStore, formatTime, visibleMessages, type Bot, type Group } from "@/state/store";
+import { betterAuthToken, signOutBetterAuth } from "@/lib/auth";
+import { useOnCall } from "@/lib/call";
 
 import { BotAvatar, InitialsAvatar } from "./Avatar";
 import { stateForBot } from "@/lib/mascot";
@@ -141,19 +141,6 @@ function UpdateButton() {
   );
 }
 
-function preview(bot: Bot): string {
-  if (bot.activity === "waiting-on-you") return "Waiting for you…";
-  if (bot.busy) return "Working…";
-  // the visible branch's tail — bot.messages holds every fork, so its last
-  // entry can belong to a version the user switched away from
-  const last = visibleMessages(bot).at(-1);
-  if (!last) return "";
-  if (last.kind === "options" && last.card) return last.card.title;
-  if (last.kind === "activity" && last.tool) return last.tool.name;
-  if (last.kind === "screen") return "Screen frame";
-  return last.text ?? "";
-}
-
 interface MenuState {
   botId: string;
   x: number;
@@ -169,6 +156,15 @@ function groupPreview(group: Group, bots: Bot[]): string {
   const text = last.kind === "activity" && last.tool ? last.tool.name : (last.text ?? "");
   if (last.role === "user") return `You: ${text}`;
   return last.from ? `${last.from.name}: ${text}` : text;
+}
+
+function botStatusLabel(bot: Bot, onCall: boolean): string | null {
+  if (onCall) return "On call";
+  if (bot.activity === "waiting-on-you") return "Waiting on you";
+  if (bot.activity === "no-signal") return "No signal";
+  if (bot.activity === "dead") return "Disconnected";
+  if (bot.busy || bot.activity === "working") return "Working";
+  return null;
 }
 
 /** Room avatar: 2–3 overlapping mauses in the same 56px slot a bot gets. */
@@ -630,7 +626,7 @@ function BotContextMenu({
 
   if (!bot) return null;
   const engine = state.instances.find((instance) => instance.instanceId === bot.modelSelection.instanceId);
-  const canCoordinate = engine?.capabilities?.agentsMcp === true;
+  const canCoordinate = engine?.capabilities?.agentsMcp === true || engine?.driverKind === "analysis-api";
   const visibleBotCount = state.bots.filter((candidate) => !candidate.hidden).length;
   const archiveBlocked = Boolean(bot.chiefOfStaff) || visibleBotCount <= 1;
   const archiveHint = bot.chiefOfStaff
@@ -686,7 +682,7 @@ function BotContextMenu({
           () => dispatch({ type: "updateBot", botId: bot.id, patch: { chiefOfStaff: !bot.chiefOfStaff } }),
           {
             disabled: !bot.chiefOfStaff && !canCoordinate,
-            hint: !bot.chiefOfStaff && !canCoordinate ? "Choose a Claude or ACP engine first" : undefined,
+            hint: !bot.chiefOfStaff && !canCoordinate ? "Choose a coordination-compatible engine first" : undefined,
           },
         ),
         item(<FolderPlus size={16} className="text-ink-secondary" />, "Move to section", () => {
@@ -741,7 +737,10 @@ function BotListItem({
 }) {
   const { state, dispatch } = useStore();
   const [renaming, setRenaming] = useState(false);
+  const [hovered, setHovered] = useState(false);
+  const [hoverMotionKey, setHoverMotionKey] = useState(0);
   const selected = state.activeView === "chat" && state.selectedId === bot.id;
+  const onCall = useOnCall() === bot.id;
   const mascotMotion = selected && state.mascotMotion?.botId === bot.id ? state.mascotMotion : null;
   const iconOnly = density === "icons";
   useEffect(() => {
@@ -751,6 +750,15 @@ function BotListItem({
   // the visible branch, so a version switch changes the row with the chat
   const visible = visibleMessages(bot);
   const last = visible.at(-1);
+  const avatarState = stateForBot({ ...bot, active: selected, messages: visible, onCall });
+  const statusLabel = botStatusLabel(bot, onCall);
+  const hoverMotion = hovered ? "blink" : "none";
+  const avatarAnimated = selected || hovered || onCall || Boolean(bot.busy) || Boolean(mascotMotion);
+  const onPointerEnter = () => {
+    setHovered(true);
+    setHoverMotionKey((value) => value + 1);
+  };
+  const onPointerLeave = () => setHovered(false);
   const rowClass = cn(
     "flex w-full items-center rounded-xl border text-left",
     iconOnly
@@ -770,10 +778,11 @@ function BotListItem({
     <>
       <BotAvatar
         bot={bot}
-        state={stateForBot({ ...bot, messages: visible })}
+        state={avatarState}
         size={avatarSize}
-        motion={mascotMotion?.kind ?? "none"}
-        motionKey={mascotMotion?.nonce ?? 0}
+        motion={mascotMotion?.kind ?? hoverMotion}
+        motionKey={mascotMotion?.nonce ?? hoverMotionKey}
+        animated={avatarAnimated}
       />
       <div className={cn("min-w-0 flex-1", iconOnly && "hidden")}>
         <div className="flex items-baseline justify-between gap-2">
@@ -801,8 +810,20 @@ function BotListItem({
                 <Crown size={11} /> Chief of Staff
               </span>
             )}
-            {bot.chiefOfStaff && preview(bot) && <span className="shrink-0 text-ink-secondary/60">·</span>}
-            <span className="truncate">{preview(bot)}</span>
+            {statusLabel && (
+              <span
+                className={cn(
+                  "truncate text-[12.5px]",
+                  bot.busy || bot.activity === "working"
+                    ? "font-medium text-accent"
+                    : bot.activity === "waiting-on-you"
+                      ? "font-medium text-warning"
+                      : "text-ink-secondary",
+                )}
+              >
+                {bot.chiefOfStaff ? `· ${statusLabel}` : statusLabel}
+              </span>
+            )}
           </span>
           {bot.unread && (
             <span className="size-2 shrink-0 rounded-full bg-accent" />
@@ -820,14 +841,24 @@ function BotListItem({
   // are presentational, which hides the field from assistive tech.
   if (renaming) {
     return (
-      <div className={rowClass} onContextMenu={onContextMenu}>
+      <div
+        className={rowClass}
+        onContextMenu={onContextMenu}
+        onMouseEnter={onPointerEnter}
+        onMouseLeave={onPointerLeave}
+      >
         {body}
       </div>
     );
   }
 
   return (
-    <div className="group relative" title={iconOnly ? bot.name : undefined}>
+    <div
+      className="group relative"
+      title={iconOnly ? bot.name : undefined}
+      onMouseEnter={onPointerEnter}
+      onMouseLeave={onPointerLeave}
+    >
       <div
         role="button"
         tabIndex={0}
@@ -1197,8 +1228,7 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
       (b) =>
         !q ||
         b.name.toLowerCase().includes(q) ||
-        (b.title ?? "").toLowerCase().includes(q) ||
-        preview(b).toLowerCase().includes(q),
+        (b.title ?? "").toLowerCase().includes(q),
     );
   const unsectionedChief = matchingBots.find((bot) => bot.chiefOfStaff && !bot.section);
   const sectionChiefs = matchingBots.filter((bot) => bot.chiefOfStaff && bot.section);
@@ -1504,31 +1534,6 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
             <span className={cn("flex-1 text-[14px]", density === "icons" && "hidden")}>Teach a skill</span>
           </button>
         )}
-        <button
-          onClick={() => dispatch({ type: "showRoutines" })}
-          aria-label={density === "icons" ? "Tasks and routines" : undefined}
-          title={density === "icons" ? "Tasks and routines" : undefined}
-          className={cn(
-            "flex min-h-10 w-full items-center rounded-xl py-2 text-left transition-colors",
-            density === "icons" ? "justify-center px-2" : "gap-3 px-3",
-            state.activeView === "routines" ? "bg-raised text-ink" : "text-ink hover:bg-raised/50",
-          )}
-        >
-          <CalendarDays size={20} className={state.activeView === "routines" ? "text-accent" : "text-ink-secondary"} />
-          <span className={cn("flex-1 text-[14px]", density === "icons" && "hidden")}>Tasks &amp; routines</span>
-          {state.routineRuns.some((run) => ["failed", "missed"].includes(run.status) && !run.seenAt) && (
-            <span className="size-2 rounded-full bg-danger" />
-          )}
-        </button>
-        <button
-          onClick={() => dispatch({ type: "togglePlugins", open: true })}
-          className={cn("flex min-h-10 w-full items-center rounded-xl py-2 text-left hover:bg-raised/50", density === "icons" ? "justify-center px-2" : "gap-3 px-3")}
-          aria-label={density === "icons" ? "Connected apps" : undefined}
-          title={density === "icons" ? "Connected apps" : undefined}
-        >
-          <Puzzle size={20} className="text-ink-secondary" />
-          <span className={cn("text-[14px] text-ink", density === "icons" && "hidden")}>Connected apps</span>
-        </button>
         <div className={cn("flex items-center", density === "icons" && "justify-center")}>
           <button
             onClick={() => dispatch({ type: "toggleAppSettings" })}
@@ -1549,14 +1554,15 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
           >
             <Settings size={18} />
           </button>}
-          {state.config?.hosted && <a
-            href="/logout"
+          {(state.config?.hosted || betterAuthToken()) && <button
+            type="button"
+            onClick={signOutBetterAuth}
             className="flex size-10 items-center justify-center rounded-md text-ink-secondary transition-colors hover:bg-raised hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
             title="Sign out"
             aria-label="Sign out"
           >
             <LogOut size={17} />
-          </a>}
+          </button>}
         </div>
       </div>
 

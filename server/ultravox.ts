@@ -1,5 +1,7 @@
 import type { AppConfig } from "./config.ts";
 import { existsSync, readFileSync } from "node:fs";
+import { parseCustomTool } from "../shared/custom-tool.ts";
+import { isDeepStrictEqual } from "node:util";
 
 const API = "https://api.ultravox.ai/api";
 const MAX_PAGES = 8;
@@ -106,6 +108,27 @@ export function configured(cfg: AppConfig): boolean {
   return Boolean(apiKey(cfg));
 }
 
+/** Read-only runtime audit; never returns prompts, credentials or customer content. */
+export async function auditAgents(cfg: AppConfig) {
+  const agents: Array<Record<string, unknown>> = [];
+  let path = "/agents";
+  for (let page = 0; path && page < MAX_PAGES; page++) {
+    const result = await ultravoxJson<{ results: Array<{ agentId: string; name: string; callTemplate?: Record<string, unknown> }>; next?: string }>(cfg, path);
+    for (const agent of result.results) {
+      const template = agent.callTemplate ?? {};
+      const selected = Array.isArray(template.selectedTools) ? template.selectedTools as Array<Record<string, unknown>> : [];
+      agents.push({ agentId: agent.agentId, name: agent.name, model: template.model, maxDuration: template.maxDuration, temperature: template.temperature,
+        hasKnowledgeText: String(template.systemPrompt ?? "").includes("--- KNOWLEDGE BASE ---"),
+        tools: selected.map((tool) => ({ name: tool.toolName ?? (tool.temporaryTool as { modelToolName?: string } | undefined)?.modelToolName, toolId: tool.toolId,
+          endpointPath: (() => { const url = (tool.temporaryTool as { http?: { baseUrlPattern?: string } } | undefined)?.http?.baseUrlPattern; try { return url ? new URL(url).pathname : undefined; } catch { return "invalid"; } })(),
+        })),
+      });
+    }
+    path = result.next ? new URL(result.next, API).pathname.replace(/^\/api/, "") + new URL(result.next, API).search : "";
+  }
+  return { agents, truncated: Boolean(path) };
+}
+
 function demoCallDataMessages(): Record<string, boolean> {
   return {
     state: true,
@@ -156,6 +179,7 @@ async function ultravoxJson<T>(
   const key = apiKey(cfg);
   if (!key) throw Object.assign(new Error("Ultravox API key is not configured in the backend"), { status: 409 });
   const res = await fetch(`${API}${path}`, {
+    signal: AbortSignal.timeout(25_000),
     method: options.method ?? "GET",
     headers: {
       "X-API-Key": key,
@@ -167,6 +191,47 @@ async function ultravoxJson<T>(
   const body = contentType.includes("application/json") ? await res.json().catch(() => ({})) : await res.text().catch(() => "");
   if (!res.ok) throw Object.assign(new Error(message(res.status, body)), { status: res.status });
   return body as T;
+}
+
+export async function registerCustomTool(cfg: AppConfig, agentId: string, entry: string, previousEntry?: string, remove = false): Promise<string> {
+  const tool = parseCustomTool(entry);
+  const previous = previousEntry ? parseCustomTool(previousEntry) : tool;
+  const agentPath = `/agents/${encodeURIComponent(agentId)}`;
+  const agent = await ultravoxJson<{ callTemplate: Record<string, unknown> }>(cfg, agentPath);
+  if (!agent.callTemplate) throw new Error("Ultravox agent has no call template.");
+  const definition = {
+    modelToolName: tool.name, description: tool.description,
+    timeout: tool.timeout,
+    http: { baseUrlPattern: tool.http_url, httpMethod: tool.http_method },
+    dynamicParameters: tool.parameters.map(({ paramType: _kind, location, ...parameter }) => ({ ...parameter, location: `PARAMETER_LOCATION_${location.toUpperCase()}` })),
+  };
+  let toolId = "";
+  let path = "/tools";
+  for (let page = 0; path && page < 100; page++) {
+    const list = await ultravoxJson<{ results: Array<{ toolId: string; name: string; definition: typeof definition }>; next?: string }>(cfg, path);
+    const existing = list.results.find((candidate) => ((candidate.name === previous.name && candidate.definition.http?.baseUrlPattern === previous.http_url && candidate.definition.http?.httpMethod === previous.http_method) || (candidate.name === tool.name && candidate.definition.http?.baseUrlPattern === tool.http_url && candidate.definition.http?.httpMethod === tool.http_method)));
+    if (existing) {
+      if (!previousEntry && !remove && (!isDeepStrictEqual(existing.definition.dynamicParameters ?? [], definition.dynamicParameters) || (existing.definition.description ?? "") !== definition.description || (existing.definition.timeout ?? "20s") !== definition.timeout)) {
+        throw new Error("An Ultravox tool with this name and URL has different settings. Choose a unique tool name.");
+      }
+      toolId = existing.toolId; break;
+    }
+    path = list.next ? new URL(list.next, API).pathname.replace(/^\/api/, "") + new URL(list.next, API).search : "";
+    if (page === 99 && path) throw new Error("Too many Ultravox tools to safely check for duplicates.");
+  }
+  if (toolId && previousEntry && !remove) {
+    await ultravoxJson(cfg, `/tools/${encodeURIComponent(toolId)}`, { method: "PUT", body: { name: tool.name, definition } });
+  }
+  if (!toolId && !remove) {
+    const created = await ultravoxJson<{ toolId: string }>(cfg, "/tools", { method: "POST", body: { name: tool.name, definition } });
+    toolId = created.toolId;
+    if (!toolId) throw new Error("Ultravox did not return a tool ID.");
+  }
+  const selected = Array.isArray(agent.callTemplate.selectedTools) ? agent.callTemplate.selectedTools as Array<Record<string, unknown>> : [];
+  const retained = selected.filter((item) => item.toolId !== toolId && (item.temporaryTool as { modelToolName?: string } | undefined)?.modelToolName !== tool.name && (item.temporaryTool as { modelToolName?: string } | undefined)?.modelToolName !== previous.name);
+  await ultravoxJson(cfg, agentPath, { method: "PATCH", body: { callTemplate: { ...agent.callTemplate, selectedTools: remove ? retained : [...retained, { toolId }] } } });
+  if (remove && toolId) await ultravoxJson(cfg, `/tools/${encodeURIComponent(toolId)}`, { method: "DELETE" });
+  return toolId;
 }
 
 async function uploadCorpusDocument(

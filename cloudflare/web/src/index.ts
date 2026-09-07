@@ -1,3 +1,5 @@
+import { generateAnalysisText, ANALYSIS_PROVIDERS, type AnalysisProvider } from "../../../server/analysis";
+import { campaignWorkspaceRoute } from "../../../server/campaign-workspace";
 import {
   ensureFreshTokens,
   exchangeDeviceAuthorization,
@@ -165,12 +167,14 @@ const SESSION_AGE = 60 * 60 * 24 * 30;
 const PASSWORD_RESET_AGE = 30 * 60;
 const PASSWORD_RESET_SENDER = "noreply@mail.magicteams.ai";
 const BETTER_AUTH_BASE_URL = "https://magicteams-voice-api.everyai-com.workers.dev/api/auth/better";
+const BETTER_AUTH_API_ORIGIN = BETTER_AUTH_BASE_URL.replace(/\/api\/auth\/better\/?$/, "");
 const MODEL = "@cf/moonshotai/kimi-k2.6";
 const IMAGE_MODEL = "@cf/black-forest-labs/flux-1-schnell";
 const VOICE_MODEL = "@cf/deepgram/aura-2-en";
 const ULTRAVOX_API = "https://api.ultravox.ai/api";
 const CODEX_CREDENTIAL = "codex_subscription";
 const CODEX_PENDING_SECRET = "codex_pending_secret";
+const PLATFORM_CREDENTIAL = "platform_token";
 const CODEX_MODELS_CACHE = "codex_models";
 const CODEX_RUNTIME_READY = "codex_runtime_ready";
 const CODEX_CONSENT_VERSION = "2026-08-24";
@@ -193,6 +197,10 @@ const CLAUDE_REDIRECT = "https://console.anthropic.com/oauth/code/callback";
 const CLAUDE_TOKEN_URL = "https://console.anthropic.com/v1/oauth/token";
 const CLAUDE_MODELS = ["claude-sonnet-5", "claude-opus-5", "claude-haiku-4-5-20251001"];
 const encoder = new TextEncoder();
+
+function betterAuthApiUrl(path: string): URL {
+  return new URL(path, `${BETTER_AUTH_API_ORIGIN.replace(/\/+$/, "")}/`);
+}
 
 function json(value: unknown, status = 200, headers: HeadersInit = {}): Response {
   return new Response(JSON.stringify(value), {
@@ -304,10 +312,14 @@ function ultravoxMessage(status: number, body: unknown): string {
   if (body && typeof body === "object") {
     const record = body as { error?: unknown; detail?: unknown; message?: unknown };
     const text = record.error ?? record.detail ?? record.message;
-    if (typeof text === "string" && text) return text;
+    if (typeof text === "string" && text && !/<\s*html|<\s*!doctype/i.test(text)) return text;
   }
-  if (typeof body === "string" && body) return body;
-  return `Ultravox returned ${status}`;
+  if (typeof body === "string" && body && !/<\s*html|<\s*!doctype/i.test(body)) {
+    return body.length > 300 ? body.slice(0, 300) : body;
+  }
+  return status === 404
+    ? "Ultravox could not find this agent. It may belong to a different workspace or API key."
+    : `Ultravox returned ${status}`;
 }
 
 async function listUltravoxVoices(env: Env, userId: string): Promise<unknown[]> {
@@ -352,6 +364,130 @@ async function previewUltravoxVoice(env: Env, userId: string, voiceId: string): 
       "cache-control": "no-store",
     },
   });
+}
+
+function usableBearer(header: string | string[] | undefined | null): string | null {
+  if (typeof header !== "string") return null;
+  return /^Bearer\s+\S+/i.test(header.trim()) ? header.trim() : null;
+}
+
+function firstStringField(value: unknown, fields: string[]): string {
+  if (!value || typeof value !== "object") return "";
+  const record = value as Record<string, unknown>;
+  for (const field of fields) {
+    const direct = record[field];
+    if (typeof direct === "string" && direct.trim()) return direct.trim();
+  }
+  for (const nested of ["call", "demoCall", "data", "result"]) {
+    const found = firstStringField(record[nested], fields);
+    if (found) return found;
+  }
+  return "";
+}
+
+function normalizeDemoCallResponse(value: unknown): Record<string, unknown> {
+  const joinUrl = firstStringField(value, ["joinUrl", "join_url"]);
+  if (!joinUrl) throw Object.assign(new Error("Demo call did not return a join URL"), { status: 502 });
+  return {
+    success: true,
+    joinUrl,
+    callId: firstStringField(value, ["callId", "call_id", "ultravoxCallId", "ultravox_call_id"]) || null,
+    logId: firstStringField(value, ["logId", "log_id"]) || null,
+    provider: firstStringField(value, ["provider"]) || "ultravox",
+  };
+}
+
+function platformTokenFrom(source: Record<string, unknown>): string {
+  const direct = source.token ?? source.sessionToken;
+  if (typeof direct === "string" && direct.trim()) return direct.trim();
+  const session = source.session;
+  if (session && typeof session === "object") {
+    const record = session as Record<string, unknown>;
+    const nested = record.token ?? record.sessionToken;
+    if (typeof nested === "string" && nested.trim()) return nested.trim();
+  }
+  return "";
+}
+
+function asBearer(token: string): string {
+  return /^Bearer\s+/i.test(token) ? token.trim() : `Bearer ${token.trim()}`;
+}
+
+/** Local login tokens are only valid on this Worker. Prefer the platform-issued
+ *  token captured at login so platform agent routes (demo calls, finalize) work
+ *  in production the same way they do against the local dev server. */
+async function platformAuthorization(
+  env: Env,
+  userId: string,
+  authorization: string | null,
+): Promise<string | null> {
+  try {
+    const stored = await credentialValue(env, userId, PLATFORM_CREDENTIAL);
+    if (stored && stored.trim()) return asBearer(stored);
+  } catch {
+    // Fall through to the client-supplied bearer.
+  }
+  return usableBearer(authorization);
+}
+
+async function platformJson(
+  path: string,
+  options: { method?: string; authorization?: string | string[] | null; body?: unknown } = {},
+): Promise<unknown> {
+  const bearer = usableBearer(options.authorization);
+  if (!bearer) throw Object.assign(new Error("Sign in to load connected MagicTeams resources"), { status: 401 });
+  const response = await fetch(betterAuthApiUrl(path), {
+    method: options.method ?? "GET",
+    headers: { authorization: bearer, "content-type": "application/json" },
+    body: options.body === undefined ? undefined : JSON.stringify(options.body),
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const message = body && typeof body === "object" && typeof (body as { error?: unknown }).error === "string"
+      ? (body as { error: string }).error
+      : `MagicTeams request failed (${response.status})`;
+    throw Object.assign(new Error(message), { status: response.status });
+  }
+  return body;
+}
+
+async function createUltravoxDemoCall(
+  env: Env,
+  userId: string,
+  input: { agentId: string; voice?: string; maxDurationSeconds?: number },
+): Promise<{ callId: string | null; joinUrl: string; clientVersion?: string | null }> {
+  const agentId = input.agentId.trim();
+  if (!agentId) throw Object.assign(new Error("agentId is required"), { status: 400 });
+  const key = await ultravoxApiKey(env, userId);
+  if (!key) throw Object.assign(new Error("Ultravox API key is not configured in the backend"), { status: 409 });
+
+  const body: Record<string, unknown> = {
+    medium: { webRtc: { dataMessages: { state: true, transcript: true, callStarted: true, callEvent: true, toolUsed: true, invokingTool: true, userStartedSpeaking: true, userStoppedSpeaking: true } } },
+    joinTimeout: "30s",
+    metadata: { source: "magicteams-demo-call", localAgentId: agentId },
+  };
+  const voice = input.voice?.trim();
+  if (voice) body.voice = voice;
+  if (input.maxDurationSeconds && Number.isFinite(input.maxDurationSeconds)) {
+    body.maxDuration = `${Math.max(1, Math.floor(input.maxDurationSeconds))}s`;
+  }
+
+  const response = await fetch(`${ULTRAVOX_API}/agents/${encodeURIComponent(agentId)}/calls`, {
+    method: "POST",
+    headers: { "X-API-Key": key, "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const contentType = response.headers.get("content-type") ?? "";
+  const raw = contentType.includes("application/json") ? await response.json().catch(() => ({})) : await response.text().catch(() => "");
+  if (!response.ok) throw Object.assign(new Error(ultravoxMessage(response.status, raw)), { status: response.status });
+
+  const callId = typeof (raw as { callId?: unknown }).callId === "string" ? (raw as { callId: string }).callId : null;
+  const joinUrl = typeof (raw as { joinUrl?: unknown }).joinUrl === "string" ? (raw as { joinUrl: string }).joinUrl : "";
+  const clientVersion = typeof (raw as { clientVersion?: unknown }).clientVersion === "string"
+    ? (raw as { clientVersion: string }).clientVersion
+    : null;
+  if (!joinUrl) throw Object.assign(new Error("Ultravox did not return a join URL"), { status: 502 });
+  return { callId, joinUrl, clientVersion };
 }
 
 async function codexTokens(env: Env, userId: string): Promise<ChatGPTTokens | null> {
@@ -1351,6 +1487,33 @@ async function connectorJson(response: Response): Promise<Response> {
 
 async function api(request: Request, env: Env, user: User, path: string): Promise<Response> {
   if (request.method !== "GET" && !sameOrigin(request)) return json({ error: "Cross-origin request refused" }, 403);
+  if (path.startsWith("/api/campaign-workspace/")) {
+    const remote = campaignWorkspaceRoute(request.method, path.slice("/api/campaign-workspace/".length));
+    if (!remote) return json({ error: "Unknown campaign action" }, 404);
+    const authorization = await platformAuthorization(env, user.id, request.headers.get("authorization"));
+    if (!authorization) return json({ error: "Sign in again to access campaigns." }, 401);
+    try {
+      return json(await platformJson(remote, { method: request.method, authorization,
+        ...(request.method === "GET" ? {} : { body: await request.json() }) }));
+    } catch (error) {
+      return json({ error: error instanceof Error ? error.message : "Campaign request failed" }, 502);
+    }
+  }
+  if (request.method === "POST" && ["/api/ai/generate-prompt", "/api/ai/test-connection"].includes(path)) {
+    if (!await withinRateLimit(env, `analysis:${user.id}`, 30, 60)) return json({ error: "Please wait before analyzing again." }, 429);
+    const body = await request.json<Record<string, unknown>>();
+    const analysis = JSON.parse(await credentialValue(env, user.id, "analysis_settings") || '{"provider":"gemini"}');
+    if (body.provider === "ollama" || analysis.provider === "ollama") return json({ error: "Local Ollama is available only in the desktop app." }, 400);
+    try {
+      const result = await generateAnalysisText({ analysis }, {
+        prompt: path.endsWith("test-connection") ? "Reply with OK only." : String(body.prompt ?? ""),
+        provider: body.provider, model: body.model,
+      });
+      return json(path.endsWith("test-connection") ? { connected: true, ...result } : result);
+    } catch (error) {
+      return json({ error: error instanceof Error ? error.message : "Analysis failed" }, 400);
+    }
+  }
   if (path === "/api/auth/me" && request.method === "GET") return json({ user });
   if (path === "/api/health") return json({ app: "magicbot-web", cloud: "cloudflare" });
   if (path === "/api/codex/login" && request.method === "POST") {
@@ -1563,7 +1726,23 @@ async function api(request: Request, env: Env, user: User, path: string): Promis
   }
   if (path === "/api/config") {
     if (request.method === "PUT") {
-      const body = await request.json<{ profile?: { name?: string; email?: string }; composio?: { apiKey?: string } }>();
+      const body = await request.json<{ profile?: { name?: string; email?: string }; composio?: { apiKey?: string }; analysis?: Record<string, unknown> }>();
+      if (body.analysis) {
+        const old = JSON.parse(await credentialValue(env, user.id, "analysis_settings") || '{"provider":"gemini"}');
+        const patch = body.analysis;
+        const provider = patch.provider ?? old.provider;
+        if (!ANALYSIS_PROVIDERS.includes(provider as AnalysisProvider) || provider === "ollama") return json({ error: "Choose a supported hosted AI provider." }, 400);
+        const settings = { ...old, provider, keys: { ...old.keys } };
+        for (const field of ["model", "language", "cloudflareAccountId"]) {
+          if (typeof patch[field] === "string") settings[field] = patch[field].trim().slice(0, 500);
+        }
+        if (patch.keys && typeof patch.keys === "object") {
+          for (const [key, value] of Object.entries(patch.keys)) {
+            if (ANALYSIS_PROVIDERS.includes(key as AnalysisProvider) && typeof value === "string") settings.keys[key] = value.trim();
+          }
+        }
+        await saveCredential(env, user.id, "analysis_settings", JSON.stringify(settings));
+      }
       const name = body.profile?.name?.trim().slice(0, 80) || user.name;
       const email = body.profile?.email?.trim().toLowerCase() || user.email;
       if (!/^\S+@\S+\.\S+$/.test(email)) return json({ error: "Use a valid email address" }, 400);
@@ -1592,9 +1771,12 @@ async function api(request: Request, env: Env, user: User, path: string): Promis
       credentialValue(env, user.id, CODEX_RUNTIME_READY), discoverCodexModels(env, user.id, false),
       credentialConfigured(env, user.id, CLAUDE_CREDENTIAL), credentialValue(env, user.id, CLAUDE_RUNTIME_READY),
     ]);
+    const storedAnalysis = JSON.parse(await credentialValue(env, user.id, "analysis_settings") || '{"provider":"gemini","keys":{}}');
+    const { keys: analysisKeys, ...analysisPublic } = storedAnalysis;
     const defaultEngine = await preferredHostedEngine(env, user.id);
     return json({
       hosted: true,
+      analysis: { ...analysisPublic, configured: Object.fromEntries(ANALYSIS_PROVIDERS.map((key) => [key, Boolean(analysisKeys?.[key])])) },
       xai: { configured: false }, composio: { configured: true, mode: composioConfigured ? "self-hosted" : "managed", keyConfigured: composioConfigured },
       codex: { configured: codexConfigured, runtimeReady: codexReady === "true", modelCount: codexModels.length, consentVersion: CODEX_CONSENT_VERSION },
       anthropic: { configured: anthropicConfigured, runtimeReady: anthropicReady === "true", modelCount: anthropicConfigured ? CLAUDE_MODELS.length : 0 },
@@ -1785,6 +1967,69 @@ async function api(request: Request, env: Env, user: User, path: string): Promis
   {
     const match = path.match(/^\/api\/ultravox\/voices\/([\w-]+)\/preview$/);
     if (match && request.method === "GET") return previewUltravoxVoice(env, user.id, match[1]);
+  }
+  {
+    const match = path.match(/^\/api\/platform\/agents\/([^/]+)\/demo-call$/);
+    if (match && request.method === "POST") {
+      const authorization = request.headers.get("authorization");
+      const body = await request.json<Record<string, unknown>>().catch(() => ({} as Record<string, unknown>));
+      const voice = typeof body.voice === "string" ? body.voice.trim() : "";
+      const maxDurationSeconds = typeof body.maxDurationSeconds === "number" && Number.isFinite(body.maxDurationSeconds)
+        ? Math.max(1, Math.floor(body.maxDurationSeconds))
+        : undefined;
+      const configured = Boolean(await ultravoxApiKey(env, user.id));
+      const platformAuth = await platformAuthorization(env, user.id, authorization);
+
+      if (platformAuth) {
+        try {
+          const hosted = await platformJson("/api/demo-calls", {
+            method: "POST",
+            authorization: platformAuth,
+            body: { agent_id: match[1] },
+          });
+          return json(normalizeDemoCallResponse(hosted), 201);
+        } catch (error) {
+          const status = error && typeof error === "object" && typeof (error as { status?: unknown }).status === "number"
+            ? (error as { status: number }).status
+            : 502;
+          if (status === 401) {
+            try {
+              await saveCredential(env, user.id, PLATFORM_CREDENTIAL, "");
+            } catch {
+              // Stale token cleanup is best-effort; the message below still guides recovery.
+            }
+            return json({ error: "Your MagicTeams connection expired. Sign out and sign in again, then retry the demo call." }, 401);
+          }
+          if (!configured) {
+            return json({ error: error instanceof Error ? error.message : String(error) }, status);
+          }
+        }
+      }
+      try {
+        const direct = await createUltravoxDemoCall(env, user.id, { agentId: match[1], voice, maxDurationSeconds });
+        return json({ success: true, provider: "ultravox", ...direct, logId: null }, 201);
+      } catch (error) {
+        const status = error && typeof error === "object" && typeof (error as { status?: unknown }).status === "number"
+          ? (error as { status: number }).status
+          : 502;
+        return json({ error: error instanceof Error ? error.message : String(error) }, status);
+      }
+    }
+  }
+  if (request.method === "POST" && path === "/api/platform/demo-calls/finalize") {
+    const authorization = request.headers.get("authorization");
+    const platformAuth = await platformAuthorization(env, user.id, authorization);
+    if (!platformAuth) return json({ success: true, skipped: true });
+    const body = await request.json<Record<string, unknown>>().catch(() => ({} as Record<string, unknown>));
+    try {
+      const finalized = await platformJson("/api/demo-calls/finalize", { method: "POST", authorization: platformAuth, body });
+      return json(finalized, 200);
+    } catch (error) {
+      const status = error && typeof error === "object" && typeof (error as { status?: unknown }).status === "number"
+        ? (error as { status: number }).status
+        : 502;
+      return json({ error: error instanceof Error ? error.message : String(error) }, status);
+    }
   }
   if (path === "/api/tts/prepare" && request.method === "POST") {
     const body = await request.json<{ text?: string }>();
@@ -2399,6 +2644,9 @@ async function api(request: Request, env: Env, user: User, path: string): Promis
 
 async function handleRequest(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
+    if (["GET", "HEAD"].includes(request.method) && ["/app-icon.svg", "/icon-192.png", "/icon-512.png", "/manifest.webmanifest", "/sw.js"].includes(url.pathname)) {
+      return env.ASSETS.fetch(request);
+    }
     const hookMatch = url.pathname.match(/^\/hooks\/([A-Za-z0-9_-]+)$/);
     if (hookMatch && request.method === "POST") return handleWebhook(request, env, hookMatch[1]);
     if (url.pathname.startsWith("/api/auth/better/")) return handleBetterAuthApi(request, env, url.pathname);
@@ -2518,7 +2766,7 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
 }
 
 async function handleBetterAuthApi(request: Request, env: Env, path: string): Promise<Response> {
-  const body = await request.json<Record<string, unknown>>().catch(() => ({}));
+  const body: Record<string, unknown> = await request.json<Record<string, unknown>>().catch(() => ({}));
   const email = String(body.email ?? "").trim().toLowerCase();
   const password = String(body.password ?? "");
   const clientAddress = request.headers.get("cf-connecting-ip") ?? "unknown";
@@ -2666,6 +2914,15 @@ async function hostedAuthSession(
   } else if (user.name !== name || user.email !== email) {
     await env.DB.prepare("UPDATE users SET email = ?, name = ? WHERE id = ?").bind(email, name, user.id).run();
     user = { ...user, email, name };
+  }
+  // Keep the platform-issued token so platform agent routes (demo calls,
+  // finalize) authenticate the same way the local dev server does. Login must
+  // still succeed if this persistence fails.
+  try {
+    const platformToken = platformTokenFrom(source);
+    if (platformToken) await saveCredential(env, user.id, PLATFORM_CREDENTIAL, platformToken);
+  } catch {
+    // Best-effort only.
   }
   const token = await createSession(env, user.id);
   return json({ token, user }, status);

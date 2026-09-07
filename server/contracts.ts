@@ -157,6 +157,13 @@ export interface SendTurnInput {
   transcript?: Array<{ role: "user" | "assistant"; text: string }>;
   /** Bot persona (name/title/description) as a system prompt. */
   system?: string;
+  /** In-process tools created by the harness from validated bot configuration. */
+  tools?: Array<{
+    name: string;
+    description: string;
+    parameters: Record<string, unknown>;
+    execute(args: Record<string, unknown>, signal: AbortSignal): Promise<string>;
+  }>;
   /** Per-bot integrations the driver may hand to the agent as tools. */
   integrations?: {
     /** A local stdio bridge owns the remote Composio transport. Keeping the

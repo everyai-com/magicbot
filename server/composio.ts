@@ -47,6 +47,18 @@ interface AccountLinkRequest {
   alias?: string;
 }
 
+const authConfigResponseSchema = z.object({
+  id: z.string().optional(),
+  status: z.string().optional(),
+  toolkit: z.object({ slug: z.string().optional() }).optional(),
+  is_composio_managed: z.boolean().optional(),
+  is_enabled_for_tool_router: z.boolean().optional(),
+});
+const authConfigsPageSchema = z.object({
+  items: z.array(authConfigResponseSchema).optional(),
+  data: z.array(authConfigResponseSchema).optional(),
+});
+
 const connectedAccountResponseSchema = z.object({
   id: z.string().optional(),
   alias: z.string().nullable().optional(),
@@ -150,6 +162,76 @@ function projectHeaders(apiKey: string, json = false) {
   const headers = new Headers({ "x-api-key": apiKey });
   if (json) headers.set("content-type", "application/json");
   return headers;
+}
+
+async function createManagedAuthConfig(apiKey: string, slug: string) {
+  const res = await fetch(`${apiBase()}/auth_configs`, {
+    method: "POST",
+    headers: projectHeaders(apiKey, true),
+    body: JSON.stringify({
+      toolkit: { slug },
+      auth_config: {
+        type: "use_composio_managed_auth",
+        credentials: {},
+        restrict_to_following_tools: [],
+      },
+    }),
+    signal: AbortSignal.timeout(30_000),
+  });
+  if (!res.ok && res.status !== 409) {
+    throw new Error(await responseError(res, `Composio auth config: HTTP ${res.status}`));
+  }
+}
+
+async function enabledAuthConfigId(apiKey: string, slug: string): Promise<string | null> {
+  const query = new URLSearchParams({
+    toolkit_slug: slug,
+    show_disabled: "false",
+    limit: "50",
+  });
+  const res = await fetch(`${apiBase()}/auth_configs?${query}`, {
+    headers: projectHeaders(apiKey),
+    signal: AbortSignal.timeout(30_000),
+  });
+  if (!res.ok) throw new Error(await responseError(res, `Composio auth configs: HTTP ${res.status}`));
+  const body = authConfigsPageSchema.parse(await res.json());
+  const configs = body.items ?? body.data ?? [];
+  const normalized = slug.toLowerCase();
+  const enabled = configs.filter((config) =>
+    config.id &&
+    config.toolkit?.slug?.toLowerCase() === normalized &&
+    !/disabled/i.test(config.status ?? "")
+  );
+  return (
+    enabled.find((config) => config.is_enabled_for_tool_router === true)?.id ??
+    enabled.find((config) => config.is_composio_managed === true)?.id ??
+    enabled[0]?.id ??
+    null
+  );
+}
+
+async function createConnectedAccountLink(
+  apiKey: string,
+  userId: string,
+  slug: string,
+  alias: string | undefined,
+  requestedAuthConfigId?: string | null,
+): Promise<Response> {
+  const authConfigId = typeof requestedAuthConfigId === "string" && requestedAuthConfigId.trim()
+    ? requestedAuthConfigId.trim()
+    : await enabledAuthConfigId(apiKey, slug);
+  if (!authConfigId) throw new Error(`No enabled auth config found for ${slug}`);
+  return fetch(`${apiBase()}/connected_accounts/link`, {
+    method: "POST",
+    headers: projectHeaders(apiKey, true),
+    body: JSON.stringify({
+      auth_config_id: authConfigId,
+      user_id: userId,
+      allow_multiple: true,
+      ...(alias ? { alias } : {}),
+    }),
+    signal: AbortSignal.timeout(30_000),
+  });
 }
 
 async function responseError(res: Response, fallback: string) {
@@ -626,7 +708,12 @@ export async function removeAccount(cfg: AppConfig, slug: string, accountId: str
 }
 
 /** Mint a browser auth link for one service. Returns { url } or throws. */
-export async function authorizeService(cfg: AppConfig, slug: string, requestedAlias?: string | null) {
+export async function authorizeService(
+  cfg: AppConfig,
+  slug: string,
+  requestedAlias?: string | null,
+  requestedAuthConfigId?: string | null,
+) {
   const alias = normalizeAccountAlias(requestedAlias);
   if (brokerAccess() || !cfg.composio?.apiKey) {
     const request: RequestInit = { method: "POST" };
@@ -656,15 +743,26 @@ export async function authorizeService(cfg: AppConfig, slug: string, requestedAl
   }
   const linkRequest: AccountLinkRequest = { toolkit: slug };
   if (alias) linkRequest.alias = alias;
-  const res = await fetch(`${apiBase()}/tool_router/session/${encodeURIComponent(session.session_id)}/link`, {
+  const linkUrl = `${apiBase()}/tool_router/session/${encodeURIComponent(session.session_id)}/link`;
+  const linkInit = {
     method: "POST",
     headers: projectHeaders(cfg.composio.apiKey, true),
     body: JSON.stringify(linkRequest),
     signal: AbortSignal.timeout(30_000),
-  });
+  };
+  let res = await fetch(linkUrl, linkInit);
+  if (!res.ok) {
+    const firstError = await responseError(res, `Composio authorization: HTTP ${res.status}`);
+    if (/auth[\s_-]*config|start connection|authorization unavailable/i.test(firstError)) {
+      await createManagedAuthConfig(cfg.composio.apiKey, slug).catch(() => {});
+      res = await createConnectedAccountLink(cfg.composio.apiKey, userId, slug, alias, requestedAuthConfigId);
+    } else {
+      throw new Error(firstError);
+    }
+  }
   if (!res.ok) throw new Error(await responseError(res, `Composio authorization: HTTP ${res.status}`));
-  const body = linkResponseSchema.parse(await res.json());
-  return { url: trustedAuthUrl(body.redirect_url, slug) };
+  const body = await res.json();
+  return { url: trustedAuthUrl(linkResponseSchema.parse(body).redirect_url ?? authUrlResponseSchema.parse(body).url, slug) };
 }
 
 // ── marketplace catalog ────────────────────────────────────────────────
@@ -673,6 +771,7 @@ export interface ToolkitCard {
   label: string;
   blurb: string;
   logo: string | null;
+  authConfigId?: string;
   /** used for the client-side favicon fallback when logo is null/broken */
   domain: string | null;
 }

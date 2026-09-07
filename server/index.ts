@@ -1,3 +1,4 @@
+import { campaignWorkspaceRoute } from "./campaign-workspace.ts";
 // OpenMausBot server — the harness host. Clients hold no transports
 // (upstream rule): the React app dispatches typed commands over HTTP and
 // folds one SSE event stream; every provider process runs here.
@@ -98,6 +99,8 @@ import {
 } from "./store.ts";
 import * as tts from "./tts/index.ts";
 import * as ultravox from "./ultravox.ts";
+import { hostedCallSettings } from "./call-settings.ts";
+import { parseCustomTool } from "../shared/custom-tool.ts";
 import { narrateTool, toUtterances } from "./tts/speech-text.ts";
 import { buildTurnContext, engineIsFresh } from "./turn-context.ts";
 import { TurnWatchdog } from "./turn-watchdog.ts";
@@ -2832,6 +2835,7 @@ async function platformJson(
     "content-type": "application/json",
   };
   const response = await fetch(betterAuthApiUrl(path), {
+    signal: AbortSignal.timeout(25_000),
     method: options.method ?? "GET",
     headers,
     body: options.body === undefined ? undefined : JSON.stringify(options.body),
@@ -2844,6 +2848,15 @@ async function platformJson(
     throw Object.assign(new Error(message), { status: response.status });
   }
   return body;
+}
+
+async function syncSavedCallSettings(agentId: string, authorization?: string, overrides: { voice?: string; maxDuration?: number } = {}) {
+  const bot = store.bots.find((candidate) => candidate.remoteAgentId === agentId);
+  const config = { ...bot?.agentConfig, ...(overrides.voice ? { voices: overrides.voice } : {}), ...(overrides.maxDuration !== undefined ? { maxDuration: overrides.maxDuration } : {}) };
+  const settings = hostedCallSettings(config, bot?.description);
+  if (!Object.keys(settings).length) return;
+  await platformJson(`/api/agents/${encodeURIComponent(agentId)}`, { method: "PATCH", authorization, body: settings });
+  await platformJson(`/api/agents/${encodeURIComponent(agentId)}/sync-ultravox`, { method: "POST", authorization, body: {} });
 }
 
 function platformRecordId(value: unknown): string {
@@ -5520,6 +5533,53 @@ const server = createServer(async (req, res) => {
       });
       return json(res, 200, { agent });
     }
+    if (path.startsWith("/api/campaign-workspace/")) {
+      const remote = campaignWorkspaceRoute(method, path.slice("/api/campaign-workspace/".length));
+      if (!remote) return json(res, 404, { error: "Unknown campaign action" });
+      const authorization = Array.isArray(req.headers.authorization) ? req.headers.authorization[0] : req.headers.authorization;
+      if (!authorization) return json(res, 401, { error: "Sign in to manage campaigns." });
+      const result = await platformJson(remote, {
+        method, authorization,
+        ...(method === "GET" ? {} : { body: await readBody(req) }),
+      });
+      return json(res, 200, result);
+    }
+    const crmRead = path.match(/^\/api\/platform\/crm\/campaigns(?:\/([^/]+)\/(contacts|outcomes))?$/);
+    if (crmRead && method === "GET") {
+      const authorization = Array.isArray(req.headers.authorization) ? req.headers.authorization[0] : req.headers.authorization;
+      const remotePath = crmRead[1] ? `/api/${crmRead[2] === "contacts" ? "contacts" : "call-outcomes"}/by-campaign/${encodeURIComponent(crmRead[1])}` : "/api/campaigns";
+      return json(res, 200, await platformJson(remotePath, { authorization }));
+    }
+    m = path.match(/^\/api\/platform\/agents\/([^/]+)\/custom-tools$/);
+    if (m && ["POST", "PATCH", "DELETE"].includes(method)) {
+      const authorization = Array.isArray(req.headers.authorization) ? req.headers.authorization[0] : req.headers.authorization;
+      const body = await readBody(req);
+      try {
+        const entry = typeof body.entry === "string" ? body.entry : "";
+        const previousEntry = typeof body.previousEntry === "string" ? body.previousEntry : entry;
+        const previous = parseCustomTool(previousEntry);
+        const { timeout: _timeout, ...tool } = parseCustomTool(entry);
+        const listed = await platformJson(`/api/knowledge/agent-tools?agent_id=${encodeURIComponent(m[1])}`, { authorization });
+        const rows = Array.isArray(listed) ? listed : (listed as { tools?: unknown[]; data?: unknown[] }).tools ?? (listed as { data?: unknown[] }).data;
+        if (!Array.isArray(rows)) throw new Error("Could not read existing tools; tool was not created.");
+        const existing = rows.find((row: Record<string, unknown>) => row.name === previous.name) ?? rows.find((row: Record<string, unknown>) => row.name === tool.name);
+        const collision = rows.find((row: Record<string, unknown>) => row.name === tool.name && row !== existing);
+        if (collision) throw new Error("Another tool already uses this name.");
+        if (method === "POST" && existing && (existing.http_url !== tool.http_url || existing.http_method !== tool.http_method)) throw new Error("A different tool already uses this name. Choose a unique name.");
+        if (method === "PATCH" && existing) await platformJson(`/api/knowledge/agent-tools/${encodeURIComponent(platformRecordId(existing))}`, { method: "PATCH", authorization, body: tool });
+        if (method === "DELETE" && existing) await platformJson(`/api/knowledge/agent-tools/${encodeURIComponent(platformRecordId(existing))}`, { method: "DELETE", authorization });
+        if (!existing && method !== "DELETE") await platformJson("/api/knowledge/agent-tools", { method: "POST", authorization, body: { ...tool, agent_id: m[1], tool_type: "http", is_active: true } });
+        if (method !== "DELETE") await platformJson(`/api/agents/${encodeURIComponent(m[1])}/sync-ultravox`, { method: "POST", authorization, body: {} });
+        const result = await platformJson(`/api/agents/${encodeURIComponent(m[1])}`, { authorization }) as Record<string, unknown>;
+        const agent = (result.agent ?? result.data ?? result) as Record<string, unknown>;
+        const id = typeof agent.ultravox_agent_id === "string" ? agent.ultravox_agent_id : "";
+        if (!id) throw new Error("Agent sync did not return an Ultravox agent ID.");
+        const toolId = await ultravox.registerCustomTool(cfg, id, entry, method === "PATCH" ? previousEntry : undefined, method === "DELETE");
+        return json(res, 201, { toolId, synced: true });
+      } catch (error) {
+        return json(res, 502, { error: `Tool sync failed: ${error instanceof Error ? error.message : String(error)}. Retry the same action to finish any partially saved changes.` });
+      }
+    }
     m = path.match(/^\/api\/platform\/agents\/([^/]+)\/call-forwarding$/);
     if (m && method === "GET") {
       const authorization = Array.isArray(req.headers.authorization) ? req.headers.authorization[0] : req.headers.authorization;
@@ -5962,6 +6022,7 @@ const server = createServer(async (req, res) => {
         : "";
       if (!phoneConfigId) return json(res, 400, { error: "caller phone config required" });
       if (!recipientNumber) return json(res, 400, { error: "recipient phone number required" });
+      await syncSavedCallSettings(m[1], authorization);
       const call = await platformJson("/api/calls/outbound", {
         method: "POST",
         authorization,
@@ -5984,6 +6045,7 @@ const server = createServer(async (req, res) => {
 
       if (usableBearer(authorization)) {
         try {
+          await syncSavedCallSettings(m[1], authorization, { voice, maxDuration: maxDurationSeconds });
           const hosted = await platformJson("/api/demo-calls", {
             method: "POST",
             authorization,
@@ -5991,7 +6053,7 @@ const server = createServer(async (req, res) => {
           });
           return json(res, 201, normalizeDemoCallResponse(hosted));
         } catch (error) {
-          if (!ultravox.configured(cfg)) {
+          {
             const status = error && typeof error === "object" && typeof (error as { status?: unknown }).status === "number"
               ? (error as { status: number }).status
               : 502;
@@ -6130,13 +6192,12 @@ const server = createServer(async (req, res) => {
         const catalog = await platformJson(`/api/composio/catalog?${params}`, { authorization });
         const { cards, services } = platformConnectorCatalog(catalog);
         if (composio.configured(cfg)) {
-          const localServices = await composio.connectedServices(cfg).catch(() => ({}));
           return json(res, 200, {
             configured: true,
             mode: composio.connectionMode(cfg),
             source: "api",
             cards,
-            services: { ...services, ...localServices },
+            services,
           });
         }
         return json(res, 200, { configured: true, mode: "managed", source: "api", cards, services });

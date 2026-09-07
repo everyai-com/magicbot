@@ -15,6 +15,7 @@ import { OpenCodeDriver } from "./acp/opencode-go.ts";
 import { QwenAgentDriver } from "./acp/qwen.ts";
 import { HermesAgentDriver } from "./acp/hermes.ts";
 import { OpenAICompatDriver } from "./openai-compat.ts";
+import { AnalysisApiDriver } from "./analysis-api.ts";
 import { PiDriver } from "./pi.ts";
 import { MinimaxDriver } from "./minimax.ts";
 
@@ -29,6 +30,7 @@ export const BUILT_IN_DRIVERS: readonly AnyProviderDriver[] = [
   QwenAgentDriver,
   HermesAgentDriver,
   PiDriver,
+  AnalysisApiDriver,
   OpenAICompatDriver,
   ClaudeDriver,
   CodexDriver,

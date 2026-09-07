@@ -1,7 +1,15 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { Check, AlertTriangle, Loader2, Mic } from "lucide-react";
+import { Check, AlertTriangle, Loader2, Lock, Mail, Mic, UserPlus } from "lucide-react";
 import { MausAvatar } from "./Avatar";
 import { identifyEmail, setEmailGateDone, track } from "@/lib/analytics";
+import {
+  confirmPasswordReset,
+  requestPasswordReset,
+  saveBetterAuthSession,
+  signInWithBetterAuth,
+  signUpWithBetterAuth,
+  type BetterAuthLoginResponse,
+} from "@/lib/auth";
 import { useDesktopCapabilities } from "./DesktopCapabilities";
 import { EngineSetup } from "./EngineSetup";
 import { ProviderMark } from "./ProviderIcons";
@@ -12,6 +20,7 @@ import type { InstanceInfo } from "@/state/store";
 // Every check is skippable — onboarding must never brick the app.
 
 type InstanceRow = InstanceInfo;
+type AuthMode = "signin" | "signup" | "forgot" | "reset";
 
 function StatusRow({
   ok,
@@ -108,22 +117,70 @@ function SetupRow(entry: EngineEntry) {
 export function Onboarding({ onDone }: { onDone: () => void }) {
   const { capabilities } = useDesktopCapabilities();
   const [step, setStep] = useState(0);
-  const [name, setName] = useState("");
+  const resetToken = new URLSearchParams(window.location.search).get("token")?.trim() || "";
+  const [authMode, setAuthMode] = useState<AuthMode>(resetToken ? "reset" : "signin");
+  const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [resetMessage, setResetMessage] = useState<string | null>(null);
+  const [loginError, setLoginError] = useState<string | null>(null);
+  const [loginBusy, setLoginBusy] = useState(false);
   const [instances, setInstances] = useState<InstanceRow[] | null>(null);
   const [perms, setPerms] = useState<{ mic: string } | null>(null);
   const valid = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email.trim());
+  const passwordValid = password.length >= (authMode === "signup" || authMode === "reset" ? 8 : 1);
+  const canSubmit =
+    !loginBusy &&
+    ((authMode === "signin" && valid && passwordValid) ||
+      (authMode === "signup" && valid && passwordValid) ||
+      (authMode === "forgot" && valid) ||
+      (authMode === "reset" && resetToken && passwordValid));
 
-  const saveProfile = () => {
-    identifyEmail(email.trim().toLowerCase());
-    // persisted server-side (~/.openmausbot/config.json) — the sidebar
-    // footer reads it back through /api/config
+  const completeAuth = (session: BetterAuthLoginResponse, fallbackEmail: string, next: "dashboard" | "setup") => {
+    saveBetterAuthSession(session);
+    identifyEmail(session.user?.email?.trim().toLowerCase() || fallbackEmail);
+  // persisted server-side (~/.openmausbot/config.json) — the sidebar
+  // footer reads it back through /api/config
     void fetch("/api/config", {
       method: "PUT",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ profile: { name: name.trim(), email: email.trim().toLowerCase() } }),
+      body: JSON.stringify({
+        profile: {
+          name: session.user?.name?.trim() || fullName.trim() || fallbackEmail.split("@")[0] || "",
+          email: session.user?.email?.trim().toLowerCase() || fallbackEmail,
+        },
+      }),
     }).catch(() => {});
-    setStep(1);
+    setEmailGateDone("submitted");
+    if (next === "setup") setStep(1);
+    else onDone();
+  };
+
+  const submitAuth = async () => {
+    if (!canSubmit) return;
+    const normalizedEmail = email.trim().toLowerCase();
+    setLoginBusy(true);
+    setLoginError(null);
+    setResetMessage(null);
+    try {
+      if (authMode === "signup") {
+        completeAuth(await signUpWithBetterAuth(fullName.trim(), normalizedEmail, password), normalizedEmail, "setup");
+      } else if (authMode === "forgot") {
+        const result = await requestPasswordReset(normalizedEmail);
+        setResetMessage(result.resetUrl ? `Reset link: ${result.resetUrl}` : "If that account exists, a reset link has been sent.");
+      } else if (authMode === "reset") {
+        await confirmPasswordReset(resetToken, password);
+        setPassword("");
+        setAuthMode("signin");
+        setResetMessage("Password updated. Sign in with your new password.");
+      } else {
+        completeAuth(await signInWithBetterAuth(normalizedEmail, password), normalizedEmail, "dashboard");
+      }
+    } catch (error) {
+      setLoginError(error instanceof Error ? error.message : "Request failed");
+    } finally {
+      setLoginBusy(false);
+    }
   };
 
   useEffect(() => {
@@ -195,41 +252,107 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
             <MausAvatar color="green" state="happy" size={72} />
             <h1 className="mt-4 text-[20px] font-semibold text-ink">Welcome to MagicTeams</h1>
             <p className="mt-1.5 text-center text-[14px] leading-relaxed text-ink-secondary">
-              One bot for every role. Together, they become the team that gets
-              your work done.
+              {authMode === "signup"
+                ? "Create a MagicTeams account to connect this workspace."
+                : authMode === "forgot"
+                  ? "Enter your email and we will send a reset link."
+                  : authMode === "reset"
+                    ? "Choose a new password for your MagicTeams account."
+                    : "Sign in with your MagicTeams account to connect this workspace."}
             </p>
+            {authMode === "signup" && (
+              <input
+                autoFocus
+                type="text"
+                value={fullName}
+                onChange={(e) => setFullName(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && canSubmit && submitAuth()}
+                placeholder="Full name"
+                autoComplete="name"
+                className="mt-5 w-full rounded-lg border border-hairline/40 bg-inset px-3 py-2.5 text-[15px] text-ink placeholder:text-ink-secondary focus:border-hairline focus:outline-none"
+              />
+            )}
             <input
-              autoFocus
-              type="text"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="Your name"
-              className="mt-5 w-full rounded-lg border border-hairline/40 bg-inset px-3 py-2.5 text-[15px] text-ink placeholder:text-ink-secondary focus:border-hairline focus:outline-none"
-            />
-            <input
+              autoFocus={authMode !== "signup" && authMode !== "reset"}
               type="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && valid && saveProfile()}
+              onKeyDown={(e) => e.key === "Enter" && canSubmit && submitAuth()}
               placeholder="you@example.com"
-              className="mt-3 w-full rounded-lg border border-hairline/40 bg-inset px-3 py-2.5 text-[15px] text-ink placeholder:text-ink-secondary focus:border-hairline focus:outline-none"
+              autoComplete="email"
+              className={`${authMode === "signup" ? "mt-3" : "mt-5"} ${authMode === "reset" ? "hidden" : ""} w-full rounded-lg border border-hairline/40 bg-inset px-3 py-2.5 text-[15px] text-ink placeholder:text-ink-secondary focus:border-hairline focus:outline-none`}
             />
+            {authMode !== "forgot" && (
+              <input
+                autoFocus={authMode === "reset"}
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && canSubmit && submitAuth()}
+                placeholder={authMode === "reset" ? "New password" : "Password"}
+                autoComplete={authMode === "signin" ? "current-password" : "new-password"}
+                className="mt-3 w-full rounded-lg border border-hairline/40 bg-inset px-3 py-2.5 text-[15px] text-ink placeholder:text-ink-secondary focus:border-hairline focus:outline-none"
+              />
+            )}
+            {(authMode === "signup" || authMode === "reset") && (
+              <div className="mt-2 w-full text-[12px] text-ink-secondary">Use at least 8 characters.</div>
+            )}
+            {loginError && (
+              <div className="mt-3 w-full rounded-lg border border-[#ff5a5a33] bg-[#ff5a5a12] px-3 py-2 text-[12.5px] text-[#ff8a8a]">
+                {loginError}
+              </div>
+            )}
+            {resetMessage && (
+              <div className="mt-3 w-full rounded-lg border border-[#38d59133] bg-[#38d59112] px-3 py-2 text-[12.5px] text-[#85e4ae]">
+                {resetMessage}
+              </div>
+            )}
             <button
-              onClick={saveProfile}
-              disabled={!valid}
-              className="mt-3 w-full rounded-lg bg-accent py-2.5 text-[15px] font-medium text-white disabled:opacity-40"
+              onClick={submitAuth}
+              disabled={!canSubmit}
+              className="mt-3 flex w-full items-center justify-center gap-2 rounded-lg bg-accent py-2.5 text-[15px] font-medium text-white disabled:opacity-40"
             >
-              Continue
+              {loginBusy ? (
+                <Loader2 size={16} className="animate-spin" />
+              ) : authMode === "signup" ? (
+                <UserPlus size={15} />
+              ) : authMode === "forgot" ? (
+                <Mail size={15} />
+              ) : (
+                <Lock size={15} />
+              )}
+              {authMode === "signup"
+                ? "Create account"
+                : authMode === "forgot"
+                  ? "Send reset link"
+                  : authMode === "reset"
+                    ? "Update password"
+                    : "Sign in"}
             </button>
-            <button
-              onClick={() => {
-                track("email_skipped");
-                setStep(1);
-              }}
-              className="mt-3 text-[12px] text-ink-secondary hover:text-ink"
-            >
-              Maybe later
-            </button>
+            <div className="mt-4 flex w-full items-center justify-between gap-3 text-[12px]">
+              <button
+                onClick={() => {
+                  setAuthMode(authMode === "signup" ? "signin" : "signup");
+                  setLoginError(null);
+                  setResetMessage(null);
+                  setPassword("");
+                }}
+                className="text-ink-secondary hover:text-ink"
+              >
+                {authMode === "signup" ? "Have an account? Sign in" : "Create account"}
+              </button>
+              <button
+                onClick={() => {
+                  setAuthMode(authMode === "forgot" ? "signin" : "forgot");
+                  setLoginError(null);
+                  setResetMessage(null);
+                  setPassword("");
+                }}
+                className="text-ink-secondary hover:text-ink"
+              >
+                {authMode === "forgot" ? "Back to sign in" : "Forgot password?"}
+              </button>
+            </div>
           </div>
         )}
 

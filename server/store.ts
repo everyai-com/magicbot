@@ -15,6 +15,7 @@ import { pickBotName } from "./names.ts";
 import { redactSecretsInText } from "./redact.ts";
 import { botAvatarProfile, type BotAvatarCrop } from "../shared/bot-avatar.ts";
 import { automaticBotAppearance, type BotPersonality } from "../shared/bot-personality.ts";
+import type { AgentProfileConfig } from "../shared/agent-config.ts";
 
 export type MausColor =
   | "green"
@@ -234,7 +235,7 @@ export const ACTIVITY_BUSY: ReadonlySet<BotActivity> = new Set(["working", "wait
 export type StoreChange =
   | { type: "message"; threadId: string; message: Message }
   | { type: "message.patch"; threadId: string; message: Message }
-  | { type: "thread"; threadId: string; activeLeafId: string }
+  | { type: "thread"; threadId: string; activeLeafId: string | null }
   | { type: "bot"; botId: string }
   | { type: "bot.deleted"; botId: string }
   | { type: "group"; groupId: string }
@@ -251,6 +252,8 @@ export function titleFromMessage(text: string): string {
 
 export interface BotRecord {
   id: string;
+  /** D1 agent id when this local bot mirrors a signed-in account bot. */
+  remoteAgentId?: string;
   /** the ACTIVE task's thread — everything that runs a turn reads this */
   threadId: ThreadId;
   /** every task this bot has, newest first */
@@ -293,6 +296,8 @@ export interface BotRecord {
   /** This bot's own voice id, so a room of bots doesn't sound like one
    * person. Falls back to the app-wide voice in config. */
   voice?: string;
+  /** Voice/call/integration settings shown below the prompt in Bot profile. */
+  agentConfig?: AgentProfileConfig;
   /** true after an edit/branch-switch rewound the visible conversation:
    * provider sessions still hold the abandoned branch, so the next turn
    * must start fresh (drop cursors) and replay the surviving path. */
@@ -343,6 +348,10 @@ const COLORS: MausColor[] = [
   "teal",
   "coral",
 ];
+const MAIN_BOT_NAME = "MagicTeams";
+const MAIN_BOT_TITLE = "Main bot";
+const MAIN_BOT_DESCRIPTION =
+  "Primary coordinator for this account. Use it to understand the request, create or contact the right specialist bots, and return one consolidated result.";
 
 /** Sections are persisted as display labels, so exact trimmed labels are
  * their identity. Missing/blank means the unsectioned (General) team. */
@@ -468,6 +477,10 @@ export class Store {
         b.color = appearance.color;
         b.mascotExpression = appearance.mascotExpression;
         b.personality = appearance.personality;
+        botsMigrated = true;
+      }
+      if (!b.remoteAgentId && (b.name === "Pesto" || b.name === MAIN_BOT_NAME) && b.mascotExpression !== "idle") {
+        b.mascotExpression = "idle";
         botsMigrated = true;
       }
       if (b.cloudBackend !== "vps" && b.cloudBackend !== "cloudflare") {
@@ -797,6 +810,34 @@ export class Store {
     return t.messages[idx];
   }
 
+  deleteMessage(threadId: string, messageId: string): { deletedIds: string[]; activeLeafId: string | null } | null {
+    const t = this.thread(threadId);
+    const source = t.messages.find((m) => m.id === messageId);
+    if (!source) return null;
+
+    const parentId = source.parentId ?? null;
+    const childIds = new Set(t.messages.filter((message) => message.parentId === messageId).map((message) => message.id));
+    t.messages = t.messages
+      .filter((message) => message.id !== messageId)
+      .map((message) => message.parentId === messageId ? { ...message, parentId } : message);
+
+    for (const message of t.messages) {
+      if (childIds.has(message.id)) mdb.updateMessage(threadId, message);
+    }
+
+    if (t.activeLeafId === messageId) {
+      const children = t.messages.filter((message) => childIds.has(message.id));
+      t.activeLeafId = children.at(-1)?.id ?? parentId ?? t.messages.at(-1)?.id ?? null;
+    }
+
+    mdb.deleteMessages(threadId, [messageId]);
+    mdb.setActiveLeaf(threadId, t.activeLeafId);
+    this.emit({ type: "thread", threadId, activeLeafId: t.activeLeafId });
+    const bot = this.botByThread(threadId);
+    if (bot) this.emit({ type: "bot", botId: bot.id });
+    return { deletedIds: [messageId], activeLeafId: t.activeLeafId };
+  }
+
   bot(id: string) {
     return this.bots.find((b) => b.id === id) ?? null;
   }
@@ -807,7 +848,18 @@ export class Store {
 
   createBot(
     profile: Partial<
-      Pick<BotRecord, "name" | "title" | "description" | "color" | "mascotExpression" | "personality" | "modelSelection" | "section">
+      Pick<
+        BotRecord,
+        | "name"
+        | "title"
+        | "description"
+        | "color"
+        | "mascotExpression"
+        | "personality"
+        | "modelSelection"
+        | "section"
+        | "remoteAgentId"
+      >
     > = {},
     opts: {
       /** false = no greeting/onboarding seed. Imported bots must not open
@@ -819,6 +871,7 @@ export class Store {
     const section = sectionKey(profile.section);
     const bot: BotRecord = {
       id: newId(),
+      remoteAgentId: profile.remoteAgentId,
       threadId: newId(),
       name,
       title: profile.title ?? "",
@@ -1105,5 +1158,34 @@ export class Store {
   seedIfEmpty() {
     if (this.bots.length) return;
     this.createBot();
+  }
+
+  /** Ensure the account has a visible top-level coordinator. This rides the
+   * existing Chief of Staff machinery, so the bot gets list_bots, ask_bot,
+   * delegate_bot, and create_bot when its engine supports agent tools. */
+  ensureMainBot(): BotRecord {
+    const existingChief = this.bots.find((bot) => bot.chiefOfStaff && !bot.hidden && !sectionKey(bot.section));
+    const existingMain = existingChief ?? this.bots.find((bot) => bot.name === MAIN_BOT_NAME && !sectionKey(bot.section));
+    const main = existingMain ?? this.createBot(
+      {
+        name: MAIN_BOT_NAME,
+        title: MAIN_BOT_TITLE,
+        description: MAIN_BOT_DESCRIPTION,
+        color: "green",
+        mascotExpression: "idle",
+      },
+      { seedMessages: false },
+    );
+    const patch: Partial<BotRecord> = {};
+    if (main.hidden) patch.hidden = false;
+    if (!main.title) patch.title = MAIN_BOT_TITLE;
+    if (!main.description) patch.description = MAIN_BOT_DESCRIPTION;
+    if (main.color !== "green") patch.color = "green";
+    if (main.mascotExpression !== "idle") patch.mascotExpression = "idle";
+    if (sectionKey(main.section)) patch.section = undefined;
+    if (Object.keys(patch).length) Object.assign(main, patch);
+    this.setChiefOfStaff(main.id);
+    this.saveBots();
+    return main;
   }
 }

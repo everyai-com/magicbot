@@ -7,24 +7,22 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
-  Bug,
   Clock,
-  Cloud,
   Copy,
   Crown,
   Folder,
   ListTree,
   Loader2,
-  Monitor,
+  MoreHorizontal,
   Pencil,
   Pin,
   PinOff,
   RefreshCw,
   Square,
+  Trash2,
   Webhook,
   X,
 } from "lucide-react";
-import { costCaption, formatTokens, formatUsd, hasFiniteCost, usageChip } from "@/lib/usage";
 import {
   useStore,
   useStreaming,
@@ -44,14 +42,13 @@ import { OptionCard, shouldHideOnboardingCard } from "./OptionCard";
 import { ApprovalCard } from "./ApprovalCard";
 import { Composer } from "./Composer";
 import { ConnectorCard } from "./ConnectorCard";
-import { ModelPicker } from "./ModelPicker";
 import { RenameTitle } from "./RenameTitle";
-import { TaskPicker } from "./TaskPicker";
 import { ReactionBar, ReactionChips } from "./Reactions";
 import { SpeakButton } from "./SpeakButton";
 import { CallButton, CallOverlay } from "./CallView";
+import { useOnCall } from "@/lib/call";
 import { cn } from "@/lib/cn";
-import { COMPACT_BUBBLE, COMPACT_SQUARE } from "@/lib/compact-chip";
+import { COMPACT_BUBBLE } from "@/lib/compact-chip";
 import { useFocusMessage } from "@/lib/focus-message";
 import { webhookMessageView } from "@/lib/webhook-message";
 import { attachmentBasename, splitAttachedImages } from "@/lib/composer-attachments";
@@ -322,6 +319,7 @@ function Bubble({
   onStartEdit,
   onCancelEdit,
   onSubmitEdit,
+  onDelete,
   onRegenerate,
 }: {
   bot: Bot;
@@ -331,11 +329,14 @@ function Bubble({
   onStartEdit: () => void;
   onCancelEdit: () => void;
   onSubmitEdit: (text: string) => void;
+  onDelete: () => void;
   onRegenerate?: () => void;
 }) {
   const { dispatch } = useStore();
   const user = message.role === "user";
   const [expanded, setExpanded] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
   const text = message.text ?? "";
   const webhookView = user ? webhookMessageView(text) : null;
   const attachedImages = user && !webhookView ? splitAttachedImages(text) : null;
@@ -343,9 +344,25 @@ function Bubble({
   const collapsible =
     user && !webhookView && !expanded && (visibleText.length > USER_COLLAPSE_CHARS || visibleText.split("\n").length > USER_COLLAPSE_LINES);
 
-  if (user && editing && !webhookView) {
+  useEffect(() => {
+    if (!menuOpen) return;
+    const onDown = (event: MouseEvent) => {
+      if (!menuRef.current?.contains(event.target as Node)) setMenuOpen(false);
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setMenuOpen(false);
+    };
+    window.addEventListener("mousedown", onDown);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("mousedown", onDown);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [menuOpen]);
+
+  if (message.kind === "text" && editing && !webhookView) {
     return (
-      <div className="flex w-full justify-end">
+      <div className={cn("flex w-full", user ? "justify-end" : "justify-start")}>
         <BubbleEditor initial={text} onCancel={onCancelEdit} onSubmit={onSubmitEdit} />
       </div>
     );
@@ -361,17 +378,56 @@ function Bubble({
   return (
     <div className={cn("group animate-msg-in flex w-full flex-col", user ? "items-end" : "items-start")}>
       <div className={cn("flex w-full items-center gap-1.5", user ? "justify-end" : "justify-start")}>
-        {/* editing rewinds the thread, so it waits for the turn to end —
-            same rule as the version switcher below */}
-        {user && message.kind === "text" && !webhookView && !bot.busy && (
-          <button
-            onClick={onStartEdit}
-            aria-label="Edit message"
-            className="hidden rounded-md p-1.5 text-ink-secondary opacity-0 transition-opacity hover:bg-raised hover:text-ink focus-visible:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100 sm:block"
-            title="Edit message"
-          >
-            <Pencil size={14} />
-          </button>
+        {message.kind === "text" && (
+          <div className="relative hidden sm:block" ref={menuRef}>
+            <button
+              type="button"
+              onClick={() => setMenuOpen((open) => !open)}
+              aria-haspopup="menu"
+              aria-expanded={menuOpen}
+              aria-label="Message actions"
+              className="rounded-md p-1.5 text-ink-secondary opacity-0 transition-opacity hover:bg-raised hover:text-ink focus-visible:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100"
+              title="Message actions"
+            >
+              <MoreHorizontal size={15} />
+            </button>
+            {menuOpen && (
+              <div
+                role="menu"
+                className={cn(
+                  "absolute top-full z-30 mt-1 w-[132px] rounded-lg border border-hairline/50 bg-card p-1 shadow-2xl shadow-black/45",
+                  user ? "right-0" : "left-0",
+                )}
+              >
+                {!webhookView && (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      setMenuOpen(false);
+                      onStartEdit();
+                    }}
+                    disabled={bot.busy}
+                    className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-[12.5px] text-ink hover:bg-raised disabled:cursor-not-allowed disabled:opacity-45"
+                  >
+                    <Pencil size={13} /> Edit
+                  </button>
+                )}
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setMenuOpen(false);
+                    onDelete();
+                  }}
+                  disabled={bot.busy}
+                  className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-[12.5px] text-danger hover:bg-danger/10 disabled:cursor-not-allowed disabled:opacity-45"
+                >
+                  <Trash2 size={13} /> Delete
+                </button>
+              </div>
+            )}
+          </div>
         )}
         {user && message.kind === "text" && <div className="hidden sm:block"><ReactionBar threadId={bot.threadId} message={message} /></div>}
         {user && <CopyButton text={visibleText} className="max-sm:hidden" />}
@@ -672,6 +728,7 @@ const MessagesList = memo(function MessagesList({
   onStartEdit,
   onCancelEdit,
   onSubmitEdit,
+  onDeleteMessage,
   onRegenerate,
 }: {
   bot: Bot;
@@ -686,6 +743,7 @@ const MessagesList = memo(function MessagesList({
   onStartEdit: (id: string) => void;
   onCancelEdit: () => void;
   onSubmitEdit: (id: string, text: string) => void;
+  onDeleteMessage: (id: string) => void;
   onRegenerate: () => void;
 }) {
   const { dispatch } = useStore();
@@ -701,7 +759,7 @@ const MessagesList = memo(function MessagesList({
             inputClassName="rounded bg-inset px-1.5 py-0.5 text-center text-[17px] font-semibold"
           />
           <div className="max-w-[360px] text-[14px] text-ink-secondary">
-            {bot.description || "Send a message to start the conversation."}
+            Send a message to start the conversation.
           </div>
         </div>
       )}
@@ -743,6 +801,7 @@ const MessagesList = memo(function MessagesList({
                   onStartEdit={() => onStartEdit(m.id)}
                   onCancelEdit={onCancelEdit}
                   onSubmitEdit={(text) => onSubmitEdit(m.id, text)}
+                  onDelete={() => onDeleteMessage(m.id)}
                   onRegenerate={onRegenerate}
                 />
               );
@@ -816,9 +875,7 @@ export function ChatView({ bot }: { bot: Bot }) {
   const reasoning = stream.reasoning[bot.threadId];
   const provisioning = state.provisioning[bot.id];
   const mascotMotion = state.mascotMotion?.botId === bot.id ? state.mascotMotion : null;
-  const activeInstance = state.instances.find((instance) => instance.instanceId === bot.modelSelection.instanceId);
-  const activeModelLabel = activeInstance?.models.options.find((option) => option.id === bot.modelSelection.model)?.label
-    ?? bot.modelSelection.model;
+  const onCall = useOnCall() === bot.id;
 
   // only the active branch is rendered; forks stay reachable via ‹ › nav
   const messages = useMemo(() => visibleMessages(bot), [bot]);
@@ -867,6 +924,13 @@ export function ChatView({ bot }: { bot: Bot }) {
     (messageId: string, text: string) => {
       setEditingId(null); // closes the editor first — a double Enter can't fork twice
       dispatch({ type: "editMessage", botId: bot.id, messageId, text });
+    },
+    [bot.id, dispatch],
+  );
+  const deleteMessage = useCallback(
+    (messageId: string) => {
+      setEditingId((current) => (current === messageId ? null : current));
+      dispatch({ type: "deleteMessage", botId: bot.id, messageId });
     },
     [bot.id, dispatch],
   );
@@ -1007,7 +1071,7 @@ export function ChatView({ bot }: { bot: Bot }) {
           >
             <BotAvatar
               bot={bot}
-              state={stateForBot({ ...bot, messages })}
+              state={stateForBot({ ...bot, messages, onCall })}
               size={28}
               motion={mascotMotion?.kind ?? "none"}
               motionKey={mascotMotion?.nonce ?? 0}
@@ -1019,7 +1083,6 @@ export function ChatView({ bot }: { bot: Bot }) {
                 value={bot.name}
                 onCommit={(name) => dispatch({ type: "updateBot", botId: bot.id, patch: { name } })}
                 onActivate={() => dispatch({ type: "toggleSettings", open: true })}
-                showEditButton
                 className="truncate text-[15px] font-semibold text-ink"
                 inputClassName="max-w-[220px] rounded bg-inset px-1.5 py-0.5 text-[15px] font-semibold"
               />
@@ -1029,16 +1092,6 @@ export function ChatView({ bot }: { bot: Bot }) {
                 </span>
               )}
               {bot.busy && <Loader2 size={14} className="shrink-0 animate-spin text-ink-secondary" />}
-            </div>
-            <div
-              className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[11px] text-ink-secondary"
-              title={`Replies are generated by ${activeInstance?.displayName ?? "the selected provider"} using ${activeModelLabel}`}
-            >
-              {state.config?.hosted && <Cloud size={11} className="shrink-0 text-accent" aria-hidden="true" />}
-              <span className="truncate">
-                {activeInstance?.displayName ?? "AI provider"} · {activeModelLabel}
-              </span>
-              {state.config?.hosted && <span className="shrink-0 text-ink-secondary/70">· hosted</span>}
             </div>
           </div>
         </div>
@@ -1056,67 +1109,12 @@ export function ChatView({ bot }: { bot: Bot }) {
               <span className="@max-4xl/chathead:hidden">Stop</span>
             </button>
           )}
-          <TaskPicker bot={bot} />
-          <ModelPicker bot={bot} className="hidden sm:block" />
-          <div className="hidden items-center gap-1 sm:flex">
-            <UsageChip bot={bot} />
-            <WorkingFolderChip bot={bot} />
-          </div>
           <CallButton bot={bot} />
-          <button
-            onClick={() => dispatch({ type: "toggleComputer" })}
-            aria-label="Bot's computer"
-            className={cn(
-              "shrink-0 rounded-md p-1.5 hover:bg-raised",
-              state.computerOpen ? "text-accent" : "text-ink-secondary hover:text-ink",
-            )}
-            title="Bot's computer"
-          >
-            <Monitor size={18} />
-          </button>
-          <button
-            onClick={() => dispatch({ type: "toggleInspector" })}
-            aria-label="Inspector"
-            aria-pressed={state.inspectorOpen}
-            className={cn(
-              "shrink-0 rounded-md p-1.5 hover:bg-raised",
-              state.inspectorOpen ? "text-accent" : "text-ink-secondary hover:text-ink",
-            )}
-            title="Inspector — runtime events and raw protocol for this thread"
-          >
-            <Bug size={18} />
-          </button>
         </div>
       </header>
 
-      {/* Phone controls: keep the active model visible and reachable without
-          squeezing it into the icon-only desktop action row. */}
       <div className="flex shrink-0 items-center gap-1.5 border-b border-hairline/30 bg-panel/35 px-3 py-2 sm:hidden">
-        <ModelPicker bot={bot} prominent className="min-w-0 flex-1" />
-        <TaskPicker bot={bot} />
         <CallButton bot={bot} />
-        <button
-          onClick={() => dispatch({ type: "toggleComputer" })}
-          aria-label="Bot's computer"
-          aria-pressed={state.computerOpen}
-          className={cn(
-            "flex size-11 shrink-0 items-center justify-center rounded-xl transition-colors hover:bg-raised",
-            state.computerOpen ? "bg-raised text-accent" : "text-ink-secondary hover:text-ink",
-          )}
-        >
-          <Monitor size={18} />
-        </button>
-        <button
-          onClick={() => dispatch({ type: "toggleInspector" })}
-          aria-label="Inspector"
-          aria-pressed={state.inspectorOpen}
-          className={cn(
-            "flex size-11 shrink-0 items-center justify-center rounded-xl transition-colors hover:bg-raised",
-            state.inspectorOpen ? "bg-raised text-accent" : "text-ink-secondary hover:text-ink",
-          )}
-        >
-          <Bug size={18} />
-        </button>
       </div>
 
       {/* Error banner */}
@@ -1198,6 +1196,7 @@ export function ChatView({ bot }: { bot: Bot }) {
             onStartEdit={startEdit}
             onCancelEdit={cancelEdit}
             onSubmitEdit={submitEdit}
+            onDeleteMessage={deleteMessage}
             onRegenerate={regenerate}
           />
           {laterCount > 0 && (
@@ -1261,58 +1260,5 @@ export function ChatView({ bot }: { bot: Bot }) {
       />
 
     </main>
-  );
-}
-
-/** What the open task has spent — quiet until the first turn settles.
- * Click opens the bot's settings, where the Usage card has the breakdown. */
-function UsageChip({ bot }: { bot: Bot }) {
-  const { state, dispatch } = useStore();
-  const usage = bot.tasks?.find((t) => t.threadId === bot.threadId)?.usage;
-  const text = usage ? usageChip(usage) : "";
-  if (!usage || !text) return null;
-  const billing = state.instances.find((i) => i.instanceId === bot.modelSelection.instanceId)?.snapshot.billing;
-  const detail = [
-    `${usage.turns} turn${usage.turns === 1 ? "" : "s"}`,
-    `${formatTokens(usage.input)} in · ${formatTokens(usage.output)} out`,
-    hasFiniteCost(usage.costUsd) ? `${formatUsd(usage.costUsd)} ${costCaption(billing)}` : null,
-  ]
-    .filter(Boolean)
-    .join("\n");
-  // folded: one figure — cost when the engine reports one, else tokens
-  const short = usage.costUsd !== null ? formatUsd(usage.costUsd) : formatTokens(usage.input + usage.output);
-  return (
-    <button
-      onClick={() => dispatch({ type: "toggleSettings", open: true })}
-      className="whitespace-nowrap rounded-full border border-hairline/40 bg-raised/60 px-2.5 py-1 text-[12px] tabular-nums text-ink-secondary hover:bg-raised hover:text-ink @max-4xl/chathead:px-2"
-      title={detail}
-    >
-      <span className="@max-4xl/chathead:hidden">{text}</span>
-      <span className="hidden @max-4xl/chathead:inline">{short}</span>
-    </button>
-  );
-}
-
-/** The folder this task's tools run in — quiet unless it's somewhere other
- * than home. Shows the pinned task folder when there is one, else the bot's
- * folder a first turn would pin. Click opens bot settings to change it. */
-function WorkingFolderChip({ bot }: { bot: Bot }) {
-  const { dispatch } = useStore();
-  const task = bot.tasks?.find((t) => t.threadId === bot.threadId);
-  const folder = task?.cwd === undefined ? bot.cwd : (task.cwd ?? undefined);
-  if (!folder) return null;
-  const name = folder.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || folder;
-  return (
-    <button
-      onClick={() => dispatch({ type: "toggleSettings", open: true })}
-      className={cn(
-        "flex max-w-[180px] items-center gap-1.5 rounded-full border border-hairline/40 bg-raised/60 px-2.5 py-1 text-[12.5px] text-ink-secondary hover:bg-raised hover:text-ink",
-        COMPACT_SQUARE,
-      )}
-      title={`Working folder: ${folder}`}
-    >
-      <Folder size={12} className="@max-4xl/chathead:size-[14px]" />
-      <span className="truncate font-mono @max-4xl/chathead:hidden">{name}</span>
-    </button>
   );
 }
