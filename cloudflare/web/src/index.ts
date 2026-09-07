@@ -164,7 +164,6 @@ interface Routine {
   nextRunAt: number | null;
   createdAt: number;
   updatedAt: number;
-  [key: string]: unknown;
 }
 
 interface RoutineRun {
@@ -273,14 +272,17 @@ const CODEX_CONSENT_VERSION = "2026-08-24";
 // result instead of manufacturing a timeout while the container is healthy.
 const CODEX_RUNTIME_TIMEOUT_MS = 195_000;
 const CODEX_FALLBACK_MODELS = ["gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol"];
-const CODEX_MODEL_LABELS: Record<string, string> = {
+type CodexFallbackModel = "gpt-5.6-luna" | "gpt-5.6-terra" | "gpt-5.6-sol";
+
+const CODEX_MODEL_LABELS: Record<CodexFallbackModel, string> = {
   "gpt-5.6-luna": "GPT-5.6 Luna",
   "gpt-5.6-terra": "GPT-5.6 Terra",
   "gpt-5.6-sol": "GPT-5.6 Sol",
 };
 
 function codexModelLabel(model: string): string {
-  return CODEX_MODEL_LABELS[model] ?? model;
+  if (model === "gpt-5.6-luna" || model === "gpt-5.6-terra" || model === "gpt-5.6-sol") return CODEX_MODEL_LABELS[model];
+  return model;
 }
 const CLAUDE_CREDENTIAL = "claude_code_subscription";
 const CLAUDE_PENDING = "claude_code_pending";
@@ -956,7 +958,7 @@ async function loadRecord<T>(env: Env, table: HostedTable, userId: string, id: s
   return row ? JSON.parse(row.data) as T : null;
 }
 
-async function saveRecord(env: Env, table: HostedTable, userId: string, id: string, data: unknown, createdAt: number): Promise<void> {
+async function saveRecord(env: Env, table: HostedTable, userId: string, id: string, data: JsonValue | object, createdAt: number): Promise<void> {
   const now = Date.now();
   if (table === "routine_runs") {
     const routineId = String((data as { routineId?: string }).routineId ?? "");
@@ -4028,7 +4030,7 @@ async function api(request: Request, env: Env, user: User, path: string, ctx: Ex
     if (request.method === "PATCH") {
       const body = await request.json<Partial<Routine>>();
       for (const key of ["name", "prompt", "botId", "runOn", "enabled", "schedule", "durationMinutes"] as const) {
-        if (body[key] !== undefined) (routine as Record<string, unknown>)[key] = body[key];
+        if (body[key] !== undefined) routine[key] = body[key] as never;
       }
       routine.updatedAt = Date.now();
       routine.nextRunAt = routine.enabled ? nextRun(routine.schedule) : null;
