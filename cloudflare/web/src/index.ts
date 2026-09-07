@@ -7,7 +7,7 @@ import {
   type ChatGPTTokens,
 } from "@opencoredev/loginwithchatgpt-core";
 import { automaticBotAppearance } from "../../../shared/bot-personality";
-import { isJsonRecord, type JsonRecord, type JsonValue } from "../../../shared/json";
+import { isJsonArray, isJsonRecord, type JsonRecord, type JsonValue } from "../../../shared/json";
 import {
   decideAutonomy,
   isAutonomyMode,
@@ -1318,15 +1318,17 @@ function connectorText(value: JsonValue | undefined, depth = 0): string {
   return "";
 }
 
-function safeConnectorArguments(value: unknown): value is Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+function safeConnectorArguments(value: JsonValue | undefined): value is JsonRecord {
+  if (!isJsonRecord(value)) return false;
   const forbidden = /password|secret|token|api.?key|authorization|cookie/i;
-  const visit = (item: unknown, depth: number): boolean => {
+  const visit = (item: JsonValue | undefined, depth: number): boolean => {
     if (depth > 5) return false;
-    if (item == null || typeof item === "string" || typeof item === "number" || typeof item === "boolean") return true;
-    if (Array.isArray(item)) return item.length <= 100 && item.every((entry) => visit(entry, depth + 1));
-    if (typeof item !== "object") return false;
-    return Object.entries(item as Record<string, unknown>).every(([key, entry]) => !forbidden.test(key) && visit(entry, depth + 1));
+    if (item === null || item === undefined) return true;
+    if (isJsonArray(item)) return item.length <= 100 && item.every((entry) => visit(entry, depth + 1));
+    if (isJsonRecord(item)) {
+      return Object.entries(item).every(([key, entry]) => !forbidden.test(key) && visit(entry, depth + 1));
+    }
+    return true;
   };
   return JSON.stringify(value).length <= 20_000 && visit(value, 0);
 }
@@ -3909,7 +3911,7 @@ async function api(request: Request, env: Env, user: User, path: string, ctx: Ex
     const body = await request.json<{
       sourceType?: "attachment" | "github" | "email" | "connector"; label?: string;
       scopeType?: ContextScope; scopeId?: string; attachmentId?: string;
-      connectorService?: string; connectorTool?: string; arguments?: Record<string, unknown>;
+      connectorService?: string; connectorTool?: string; arguments?: JsonRecord;
       autoSync?: boolean; syncIntervalMinutes?: number;
     }>();
     const sourceType = body.sourceType ?? "connector";
