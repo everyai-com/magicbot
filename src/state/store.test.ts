@@ -21,6 +21,35 @@ describe("hosted chat surface detection", () => {
   });
 });
 
+describe("hosted optimistic hydration", () => {
+  it("keeps an in-flight user bubble when a reconnect snapshot is stale", () => {
+    const bot = {
+      id: "max",
+      threadId: "thread-max",
+      name: "Max",
+      messages: [{ id: "old", role: "bot", kind: "text", text: "Hi", at: 1 }],
+      activeLeafId: "old",
+      modelSelection: { instanceId: "codex-subscription", model: "gpt-5.6-luna" },
+    } as Bot;
+    const sent = reducer({ ...initialState, bots: [bot], selectedId: bot.id }, {
+      type: "send",
+      botId: bot.id,
+      text: "test",
+      clientMessageId: "client-message-1",
+      sentAt: 2,
+    });
+    const hydrated = reducer(sent, {
+      type: "hydrate",
+      bots: [bot],
+      groups: [],
+      computerControl: {},
+    });
+
+    expect(hydrated.bots[0]?.messages.map((message) => message.id)).toEqual(["old", "client-message-1"]);
+    expect(hydrated.bots[0]?.busy).toBe(true);
+  });
+});
+
 describe("notification routing", () => {
   const bots = [{ id: "bot-1", threadId: "main-thread", tasks: [{ threadId: "detached-thread" }] }] as never;
   const groups = [{ id: "room-1", threadId: "room-thread" }] as never;
@@ -110,6 +139,24 @@ describe("Teach a skill feature flag", () => {
       config: { ...config, features: { skillRecorder: false } },
     });
     expect(disabled.activeView).toBe("chat");
+  });
+});
+
+describe("Today command center navigation", () => {
+  it("opens Today and closes competing panels", () => {
+    const next = reducer({ ...initialState, settingsOpen: true, pluginsOpen: true }, { type: "showToday" });
+    expect(next.activeView).toBe("today");
+    expect(next.settingsOpen).toBe(false);
+    expect(next.pluginsOpen).toBe(false);
+  });
+});
+
+describe("People graph navigation", () => {
+  it("opens People and closes competing panels", () => {
+    const next = reducer({ ...initialState, settingsOpen: true, computerOpen: true }, { type: "showPeople" });
+    expect(next.activeView).toBe("people");
+    expect(next.settingsOpen).toBe(false);
+    expect(next.computerOpen).toBe(false);
   });
 });
 

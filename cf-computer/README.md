@@ -1,10 +1,11 @@
 # MagicBots Cloudflare Computer
 
 The primary hosted computer stack, built on the official preview
-[`@cloudflare/computer`](https://github.com/cloudflare/computer) package. Each
-bot gets a SQLite-backed Durable Object workspace plus a private Linux runtime.
-The workspace is keyed by `botId`, so files survive container restarts and
-remain isolated between bots.
+[`@cloudflare/computer`](https://github.com/cloudflare/computer) package and
+Cloudflare Browser Run. All bots share one SQLite-backed Durable Object
+workspace, Linux runtime, browser profile, cookies, and signed-in sessions.
+Each bot gets its own independently controlled browser page within that shared
+profile, matching Grok Bot's shared-computer model.
 
 Cloudflare currently marks this package preview-only. MagicBots pins the version
 and keeps the existing web/service API small so upgrades stay contained here.
@@ -19,8 +20,14 @@ This runs in **your own** Cloudflare account.
 | `/computer/:botId/run` `{code, language}` | Run LLM code in the interpreter (python/js/ts) |
 | `/computer/:botId/writeFile` `{path, content}` | Write a file |
 | `/computer/:botId/readFile` `{path}` | Read a file |
-| `/computer/:botId/sleep` | Stop the Linux runtime; keep the workspace |
-| `/computer/:botId/destroy` | Delete the runtime and durable workspace |
+| `/computer/:botId/browserOpen` `{url}` | Open a URL on the bot's browser page |
+| `/computer/:botId/browserText` | Read visible page text |
+| `/computer/:botId/browserSnapshot` | Read interactive elements and refs |
+| `/computer/:botId/browserClick` `{ref}` | Click an element ref |
+| `/computer/:botId/browserFill` `{ref,text}` | Fill an input ref |
+| `/computer/:botId/browserScreenshot` | Capture the bot's browser page |
+| `/computer/:botId/sleep` | Close that bot's browser page; keep shared state |
+| `/computer/:botId/destroy` | Remove that bot's browser page; keep shared state |
 
 Every request needs `Authorization: Bearer <MAGICBOT_COMPUTER_TOKEN>`.
 
@@ -37,8 +44,10 @@ wrangler deploy
 Then in MagicBots' App Settings, set the cloud-computer endpoint to your
 Worker URL and paste the same token. Bots with computer = cloud will use it.
 
-Public port sharing and an interactive desktop are intentionally not advertised
-on `workers.dev`. The default computer is a persistent, headless agent workspace.
+Browser pages are controlled through Playwright and Browser Run. They share
+authentication state but remain separate work surfaces; they are not security
+boundaries. Passwords, 2FA, CAPTCHAs, payments, and identity checks should use
+the application's human-takeover flow.
 
 ## How it wires into the harness
 

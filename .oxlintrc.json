@@ -33,7 +33,7 @@
     "anti-slop/no-object-parameters": "error",
     "anti-slop/no-reflect-apply": "error",
     "anti-slop/no-reflect-get": "error",
-    "anti-slop/no-runtime-typeof": "error",
+    "anti-slop/no-runtime-typeof": ["error", { "allowInTypeGuards": true }],
     "anti-slop/no-shape-in-symbol-names": "error",
     "anti-slop/no-unknown-parameters": "error",
     "anti-slop/no-unknown-returns": "error",
@@ -41,5 +41,29 @@
     "anti-slop/no-unsafe-dictionary-type": "error",
     "anti-slop/no-widen-then-assert": "error",
     "anti-slop/require-safety-comment-for-type-assertion": "error"
-  }
+  },
+  "overrides": [
+    {
+      // Untyped Electron main-process scripts cannot name domain types:
+      // `typeof` is their only narrowing tool and there is no `unknown`
+      // parameter to parse. Spreads and module seams are still fixed inline.
+      "files": ["**/*.mjs", "**/*.cjs"],
+      "rules": { "anti-slop/no-runtime-typeof": "off" }
+    },
+    {
+      // Test doubles assert *through* the real boundary (JSON fixtures,
+      // hand-built protocol rows, stub transports). Requiring a SAFETY
+      // essay on every fixture cast adds noise, not evidence; the
+      // assertion under test is the evidence.
+      "files": ["**/*.test.ts", "**/*.test.tsx", "**/*.test.mjs"],
+      "rules": { "anti-slop/require-safety-comment-for-type-assertion": "off" }
+    },
+    {
+      // Electron main-process tests run outside Electron: the `electron`
+      // module does not exist here, so a faithful stub is the only way to
+      // load the module under test. No production seam exists for this.
+      "files": ["**/*.test.mjs"],
+      "rules": { "anti-slop/no-module-mocking": "off" }
+    }
+  ]
 }

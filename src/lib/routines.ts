@@ -49,6 +49,13 @@ export interface RoutineRun {
   output?: string;
   error?: string;
   cost?: number | null;
+  engineId?: string;
+  model?: string;
+  inputTokens?: number;
+  outputTokens?: number;
+  usageSource?: "provider" | "estimated" | "unavailable";
+  costSource?: "provider" | "unavailable";
+  durationMs?: number;
   denials?: string[];
   createdAt: number;
   seenAt?: number;

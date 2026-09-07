@@ -12,6 +12,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { Card, CommandLine } from "./SettingsPrimitives";
+import { useStore } from "@/state/store";
 import { cn } from "@/lib/cn";
 
 type Action = "pull" | "run" | "start" | "stop" | "remove" | "recreate";
@@ -101,6 +102,20 @@ function ActionButton({
 }
 
 export function LocalComputerSection() {
+  const { state } = useStore();
+  if (state.config?.hosted) {
+    return (
+      <Card title="Local VM" subtitle="Desktop-app virtual desktops live here. On the web app every bot runs on its Cloudflare computer instead.">
+        <div className="text-[13px] leading-relaxed text-ink-secondary">
+          The Local VM is a desktop-app feature. In the web app, choose the Cloudflare computer in each bot's Computer panel — no setup needed.
+        </div>
+      </Card>
+    );
+  }
+  return <LocalComputerSetup />;
+}
+
+function LocalComputerSetup() {
   const [status, setStatus] = useState<Status | null>(null);
   const [loading, setLoading] = useState(true);
   const [pending, setPending] = useState<Action | null>(null);

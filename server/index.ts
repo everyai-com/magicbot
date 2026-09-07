@@ -286,13 +286,10 @@ store.seedIfEmpty();
 const wireTask = ({ resumeCursors, lastInstanceId, ...task }: TaskRecord) => task;
 
 const wireBot = (bot: NonNullable<ReturnType<typeof store.bot>>) => {
-  const { resumeCursors, tasks, ...rest } = bot;
-  return {
-    ...rest,
-    cloudBackend: rest.cloudBackend ?? "cloudflare",
-    avatarUrl: rest.avatarUrl ?? null,
-    ...(tasks ? { tasks: tasks.map(wireTask) } : {}),
-  };
+  const { resumeCursors: _cursors, tasks, ...rest } = bot;
+  const wire = { ...rest, cloudBackend: rest.cloudBackend ?? "cloudflare" };
+  if (tasks) return { ...wire, tasks: tasks.map(wireTask) };
+  return wire;
 };
 
 /** Profile URLs are app-owned references, not merely strings with a trusted
@@ -1566,6 +1563,7 @@ async function startTurn(
         } else if (cfComputer.cfConfigured(cfg)) {
           integrations.localComputer = cfComputer.cfComputerMcp(cfg, bot.id);
           computerKind = "cloudflare";
+          previewCapture = () => cfComputer.screenshot(cfg, bot.id);
         } else if (wants === "cloud") {
           throw new Error("Cloudflare computer is not configured — add its Worker URL and token in App Settings → Connections");
         }
@@ -4616,9 +4614,8 @@ const server = createServer(async (req, res) => {
       }
       if (backend === "cloudflare") {
         if (!cfComputer.cfConfigured(cfg)) return json(res, 409, { error: "Cloudflare computer is not configured" });
-        if (m[2] === "join" || m[2] === "screenshot") {
-          return json(res, 409, { error: "Cloudflare computer is headless; interactive desktop access is not supported" });
-        }
+        if (m[2] === "join") return json(res, 409, { error: "Direct takeover requires Cloudflare Browser Run Live View" });
+        if (m[2] === "screenshot") return json(res, 200, await cfComputer.screenshot(cfg, botId));
         if (m[2] === "exec") {
           const body = await readBody(req);
           return json(res, 200, await cfComputer.exec(cfg, botId, String(body.command ?? "")));

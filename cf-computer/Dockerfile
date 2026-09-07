@@ -23,6 +23,15 @@ RUN npm install -g @openai/codex-linux-x64@npm:@openai/codex@0.149.1-linux-x64 \
  && codex --version \
  && npm cache clean --force
 
+# Baileys runs as an account-isolated bridge. Its auth files live only in the
+# durable /workspace mount; this image contains code and dependencies only.
+RUN mkdir -p /opt/magicteams/whatsapp \
+ && cd /opt/magicteams/whatsapp \
+ && npm init -y \
+ && npm install --omit=dev @whiskeysockets/baileys@7.0.0-rc14 pino@9 \
+ && npm cache clean --force
+COPY whatsapp/worker.mjs /opt/magicteams/whatsapp/worker.mjs
+
 COPY --from=computerd /usr/local/bin/computerd /usr/local/bin/computerd
 
 ENV PORT=8080

@@ -64,6 +64,9 @@ import {
   tailWindowStart,
 } from "@/lib/transcript-window";
 import { timelineEvents } from "@/lib/taskTimeline";
+import { hasBrowserIntent } from "@/lib/browser-intent";
+import { AgentRunStatus, BrowserFrameLoader, InlineSignalLoader } from "./AgentRunStatus";
+import { SessionCloseButton } from "./SessionCloseout";
 
 /** Long user messages collapse behind a fade so pasted walls of text don't
  * bury the conversation; bots get full markdown. */
@@ -94,25 +97,39 @@ function TaskTimeline({ messages, busy }: { messages: Message[]; busy: boolean }
   const events = useMemo(() => timelineEvents(messages), [messages]);
   if (events.length === 0) return null;
   const recent = events.slice(-8);
+  const failed = recent.filter((event) => event.state === "failed").length;
+  const completed = recent.filter((event) => event.state === "complete").length;
   return (
     <div className="mx-auto w-full max-w-[900px] px-3 pt-1 sm:px-5">
       <button
         type="button"
         onClick={() => setOpen((value) => !value)}
         aria-expanded={open}
-        className="flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-left text-[12.5px] text-ink-secondary hover:bg-raised/50 hover:text-ink"
+        className="group flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-left text-[12.5px] text-ink-secondary transition-colors hover:bg-raised/50 hover:text-ink"
       >
-        <span className="flex items-center gap-1.5"><ListTree size={14} /> Execution timeline{busy ? " · running" : ""}</span>
-        <ChevronDown size={14} className={cn("transition-transform", open && "rotate-180")} />
+        <span className="flex min-w-0 items-center gap-1.5">
+          <ListTree size={14} />
+          <span>Execution timeline</span>
+          {busy ? (
+            <span className="inline-flex items-center gap-1 rounded-md bg-accent/10 px-1.5 py-0.5 text-[10.5px] font-medium text-accent-text">
+              <span className="size-1.5 animate-pulse rounded-full bg-accent" /> running
+            </span>
+          ) : (
+            <span className="rounded-md bg-control px-1.5 py-0.5 text-[10.5px] tabular-nums">
+              {completed} done{failed ? ` · ${failed} failed` : ""}
+            </span>
+          )}
+        </span>
+        <ChevronDown size={14} className={cn("transition-transform duration-200", open && "rotate-180")} />
       </button>
       {open && (
-        <ol className="ml-2 border-l border-hairline/40 pb-2 pl-3">
+        <ol className="ml-2 mt-1 overflow-hidden rounded-lg border border-hairline/30 bg-panel/65 px-3 py-1.5">
           {recent.map((event) => (
-            <li key={event.id} className="relative flex items-center gap-2 py-1 text-[12px] text-ink-secondary">
+            <li key={event.id} className="relative flex items-center gap-2 border-b border-hairline/20 py-1.5 text-[12px] text-ink-secondary last:border-b-0">
               <span
                 aria-hidden="true"
                 className={cn(
-                  "absolute -left-[17px] size-2 rounded-full",
+                  "size-2 shrink-0 rounded-[2px]",
                   event.state === "failed"
                     ? "bg-danger"
                     : event.state === "complete"
@@ -130,6 +147,68 @@ function TaskTimeline({ messages, busy }: { messages: Message[]; busy: boolean }
         </ol>
       )}
     </div>
+  );
+}
+
+function InlineBrowserPreview({ bot }: { bot: Bot }) {
+  const [frame, setFrame] = useState<{ png: string; mime: string; url?: string; title?: string } | null>(null);
+  const inFlight = useRef(false);
+
+  useEffect(() => {
+    let alive = true;
+    const shoot = async () => {
+      if (inFlight.current) return;
+      inFlight.current = true;
+      try {
+        const response = await fetch(`/api/bots/${bot.id}/computer/screenshot`, { method: "POST" });
+        const body = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(body.error ?? "Live browser unavailable");
+        if (alive && typeof body.png === "string" && body.png) {
+          setFrame({
+            png: body.png,
+            mime: body.format === "image/png" || body.format === "png" ? "image/png" : "image/jpeg",
+            url: typeof body.url === "string" ? body.url : undefined,
+            title: typeof body.title === "string" ? body.title : undefined,
+          });
+        }
+      } catch {
+        // Browser pages are created lazily; the next poll will pick it up.
+      } finally {
+        inFlight.current = false;
+      }
+    };
+    void shoot();
+    const timer = window.setInterval(() => void shoot(), bot.busy ? 1500 : 5000);
+    return () => {
+      alive = false;
+      window.clearInterval(timer);
+    };
+  }, [bot.id, bot.busy]);
+
+  return (
+    <section className="mx-auto w-full max-w-[900px] px-3 pt-1 sm:px-5" aria-label="Live browser">
+      <div className="overflow-hidden rounded-xl border border-hairline/40 bg-card shadow-sm">
+        <div className="flex items-center gap-2 border-b border-hairline/35 px-3 py-2 text-[12.5px]">
+          <Monitor size={14} className="text-accent" />
+          <span className="font-medium text-ink">Live browser</span>
+          {bot.busy && <span className="size-1.5 animate-pulse rounded-full bg-accent" aria-label="Agent browsing" />}
+          <span className="ml-auto max-w-[60%] truncate text-[11px] text-ink-secondary" title={frame?.url}>
+            {frame?.title || frame?.url || "Waiting for the agent to open a page…"}
+          </span>
+        </div>
+        <div className="flex aspect-[16/7] min-h-44 items-center justify-center bg-[#f4f4f2]">
+          {frame ? (
+            <img
+              src={`data:${frame.mime};base64,${frame.png}`}
+              alt={`${bot.name}'s live browser`}
+              className="h-full w-full object-contain"
+            />
+          ) : (
+            <BrowserFrameLoader />
+          )}
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -512,7 +591,7 @@ function Bubble({
           {formatTime(message.at)}
         </span>
       </div>
-      <div className={cn("mt-1 flex items-center gap-1 sm:hidden", user ? "justify-end" : "justify-start")}>
+      <div className={cn("mobile-message-actions mt-1 flex w-full items-center gap-1 sm:hidden", user ? "justify-end" : "justify-start")}>
         <span className="px-1 text-[10.5px] tabular-nums text-ink-secondary/70">{formatTime(message.at)}</span>
         <CopyButton text={visibleText} className="opacity-100" />
         {message.kind === "text" && <ReactionBar threadId={bot.threadId} message={message} alwaysVisible />}
@@ -600,7 +679,7 @@ function ActivityChip({ message }: { message: Message }) {
         )}
       >
         {tool.ok === undefined ? (
-          <Loader2 size={13} className="animate-spin" />
+          <InlineSignalLoader label={`${tool.name} running`} />
         ) : failed ? (
           <X size={13} />
         ) : (
@@ -638,21 +717,6 @@ function StreamingBubble({ text }: { text: string }) {
       </div>
     </div>
   );
-}
-
-/** "Working for 12s" that ticks by mutating textContent on an interval —
- * no React commit per second while a turn streams (upstream trick). */
-function WorkingTimer({ since }: { since: number }) {
-  const ref = useRef<HTMLSpanElement>(null);
-  useEffect(() => {
-    const tick = () => {
-      if (ref.current) ref.current.textContent = `Working for ${Math.max(0, Math.round((Date.now() - since) / 1000))}s`;
-    };
-    tick();
-    const timer = setInterval(tick, 1000);
-    return () => clearInterval(timer);
-  }, [since]);
-  return <span ref={ref} className="text-[12.5px] text-ink-secondary" />;
 }
 
 /** The settled transcript, memoized as one unit: during streaming every
@@ -819,6 +883,8 @@ export function ChatView({ bot }: { bot: Bot }) {
   const activeInstance = state.instances.find((instance) => instance.instanceId === bot.modelSelection.instanceId);
   const activeModelLabel = activeInstance?.models.options.find((option) => option.id === bot.modelSelection.model)?.label
     ?? bot.modelSelection.model;
+  const activeTask = bot.tasks?.find((task) => task.threadId === bot.threadId);
+  const taskClosed = Boolean(activeTask?.closedAt);
 
   // only the active branch is rendered; forks stay reachable via ‹ › nav
   const messages = useMemo(() => visibleMessages(bot), [bot]);
@@ -1057,6 +1123,7 @@ export function ChatView({ bot }: { bot: Bot }) {
             </button>
           )}
           <TaskPicker bot={bot} />
+          <SessionCloseButton bot={bot} />
           <ModelPicker bot={bot} className="hidden sm:block" />
           <div className="hidden items-center gap-1 sm:flex">
             <UsageChip bot={bot} />
@@ -1094,6 +1161,7 @@ export function ChatView({ bot }: { bot: Bot }) {
       <div className="flex shrink-0 items-center gap-1.5 border-b border-hairline/30 bg-panel/35 px-3 py-2 sm:hidden">
         <ModelPicker bot={bot} prominent className="min-w-0 flex-1" />
         <TaskPicker bot={bot} />
+        <SessionCloseButton bot={bot} mobile />
         <CallButton bot={bot} />
         <button
           onClick={() => dispatch({ type: "toggleComputer" })}
@@ -1142,6 +1210,10 @@ export function ChatView({ bot }: { bot: Bot }) {
       />
 
       <TaskTimeline messages={messages} busy={bot.busy ?? false} />
+
+      {state.config?.hosted && hasBrowserIntent(
+        [...messages].reverse().find((message) => message.role === "user" && message.kind === "text")?.text ?? "",
+      ) && <InlineBrowserPreview bot={bot} />}
 
       {/* Messages */}
       <div
@@ -1223,16 +1295,10 @@ export function ChatView({ bot }: { bot: Bot }) {
             <StreamingBubble text={streaming} />
           ) : (
             showWorkingDots(bot.busy, streaming, messages.at(-1)) && (
-              <div className="flex justify-start">
-                <div className="flex items-center gap-2.5 rounded-2xl bg-raised px-4 py-3">
-                  <span className="flex items-center gap-1.5">
-                    <span className="size-1.5 animate-bounce rounded-full bg-ink-secondary [animation-delay:0ms]" />
-                    <span className="size-1.5 animate-bounce rounded-full bg-ink-secondary [animation-delay:150ms]" />
-                    <span className="size-1.5 animate-bounce rounded-full bg-ink-secondary [animation-delay:300ms]" />
-                  </span>
-                  <WorkingTimer since={lastUserMessage?.at ?? Date.now()} />
-                </div>
-              </div>
+              <AgentRunStatus
+                since={lastUserMessage?.at ?? Date.now()}
+                browsing={Boolean(lastUserMessage?.text && hasBrowserIntent(lastUserMessage.text))}
+              />
             )
           )}
         </div>
@@ -1254,11 +1320,11 @@ export function ChatView({ bot }: { bot: Bot }) {
           the previous bot's half-written message over. ArrowUp-to-edit is
           gated on busy like the pencil button — editing rewinds the thread,
           which a live turn forbids (the server 409s it). */}
-      <Composer
-        key={bot.id}
-        bot={bot}
-        onEditLast={lastUserMessage && !bot.busy ? () => setEditingId(lastUserMessage.id) : undefined}
-      />
+      {taskClosed ? <div className="border-t border-hairline/30 bg-panel/60 px-4 py-3 text-center text-[12.5px] text-ink-secondary">This task is closed. Use its linked task or create a new task to continue.</div> : <Composer
+          key={bot.id}
+          bot={bot}
+          onEditLast={lastUserMessage && !bot.busy ? () => setEditingId(lastUserMessage.id) : undefined}
+        />}
 
     </main>
   );

@@ -59,7 +59,7 @@ export function TaskPicker({ bot }: { bot: Bot }) {
         disabled={bot.busy}
         title={bot.busy ? "Let this turn finish first" : "New task — a fresh context on this bot"}
         className={cn(
-          "flex items-center gap-1 rounded-full border border-hairline/40 px-2.5 py-1 text-[12.5px] text-ink-secondary hover:bg-raised hover:text-ink disabled:opacity-40",
+          "flex min-h-10 items-center gap-1 rounded-full border border-hairline/40 px-2.5 py-1 text-[12.5px] text-ink-secondary hover:bg-raised hover:text-ink disabled:opacity-40 sm:min-h-0",
           COMPACT_BUBBLE,
         )}
       >
@@ -90,7 +90,7 @@ export function TaskPicker({ bot }: { bot: Bot }) {
         onClick={() => setOpen((o) => !o)}
         title={switchTitle}
         className={cn(
-          "flex max-w-[220px] items-center gap-1.5 rounded-full border border-hairline/40 px-2.5 py-1 text-[12.5px] text-ink-secondary hover:bg-raised hover:text-ink",
+          "flex min-h-10 max-w-[220px] items-center gap-1.5 rounded-full border border-hairline/40 px-2.5 py-1 text-[12.5px] text-ink-secondary hover:bg-raised hover:text-ink sm:min-h-0",
           COMPACT_BUBBLE,
         )}
       >
@@ -101,7 +101,7 @@ export function TaskPicker({ bot }: { bot: Bot }) {
       </button>
 
       {open && (
-        <div className="absolute right-0 top-full z-40 mt-1 w-[300px] overflow-hidden rounded-xl border border-hairline/50 bg-card py-1 shadow-2xl shadow-black/50">
+        <div className="fixed inset-x-2 bottom-[max(.5rem,env(safe-area-inset-bottom))] z-40 max-h-[70dvh] overflow-hidden rounded-xl border border-hairline/50 bg-card py-1 shadow-2xl shadow-black/50 sm:absolute sm:inset-x-auto sm:bottom-auto sm:right-0 sm:top-full sm:mt-1 sm:w-[300px]">
           <div className="max-h-[320px] overflow-y-auto">
             {tasks.map((task) => {
               const active = task.threadId === bot.threadId;
@@ -144,11 +144,15 @@ export function TaskPicker({ bot }: { bot: Bot }) {
                     </button>
                   )}
                   <button
-                    onClick={() => dispatch({ type: "deleteTask", botId: bot.id, threadId: task.threadId })}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      if (!window.confirm(`Delete “${task.title}”? Its conversation will be removed.`)) return;
+                      dispatch({ type: "deleteTask", botId: bot.id, threadId: task.threadId });
+                    }}
                     disabled={bot.busy && active}
                     aria-label="Delete task"
                     title="Delete this task and its conversation"
-                    className="rounded p-1 text-ink-secondary opacity-0 hover:bg-raised hover:text-danger group-hover:opacity-100 disabled:opacity-20"
+                    className="rounded p-1 text-ink-secondary opacity-70 hover:bg-raised hover:text-danger focus-visible:opacity-100 sm:opacity-0 sm:group-hover:opacity-100 disabled:opacity-20"
                   >
                     <Trash2 size={13} />
                   </button>

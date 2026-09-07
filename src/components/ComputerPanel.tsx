@@ -8,6 +8,8 @@ import { useEffect, useRef, useState } from "react";
 import {
   CalendarDays,
   CalendarClock,
+  Check,
+  Circle,
   Hand,
   Loader2,
   Monitor,
@@ -75,6 +77,14 @@ interface LocalVmStatus {
   viewer_url: string;
 }
 
+interface BrowserOperation {
+  id: string;
+  action: "open" | "state" | "text" | "snapshot" | "click" | "fill" | "press" | "close";
+  detail: string;
+  at: number;
+  status: "running" | "completed" | "failed";
+}
+
 function routineScheduleLabel(routine: Routine) {
   if (routine.schedule.type === "once") {
     return new Date(routine.schedule.at).toLocaleString([], {
@@ -115,6 +125,7 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
   const [phase, setPhase] = useState<Phase>("checking");
   const [boxState, setBoxState] = useState<string | null>(null);
   const [polledFrame, setPolledFrame] = useState<{ png: string; mime: string } | null>(null);
+  const [browserOperations, setBrowserOperations] = useState<BrowserOperation[]>([]);
   const [vmFrame, setVmFrame] = useState<string | null>(null);
   // The Local VM's interactive noVNC viewer (passworded, autoconnect). The
   // preview below is a periodic screenshot that swallows clicks — this URL is
@@ -187,6 +198,7 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
     let alive = true;
     setPhase("checking");
     setPolledFrame(null);
+    setBrowserOperations([]);
     setVmFrame(null);
     setVmViewerUrl(null);
     setVmStatus(null);
@@ -197,6 +209,11 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
       return;
     }
     if (bot.computer === "local") {
+      if (state.config?.hosted) {
+        setError("Direct control of this computer is a desktop-app feature and is not available in the web app.");
+        setPhase("local-unavailable");
+        return;
+      }
       if (!providerSupportsLocal) {
         setError("This model engine cannot control this computer. Choose Claude or an ACP engine.");
       }
@@ -204,6 +221,11 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
       return;
     }
     if (bot.computer === "vm") {
+      if (state.config?.hosted) {
+        setError("The Local VM is a desktop-app feature and is not available in the web app. Use the Cloudflare computer instead.");
+        setPhase("vm-unavailable");
+        return;
+      }
       if (!vmSupported) {
         setError("This model engine cannot use the Local VM. Choose Claude or an ACP engine.");
         setPhase("vm-unavailable");
@@ -397,19 +419,25 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
     state.config?.cfComputer?.configured,
   ]);
 
-  // cloud preview: SSE frames win while the bot works; otherwise poll
+  // Cloud preview: SSE frames win when a desktop backend emits them;
+  // otherwise poll the backend. Cloudflare Browser Run is headless but still
+  // exposes the agent's real page as screenshots, so keep this watch-only
+  // preview live as the agent navigates.
   const live = state.screens[bot.id];
   const sseFlowing = Boolean(bot.busy && live);
   const inFlight = useRef(false);
   useEffect(() => {
-    if (phase !== "ready" || cloudBackend === "cloudflare" || sseFlowing || viewerOpen) return;
+    if (phase !== "ready" || sseFlowing || viewerOpen) return;
     let alive = true;
     const shoot = async () => {
       if (inFlight.current) return;
       inFlight.current = true;
       try {
-        const { png, format } = await api(`/api/bots/${bot.id}/computer/screenshot`, { method: "POST" });
-        if (alive) setPolledFrame({ png, mime: format === "jpeg" ? "image/jpeg" : "image/png" });
+        const { png, format, operations } = await api(`/api/bots/${bot.id}/computer/screenshot`, { method: "POST" });
+        if (alive) {
+          setPolledFrame({ png, mime: format === "jpeg" || format === "image/jpeg" ? "image/jpeg" : "image/png" });
+          if (Array.isArray(operations)) setBrowserOperations(operations.slice(-12));
+        }
       } catch {
         /* box mid-command or asleep — next tick */
       } finally {
@@ -417,12 +445,12 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
       }
     };
     void shoot();
-    const timer = setInterval(shoot, 4000);
+    const timer = setInterval(shoot, bot.busy ? 1500 : 4000);
     return () => {
       alive = false;
       clearInterval(timer);
     };
-  }, [phase, cloudBackend, sseFlowing, bot.id, viewerOpen]);
+  }, [phase, cloudBackend, sseFlowing, bot.id, bot.busy, viewerOpen]);
 
   // Local VM preview comes directly from Cua Driver through the harness. It
   // does not use the password-protected noVNC viewer or cloud endpoints.
@@ -722,7 +750,12 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
             {phase === "local" && <span className="text-[11px]">this computer</span>}
             {phase === "vm" && <span className="text-[11px]">Local VM</span>}
             {cloudBackend === "vps" && (phase === "ready" || phase === "starting") && <span className="text-[11px]">self-hosted VPS</span>}
-            {cloudBackend === "cloudflare" && phase === "ready" && <span className="text-[11px]">Cloudflare · headless</span>}
+            {cloudBackend === "cloudflare" && phase === "ready" && (
+              <span className="flex items-center gap-1.5 text-[11px]">
+                {bot.busy && <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-accent" />}
+                Cloudflare · live preview
+              </span>
+            )}
         </div>
         <div className="flex aspect-[16/10] w-full items-center justify-center overflow-hidden rounded-xl bg-card">
           {frameSrc ? (
@@ -746,7 +779,7 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
                   ? cloudBackend === "cloudflare"
                     ? boxState === "archived"
                       ? "Sleeping. Its persistent workspace is safe; the next shell, code, or file task wakes it automatically."
-                      : "Ready for shell, code, and file tasks. This cloud computer has no visual desktop."
+                      : "Waiting for this agent to open a browser page…"
                     : "Waiting for the first frame…"
                   : phase === "vm"
                     ? "Capturing the Local VM screen…"
@@ -808,6 +841,29 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
             </div>
           )}
         </div>
+        {cloudBackend === "cloudflare" && browserOperations.length > 0 && (
+          <div className="mt-3 overflow-hidden rounded-xl border border-hairline/40 bg-card">
+            <div className="border-b border-hairline/30 px-3 py-2 text-[12px] font-medium text-ink">Live operations</div>
+            <div className="max-h-44 overflow-y-auto py-1">
+              {[...browserOperations].reverse().map((operation) => (
+                <div key={operation.id} className="flex items-center gap-2 px-3 py-1.5 text-[11.5px]">
+                  {operation.status === "running" ? (
+                    <Loader2 size={12} className="shrink-0 animate-spin text-accent" />
+                  ) : operation.status === "failed" ? (
+                    <Circle size={12} className="shrink-0 fill-danger text-danger" />
+                  ) : (
+                    <Check size={12} className="shrink-0 text-success" />
+                  )}
+                  <span className="shrink-0 font-medium capitalize text-ink">{operation.action}</span>
+                  <span className="min-w-0 flex-1 truncate text-ink-secondary" title={operation.detail}>{operation.detail}</span>
+                  <span className="shrink-0 tabular-nums text-ink-secondary/70">
+                    {new Date(operation.at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" })}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {error && (
           <div className="mt-2 rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-[12px] text-danger">

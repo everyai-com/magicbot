@@ -7,10 +7,10 @@
 // fence is very likely complete), then highlights and caches — so the settled
 // bubble, a fresh component instance, mounts straight from cache instead of
 // popping from plain to highlighted.
-import { memo, useEffect, useState, type ReactNode } from "react";
+import { memo, useEffect, useRef, useState, type ReactNode } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { Check, Copy } from "lucide-react";
+import { BarChart3, Check, Copy } from "lucide-react";
 
 // tiny highlight cache so revisiting a thread doesn't re-tokenize settled
 // blocks; keys are content-hashed and capped. Streamed partials may land here
@@ -31,6 +31,103 @@ const hash = (s: string) => {
   }
   return (h >>> 0).toString(36);
 };
+
+type ChartDatum = { label: string; value: number };
+type ChartSpec = { type?: "bar" | "line"; title?: string; unit?: string; data: ChartDatum[] };
+
+function chartSpec(code: string): ChartSpec | null {
+  try {
+    const raw = JSON.parse(code) as Partial<ChartSpec>;
+    if (!Array.isArray(raw.data) || raw.data.length < 2 || raw.data.length > 40) return null;
+    const data = raw.data.map((item) => ({ label: String(item?.label ?? "").slice(0, 80), value: Number(item?.value) }));
+    if (data.some((item) => !item.label || !Number.isFinite(item.value))) return null;
+    return {
+      type: raw.type === "line" ? "line" : "bar",
+      title: typeof raw.title === "string" ? raw.title.slice(0, 160) : undefined,
+      unit: typeof raw.unit === "string" ? raw.unit.slice(0, 24) : undefined,
+      data,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function ChartBlock({ code }: { code: string }) {
+  const spec = chartSpec(code);
+  if (!spec) return <CodeBlock code={code} lang="json" streaming={false} />;
+  const values = spec.data.map((item) => item.value);
+  const minimum = Math.min(0, ...values);
+  const maximum = Math.max(0, ...values);
+  const range = maximum - minimum || 1;
+  const points = spec.data.map((item, index) => {
+    const x = 28 + (index / Math.max(1, spec.data.length - 1)) * 504;
+    const y = 186 - ((item.value - minimum) / range) * 148;
+    return `${x},${y}`;
+  }).join(" ");
+
+  return (
+    <figure className="structured-chart my-2 overflow-hidden rounded-xl border border-hairline/35 bg-inset">
+      <figcaption className="flex items-center gap-2 border-b border-hairline/30 px-3 py-2">
+        <BarChart3 size={14} className="text-accent" />
+        <span className="min-w-0 flex-1 truncate text-[12.5px] font-medium text-ink">{spec.title || "Chart"}</span>
+        <span className="text-[10.5px] uppercase tracking-wide text-ink-secondary">{spec.type}</span>
+      </figcaption>
+      {spec.type === "line" ? (
+        <div className="px-2 py-3">
+          <svg viewBox="0 0 560 220" role="img" aria-label={spec.title || "Line chart"} className="h-auto w-full overflow-visible">
+            <line x1="28" y1="186" x2="532" y2="186" className="chart-axis" />
+            <polyline points={points} className="chart-line" />
+            {spec.data.map((item, index) => {
+              const [x, y] = points.split(" ")[index].split(",").map(Number);
+              return <circle key={`${item.label}-${index}`} cx={x} cy={y} r="4" className="chart-point"><title>{`${item.label}: ${item.value}${spec.unit ?? ""}`}</title></circle>;
+            })}
+            {spec.data.map((item, index) => {
+              if (spec.data.length > 12 && index % Math.ceil(spec.data.length / 8) !== 0 && index !== spec.data.length - 1) return null;
+              const x = 28 + (index / Math.max(1, spec.data.length - 1)) * 504;
+              return <text key={`${item.label}-label`} x={x} y="208" textAnchor="middle" className="chart-label">{item.label.slice(0, 12)}</text>;
+            })}
+          </svg>
+        </div>
+      ) : (
+        <div className="chart-bars grid gap-2.5 px-3 py-3">
+          {spec.data.map((item) => (
+            <div key={item.label} className="grid grid-cols-[minmax(5rem,0.7fr)_minmax(7rem,2fr)_auto] items-center gap-2 text-[11.5px]">
+              <span className="truncate text-ink-secondary" title={item.label}>{item.label}</span>
+              <span className="h-2 overflow-hidden rounded-sm bg-control"><span className="block h-full origin-left bg-accent" style={{ transform: `scaleX(${Math.max(0.02, (item.value - minimum) / range)})` }} /></span>
+              <span className="min-w-12 text-right font-mono tabular-nums text-ink">{item.value}{spec.unit ?? ""}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </figure>
+  );
+}
+
+function MarkdownTable({ children }: { children?: ReactNode }) {
+  const tableRef = useRef<HTMLTableElement>(null);
+  const [copied, setCopied] = useState(false);
+  const copy = () => {
+    const rows = Array.from(tableRef.current?.rows ?? []).map((row) =>
+      Array.from(row.cells).map((cell) => cell.innerText.replace(/\s+/g, " ").trim()).join("\t"),
+    );
+    void navigator.clipboard?.writeText(rows.join("\n"));
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1200);
+  };
+  return (
+    <div className="group/table my-2 overflow-hidden rounded-lg border border-hairline/35 bg-inset">
+      <div className="flex items-center justify-between border-b border-hairline/25 px-2.5 py-1 text-[10.5px] uppercase tracking-wide text-ink-secondary">
+        <span>Table</span>
+        <button type="button" onClick={copy} className="rounded p-1 hover:bg-raised hover:text-ink" title="Copy table">
+          {copied ? <Check size={12} className="text-success" /> : <Copy size={12} />}
+        </button>
+      </div>
+      <div className="max-h-[28rem] overflow-auto">
+        <table ref={tableRef} className="structured-table w-full border-collapse text-[13.5px]">{children}</table>
+      </div>
+    </div>
+  );
+}
 
 function CodeBlock({ code, lang, streaming }: { code: string; lang: string; streaming: boolean }) {
   const [html, setHtml] = useState<string | null>(null);
@@ -167,6 +264,7 @@ function ChatMarkdownComponent({ text, streaming = false }: { text: string; stre
             const flat = (n: any): string =>
               typeof n === "string" ? n : Array.isArray(n) ? n.map(flat).join("") : (n?.props?.children ? flat(n.props.children) : "");
             const code = flat(child?.props?.children).replace(/\n$/, "");
+            if (lang === "chart" && !streaming) return <ChartBlock code={code} />;
             return <CodeBlock code={code} lang={lang} streaming={streaming} />;
           },
           img({ src, alt }: { src?: string; alt?: string }) {
@@ -185,31 +283,30 @@ function ChatMarkdownComponent({ text, streaming = false }: { text: string; stre
             );
           },
           a({ href, children }: { href?: string; children?: ReactNode }) {
+            const citation = typeof children === "string" && /^\d{1,3}$/.test(children.trim());
             return (
               <a
                 href={href}
                 target="_blank"
                 rel="noreferrer"
-                className="break-words text-accent underline decoration-accent/40 hover:decoration-accent"
+                className={citation
+                  ? "mx-0.5 inline-flex min-w-4 -translate-y-0.5 items-center justify-center rounded-[4px] bg-accent/12 px-1 font-mono text-[9px] font-semibold leading-4 text-accent-text no-underline hover:bg-accent/20"
+                  : "break-words text-accent underline decoration-accent/40 hover:decoration-accent"}
               >
                 {children}
               </a>
             );
           },
           table({ children }: { children?: ReactNode }) {
-            return (
-              <div className="overflow-x-auto">
-                <table className="w-full border-collapse text-[13.5px]">{children}</table>
-              </div>
-            );
+            return <MarkdownTable>{children}</MarkdownTable>;
           },
           th({ children }: { children?: ReactNode }) {
             return (
-              <th className="border-b border-hairline/40 px-2 py-1.5 text-left font-semibold">{children}</th>
+              <th className="sticky top-0 z-[1] border-b border-hairline/40 bg-panel px-2.5 py-2 text-left text-[11.5px] font-semibold text-ink">{children}</th>
             );
           },
           td({ children }: { children?: ReactNode }) {
-            return <td className="border-b border-hairline/20 px-2 py-1.5 align-top">{children}</td>;
+            return <td className="border-b border-hairline/20 px-2.5 py-2 align-top tabular-nums">{children}</td>;
           },
           ul({ children }: { children?: ReactNode }) {
             return <ul className="list-disc space-y-1 pl-5">{children}</ul>;

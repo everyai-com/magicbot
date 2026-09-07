@@ -48,6 +48,7 @@ export function ReactionBar({ threadId, message, alwaysVisible = false }: { thre
     <div className="relative">
       <div
         ref={anchorRef}
+        data-reaction-bar
         className={cn(
           "flex items-center gap-0.5 rounded-full border border-hairline/40 bg-panel px-1 py-0.5 shadow-sm transition-opacity",
           alwaysVisible ? "opacity-100" : "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100",
@@ -58,7 +59,7 @@ export function ReactionBar({ threadId, message, alwaysVisible = false }: { thre
             key={emoji}
             onClick={() => dispatch({ type: "toggleReaction", threadId, messageId: message.id, emoji })}
             aria-label={`React ${emoji}`}
-            className="rounded-full px-1 py-0.5 text-[13px] leading-none hover:bg-control"
+            className="flex items-center justify-center rounded-full px-1 py-0.5 text-[13px] leading-none hover:bg-control"
           >
             {emoji}
           </button>

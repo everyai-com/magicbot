@@ -7,6 +7,8 @@ import {
   ChevronRight,
   CircleAlert,
   Cloud,
+  Coins,
+  Cpu,
   ExternalLink,
   Laptop,
   Loader2,
@@ -14,6 +16,7 @@ import {
   Play,
   Plus,
   Trash2,
+  Timer,
   Webhook,
   X,
 } from "lucide-react";
@@ -24,6 +27,7 @@ import { cn } from "@/lib/cn";
 import { MAUS_COLORS, type MausState } from "@/lib/mascot";
 import type { Routine, RoutineInput, RoutineRun, RoutineRunOn, RoutineRunStatus } from "@/lib/routines";
 import { api, useStore, type Bot } from "@/state/store";
+import { formatRunDuration } from "../../shared/run-receipt";
 
 const HOUR_HEIGHT = 68;
 const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -362,8 +366,8 @@ export function RoutineEditor({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-5 backdrop-blur-sm" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
-      <div className="max-h-[90vh] w-full max-w-[620px] overflow-y-auto rounded-2xl border border-hairline/60 bg-panel shadow-2xl">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-0 backdrop-blur-sm sm:p-5" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+      <div className="h-full max-h-[100dvh] w-full max-w-[620px] overflow-y-auto border-hairline/60 bg-panel shadow-2xl sm:h-auto sm:max-h-[90vh] sm:rounded-2xl sm:border">
         <div className="sticky top-0 z-10 flex items-center justify-between border-b border-hairline/40 bg-panel/95 px-5 py-4 backdrop-blur">
           <div>
             <div className="text-[17px] font-semibold text-ink">{routine ? "Edit routine" : "New routine"}</div>
@@ -491,8 +495,8 @@ function RoutineDetails({ item, bot, onClose, onEdit }: { item: CalendarItem; bo
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-5 backdrop-blur-sm" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
-      <div className="w-full max-w-[520px] overflow-hidden rounded-2xl border border-hairline/60 bg-panel shadow-2xl">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-0 backdrop-blur-sm sm:p-5" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+      <div className="max-h-[100dvh] w-full max-w-[520px] overflow-hidden bg-panel shadow-2xl sm:rounded-2xl sm:border sm:border-hairline/60">
         <div className="relative overflow-hidden border-b border-hairline/40 px-5 py-5" style={{ background: `linear-gradient(135deg, color-mix(in srgb, ${MAUS_COLORS[bot.color]} 28%, #111), #111)` }}>
           <button onClick={onClose} className="absolute right-3 top-3 rounded-lg p-2 text-white/60 hover:bg-white/10 hover:text-white"><X size={18} /></button>
           <div className="flex items-center gap-4 pr-10">
@@ -523,6 +527,32 @@ function RoutineDetails({ item, bot, onClose, onEdit }: { item: CalendarItem; bo
               {run.deliveryId && <div className="col-span-2 rounded-xl bg-inset p-3"><div className="text-[10px] uppercase tracking-wider text-ink-secondary">Delivery ID</div><div className="mt-1 truncate font-mono text-[11.5px] text-ink">{run.deliveryId}</div></div>}
             </div>
           )}
+          {run && (
+            <div>
+              <div className="mb-1.5 text-[11px] font-medium uppercase tracking-wider text-ink-secondary">Run receipt</div>
+              <div className="grid grid-cols-1 gap-2 min-[390px]:grid-cols-2">
+                <div className="min-w-0 rounded-xl bg-inset p-3">
+                  <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-ink-secondary"><Cpu size={11} />Model</div>
+                  <div className="mt-1 truncate text-[12.5px] text-ink" title={run.model ?? "Not reported"}>{run.model ?? "Not reported"}</div>
+                  <div className="mt-0.5 truncate text-[10.5px] text-ink-secondary">{run.engineId ?? "Legacy run"}</div>
+                </div>
+                <div className="rounded-xl bg-inset p-3">
+                  <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-ink-secondary"><Timer size={11} />Elapsed</div>
+                  <div className="mt-1 text-[12.5px] tabular-nums text-ink">{formatRunDuration(run.durationMs ?? (run.startedAt && run.finishedAt ? run.finishedAt - run.startedAt : null))}</div>
+                </div>
+                <div className="rounded-xl bg-inset p-3">
+                  <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-ink-secondary"><Coins size={11} />Tokens</div>
+                  <div className="mt-1 text-[12.5px] tabular-nums text-ink">{run.inputTokens === undefined && run.outputTokens === undefined ? "Not reported" : `${(run.inputTokens ?? 0).toLocaleString()} in · ${(run.outputTokens ?? 0).toLocaleString()} out`}</div>
+                  <div className="mt-0.5 text-[10.5px] text-ink-secondary">{run.usageSource === "estimated" ? "Estimated from text" : run.usageSource === "provider" ? "Reported by provider" : "Usage unavailable"}</div>
+                </div>
+                <div className="rounded-xl bg-inset p-3">
+                  <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-ink-secondary"><Coins size={11} />Cost</div>
+                  <div className="mt-1 text-[12.5px] tabular-nums text-ink">{typeof run.cost === "number" && Number.isFinite(run.cost) ? `$${run.cost.toFixed(4)}` : "Not reported"}</div>
+                  <div className="mt-0.5 text-[10.5px] text-ink-secondary">{run.costSource === "provider" ? "Reported by provider" : "No invented estimate"}</div>
+                </div>
+              </div>
+            </div>
+          )}
           {visibleInstructions && <div><div className="mb-1.5 text-[11px] font-medium uppercase tracking-wider text-ink-secondary">Instructions</div><div className="whitespace-pre-wrap rounded-xl border border-hairline/40 bg-inset px-3.5 py-3 text-[13px] leading-relaxed text-ink">{visibleInstructions}</div></div>}
           {webhookParts?.eventData && <div><div className="mb-1.5 text-[11px] font-medium uppercase tracking-wider text-ink-secondary">Webhook event data</div><pre className="max-h-56 overflow-auto whitespace-pre-wrap rounded-xl border border-accent/15 bg-accent/5 px-3.5 py-3 font-mono text-[11.5px] leading-relaxed text-ink-secondary">{webhookParts.eventData}</pre></div>}
           {run?.output && <div><div className="mb-1.5 text-[11px] font-medium uppercase tracking-wider text-ink-secondary">Last output</div><div className="max-h-48 overflow-y-auto whitespace-pre-wrap rounded-xl border border-success/20 bg-success/5 px-3.5 py-3 text-[13px] leading-relaxed text-ink">{run.output}</div></div>}
@@ -547,8 +577,8 @@ function RoutineDetails({ item, bot, onClose, onEdit }: { item: CalendarItem; bo
 function PausedRoutines({ routines, bots, onClose, onEdit }: { routines: Routine[]; bots: Bot[]; onClose: () => void; onEdit: (routine: Routine) => void }) {
   const { dispatch } = useStore();
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-5 backdrop-blur-sm" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
-      <div className="w-full max-w-[560px] overflow-hidden rounded-2xl border border-hairline/60 bg-panel shadow-2xl">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-0 backdrop-blur-sm sm:p-5" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+      <div className="max-h-[100dvh] w-full max-w-[560px] overflow-hidden bg-panel shadow-2xl sm:rounded-2xl sm:border sm:border-hairline/60">
         <div className="flex items-center justify-between border-b border-hairline/40 px-5 py-4">
           <div><div className="text-[17px] font-semibold text-ink">Paused routines</div><div className="mt-0.5 text-[12px] text-ink-secondary">They keep their history and will not create new runs.</div></div>
           <button onClick={onClose} className="rounded-lg p-2 text-ink-secondary hover:bg-raised hover:text-ink"><X size={18} /></button>

@@ -2,7 +2,10 @@
 // transport reaches the user's daemon and the official Cua MCP server stays
 // inside one managed container per bot.
 import { createHash } from "node:crypto";
-import { spawn } from "node:child_process";
+import { spawn as nodeSpawn } from "node:child_process";
+
+/** Separable process-spawn seam: production passes `nodeSpawn`; tests pass a fake. */
+export type SpawnFn = typeof nodeSpawn;
 
 import {
   BASE_IMAGE,
@@ -129,7 +132,11 @@ function tailCollector() {
   };
 }
 
-export function defaultRunner(args: string[], options: VpsCommandOptions = {}): Promise<{ stdout: string; stderr: string }> {
+export function defaultRunner(
+  args: string[],
+  options: VpsCommandOptions = {},
+  spawn: SpawnFn = nodeSpawn,
+): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
     const child = spawn("docker", args, {
       shell: false,

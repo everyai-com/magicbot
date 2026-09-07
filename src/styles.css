@@ -1,5 +1,189 @@
 @import "tailwindcss";
 
+@keyframes agent-orb-wave {
+  0%, 100% { opacity: 0.22; transform: scale(0.72); }
+  45% { opacity: 1; transform: scale(1); }
+}
+
+@keyframes agent-run-scan {
+  0% { transform: translateX(-100%); }
+  55%, 100% { transform: translateX(360%); }
+}
+
+@keyframes generative-focus-in {
+  0% { opacity: 0.08; filter: blur(4px); transform: translateY(2px); }
+  55% { opacity: 0.72; filter: blur(1px); }
+  100% { opacity: 1; filter: blur(0); transform: translateY(0); }
+}
+
+@keyframes inline-signal {
+  0%, 100% { transform: scaleY(0.35); opacity: 0.35; }
+  50% { transform: scaleY(1); opacity: 1; }
+}
+
+@keyframes browser-frame-scan {
+  0% { transform: translateY(-120%); opacity: 0; }
+  18% { opacity: 0.75; }
+  78% { opacity: 0.5; }
+  100% { transform: translateY(520%); opacity: 0; }
+}
+
+@keyframes browser-frame-breathe {
+  0%, 100% { opacity: 0.35; }
+  50% { opacity: 0.72; }
+}
+
+.agent-run-card {
+  box-shadow: 0 10px 28px color-mix(in srgb, var(--color-app) 72%, transparent);
+}
+
+.agent-orb {
+  display: grid;
+  grid-template-columns: repeat(3, 4px);
+  place-content: center;
+  gap: 2px;
+  width: 20px;
+  height: 20px;
+  flex: 0 0 20px;
+}
+
+.agent-orb > span {
+  width: 4px;
+  height: 4px;
+  border-radius: 1px;
+  background: var(--color-accent);
+  animation: agent-orb-wave 1.28s ease-in-out infinite;
+}
+
+.agent-orb[data-variant="searching"] > span { animation-duration: 1.15s; }
+.agent-orb[data-variant="finalizing"] > span { animation-duration: 1.28s; }
+.agent-orb[data-variant="finalizing"] > span[data-center] {
+  animation: none;
+  opacity: 0.28;
+  transform: scale(0.7);
+}
+
+.agent-run-progress { overflow: hidden; }
+.agent-run-progress > span {
+  width: 32%;
+  animation: agent-run-scan 2.4s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+.generative-phrase { display: inline-flex; }
+.generative-phrase__char {
+  display: inline-block;
+  animation: generative-focus-in 620ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.inline-signal-loader {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  width: 14px;
+  height: 12px;
+}
+.inline-signal-loader > span {
+  width: 2px;
+  height: 9px;
+  border-radius: 1px;
+  background: var(--color-accent);
+  transform-origin: center;
+  animation: inline-signal 820ms ease-in-out infinite;
+}
+.inline-signal-loader > span:nth-child(2) { animation-delay: 90ms; }
+.inline-signal-loader > span:nth-child(3) { animation-delay: 180ms; }
+.inline-signal-loader > span:nth-child(4) { animation-delay: 270ms; }
+
+.browser-frame-loader {
+  width: min(24rem, 78%);
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--color-hairline) 58%, transparent);
+  border-radius: 9px;
+  background: var(--color-panel);
+  box-shadow: 0 14px 36px color-mix(in srgb, var(--color-app) 76%, transparent);
+}
+.browser-frame-loader__chrome {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  height: 20px;
+  padding-inline: 8px;
+  border-bottom: 1px solid color-mix(in srgb, var(--color-hairline) 45%, transparent);
+}
+.browser-frame-loader__chrome > span {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--color-ink-secondary);
+  opacity: 0.42;
+}
+.browser-frame-loader__canvas {
+  position: relative;
+  height: 108px;
+  overflow: hidden;
+  padding: 14px;
+  background: var(--color-inset);
+}
+.browser-frame-loader__block {
+  position: absolute;
+  display: block;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--color-ink-secondary) 32%, transparent);
+  animation: browser-frame-breathe 1.8s ease-in-out infinite;
+}
+.browser-frame-loader__block--hero { inset: 14px 48% 40px 14px; }
+.browser-frame-loader__block--line-one { top: 20px; right: 14px; width: 39%; height: 7px; animation-delay: 120ms; }
+.browser-frame-loader__block--line-two { top: 36px; right: 24px; width: 32%; height: 5px; animation-delay: 240ms; }
+.browser-frame-loader__scan {
+  position: absolute;
+  inset: 0;
+  height: 28px;
+  background: linear-gradient(to bottom, transparent, color-mix(in srgb, var(--color-accent) 25%, transparent), transparent);
+  animation: browser-frame-scan 2.2s linear infinite;
+}
+
+.structured-table tbody tr { transition: background-color 160ms ease; }
+.structured-table tbody tr:hover { background: color-mix(in srgb, var(--color-raised) 48%, transparent); }
+.structured-table tbody tr:last-child td { border-bottom: 0; }
+.structured-table th:not(:first-child),
+.structured-table td:not(:first-child) { border-left: 1px solid color-mix(in srgb, var(--color-hairline) 36%, transparent); }
+
+.structured-chart .chart-axis {
+  stroke: color-mix(in srgb, var(--color-hairline) 80%, transparent);
+  stroke-width: 1;
+}
+.structured-chart .chart-line {
+  fill: none;
+  stroke: var(--color-accent);
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  filter: drop-shadow(0 4px 8px color-mix(in srgb, var(--color-accent) 28%, transparent));
+}
+.structured-chart .chart-point {
+  fill: var(--color-panel);
+  stroke: var(--color-accent);
+  stroke-width: 2.5;
+}
+.structured-chart .chart-label {
+  fill: var(--color-ink-secondary);
+  font-size: 9px;
+}
+.chart-bars > div > span:nth-child(2) > span {
+  transition: transform 500ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-orb > span,
+  .agent-run-progress > span,
+  .generative-phrase__char,
+  .inline-signal-loader > span,
+  .browser-frame-loader__block,
+  .browser-frame-loader__scan { animation: none; }
+  .agent-orb > span { opacity: 0.75; transform: none; }
+  .agent-run-progress > span { width: 100%; opacity: 0.5; }
+}
+
 /* ─────────────────────────────────────────────────────────────────────────
    SKINS
 
@@ -274,6 +458,29 @@ body,
 #root {
   height: 100dvh;
   min-height: 100svh;
+  box-sizing: border-box;
+  padding-top: env(safe-area-inset-top);
+}
+
+/* Compact toolbars may stay visually quiet on phones, but their interactive
+   area must remain comfortable for touch. Horizontal scrolling is preferable
+   to squeezing or wrapping message actions into the transcript. */
+@media (max-width: 639px), (pointer: coarse) {
+  .mobile-message-actions {
+    max-width: 100%;
+    min-height: 40px;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+  }
+
+  .mobile-message-actions::-webkit-scrollbar { display: none; }
+  .mobile-message-actions > button,
+  .mobile-message-actions > div > button,
+  .mobile-message-actions [data-reaction-bar] button {
+    min-width: 36px;
+    min-height: 36px;
+  }
 }
 
 body {

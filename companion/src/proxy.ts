@@ -15,6 +15,7 @@ import { request as httpRequest, type IncomingMessage, type ServerResponse } fro
 
 import { bearerToken } from "./devices.ts";
 import { denyReason, isCloudDesktopJoin } from "./routes.ts";
+import type { JsonValue } from "../../shared/json.ts";
 import { createSseScrubber, isJson, scrub } from "./wire.ts";
 
 /** What the forwarding handler needs from the process around it. */
@@ -290,9 +291,9 @@ export function createProxyHandler(options: ProxyOptions) {
           // lied, or the harness sent an empty 204. There is nothing to
           // redact in bytes that do not read as an object, so forwarding
           // them verbatim is correct.
-          let parsed: unknown;
+          let parsed: JsonValue | undefined;
           try {
-            parsed = JSON.parse(body);
+            parsed = JSON.parse(body) as JsonValue;
           } catch {
             forward(body, harness.headers, harness.statusCode ?? 200);
             return;
