@@ -292,7 +292,14 @@ const CLAUDE_TOKEN_URL = "https://console.anthropic.com/v1/oauth/token";
 const CLAUDE_MODELS = ["claude-sonnet-5", "claude-opus-5", "claude-haiku-4-5-20251001"];
 const encoder = new TextEncoder();
 
-function json(value: unknown, status = 200, headers: HeadersInit = {}): Response {
+interface HttpJsonBody {
+  [key: string]: JsonValue | undefined;
+}
+
+/** Every HTTP response body. `HttpJsonBody` covers owner-typed payloads
+ * (Bot, rows, result unions) whose precise JSON shape callers already know;
+ * `JsonValue` covers decoded-JSON values flowing back out. */
+function json(value: JsonValue | HttpJsonBody | object, status = 200, headers: HeadersInit = {}): Response {
   return new Response(JSON.stringify(value), {
     status,
     headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store", ...headers },
@@ -438,7 +445,7 @@ async function freshClaudeCredential(env: Env, userId: string): Promise<ClaudeCr
   return fresh;
 }
 
-async function claudeRequest(env: Env, userId: string, body: Record<string, unknown>): Promise<Response> {
+async function claudeRequest(env: Env, userId: string, body: JsonRecord): Promise<Response> {
   const credential = await freshClaudeCredential(env, userId);
   return fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
@@ -1128,16 +1135,28 @@ async function mcpRequest(
   return { payload: parseMcpPayload(text), session: response.headers.get("mcp-session-id") ?? session };
 }
 
-async function connectorTools(env: Env, userId: string): Promise<{ tools: Array<Record<string, unknown>>; session: string }> {
+interface ConnectorToolDef {
+  name: string;
+  description: string;
+  parameters: JsonValue;
+  [key: string]: JsonValue | undefined;
+}
+
+async function connectorTools(env: Env, userId: string): Promise<{ tools: ConnectorToolDef[]; session: string }> {
   const initialized = await mcpRequest(env, userId, "", "initialize", {
     protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "magicbot-web", version: "1.0" },
   });
   const listed = await mcpRequest(env, userId, initialized.session, "tools/list");
-  const result = (listed.payload.result ?? {}) as { tools?: Array<{ name?: string; description?: string; inputSchema?: Record<string, unknown> }> };
-  const tools = (result.tools ?? []).filter((tool) => tool.name).slice(0, 30).map((tool) => ({
-    name: tool.name!, description: tool.description ?? `Use connected-app tool ${tool.name}`,
-    parameters: tool.inputSchema ?? { type: "object", properties: {} },
-  }));
+  const result = listed.payload.result;
+  const toolList = isJsonRecord(result) && Array.isArray(result.tools) ? result.tools : [];
+  const tools = toolList.flatMap((tool): ConnectorToolDef[] => {
+    if (!isJsonRecord(tool) || typeof tool.name !== "string") return [];
+    return [{
+      name: tool.name,
+      description: typeof tool.description === "string" ? tool.description : `Use connected-app tool ${tool.name}`,
+      parameters: tool.inputSchema ?? { type: "object", properties: {} },
+    }];
+  }).slice(0, 30);
   return { tools, session: listed.session };
 }
 
@@ -1568,11 +1587,19 @@ const BROWSER_TOOL_SPECS = [
   { name: "browser_press", description: "Press a key or key chord on this agent's browser page.", properties: { key: { type: "string" } }, required: ["key"] },
 ] as const;
 
-function hostedBrowserTools(schemaKey: "input_schema" | "parameters"): Array<Record<string, unknown>> {
-  return BROWSER_TOOL_SPECS.map((tool) => ({
+interface HostedBrowserTool {
+  name: string;
+  description: string;
+  input_schema?: JsonValue;
+  parameters?: JsonValue;
+  [key: string]: JsonValue | undefined;
+}
+
+function hostedBrowserTools(schemaKey: "input_schema" | "parameters"): HostedBrowserTool[] {
+  return BROWSER_TOOL_SPECS.map((tool): HostedBrowserTool => ({
     name: tool.name,
     description: tool.description,
-    [schemaKey]: { type: "object", properties: tool.properties, required: tool.required },
+    [schemaKey]: { type: "object", properties: { ...tool.properties }, required: [...tool.required] },
   }));
 }
 
@@ -1625,9 +1652,9 @@ async function hostedBrowserCall(env: Env, userId: string, botId: string, name: 
   return env.COMPUTER.browser(hostedComputerId(userId, botId), action, args);
 }
 
-function anthropicPromptContent(content: string | ModelContentPart[]): Array<Record<string, unknown>> {
+function anthropicPromptContent(content: string | ModelContentPart[]): JsonValue[] {
   if (typeof content === "string") return [{ type: "text", text: content }];
-  const blocks: Array<Record<string, unknown>> = [];
+  const blocks: JsonValue[] = [];
   for (const part of content) {
     if (part.type === "text") {
       blocks.push({ type: "text", text: part.text });
@@ -1641,12 +1668,12 @@ function anthropicPromptContent(content: string | ModelContentPart[]): Array<Rec
 }
 
 async function anthropicReply(env: Env, userId: string, bot: Bot, text: string, context = "", unattended = false): Promise<string> {
-  const messages: Array<Record<string, unknown>> = promptHistory(bot)
+  const messages: HttpJsonBody[] = promptHistory(bot)
     .filter((message) => message.kind === "text")
     .map((message) => ({ role: message.role === "bot" ? "assistant" : "user", content: message.text }));
   messages.push({ role: "user", content: anthropicPromptContent(await modelContentForPrompt(env, userId, text)) });
 
-  const tools: Array<Record<string, unknown>> = [{
+  const tools: HttpJsonBody[] = [{
     name: "computer_exec",
     description: "Run a shell command in this bot's private persistent Cloudflare Linux computer.",
     input_schema: { type: "object", properties: { command: { type: "string" } }, required: ["command"] },
@@ -1693,10 +1720,10 @@ async function anthropicReply(env: Env, userId: string, bot: Bot, text: string, 
       return answer || "Claude completed without a text reply.";
     }
     messages.push({ role: "assistant", content });
-    const results: Array<Record<string, unknown>> = [];
+    const results: HttpJsonBody[] = [];
     for (const [callIndex, call] of calls.entries()) {
       const args = call.input ?? {};
-      let result: unknown;
+      let result: JsonValue | undefined;
       const kind: HostedToolKind | null = call.name === "computer_exec" ? "computer" : call.name === "generate_image" ? "image" : call.name && BROWSER_TOOL_SPECS.some((tool) => tool.name === call.name) ? "browser" : call.name && connectorToolNames.has(call.name) ? "connector" : null;
       const gate = kind && call.name ? await governHostedTool(env, userId, bot.id, kind, call.name, args, unattended) : null;
       if (gate && !gate.allow) {
@@ -1739,7 +1766,7 @@ async function aiReply(env: Env, userId: string, bot: Bot, text: string, forceBr
     content: message.text,
   }));
   const userContent = await modelContentForPrompt(env, userId, text);
-  const messages: Array<Record<string, unknown>> = [
+  const messages: HttpJsonBody[] = [
       {
         role: "system",
         content: [
@@ -1760,7 +1787,7 @@ async function aiReply(env: Env, userId: string, bot: Bot, text: string, forceBr
       ...history,
       { role: "user", content: userContent },
   ];
-  const tools: Array<Record<string, unknown>> = [{
+  const tools: HttpJsonBody[] = [{
     name: "computer_exec",
     description: "Run a shell command in this bot's private persistent Cloudflare Linux computer. Use it for coding, calculations, files, and command-line tasks.",
     parameters: {
@@ -2101,7 +2128,7 @@ const CURATED_CONNECTORS = [
 const TEAM_LIBRARY_REPOSITORY = "https://github.com/milind-soni/openmausbot-teams";
 const TEAM_LIBRARY_RAW = "https://raw.githubusercontent.com/milind-soni/openmausbot-teams/main";
 
-async function fetchJsonLimited(url: string, maxBytes = 1_000_000): Promise<unknown> {
+async function fetchJsonLimited(url: string, maxBytes = 1_000_000): Promise<JsonValue> {
   const response = await fetch(url, { headers: { accept: "application/json" }, redirect: "manual", signal: AbortSignal.timeout(12_000) });
   if (response.status >= 300 && response.status < 400) throw new Error("GitHub returned an unexpected redirect");
   if (!response.ok) throw new Error(`GitHub returned HTTP ${response.status}`);
@@ -2109,7 +2136,7 @@ async function fetchJsonLimited(url: string, maxBytes = 1_000_000): Promise<unkn
   if (announced > maxBytes) throw new Error("The remote file is too large");
   const text = await response.text();
   if (encoder.encode(text).byteLength > maxBytes) throw new Error("The remote file is too large");
-  return JSON.parse(text);
+  return JSON.parse(text) as JsonValue;
 }
 
 async function fetchCaptureText(input: string): Promise<{ url: string; content: string }> {
@@ -2163,7 +2190,7 @@ async function connectorRequest(env: Env, userId: string, path: string, init: Re
 }
 
 async function connectorJson(response: Response): Promise<Response> {
-  const body = await response.json<unknown>().catch(() => ({ error: "Connected-app service returned an invalid response" }));
+  const body = await response.json<JsonValue>().catch(() => ({ error: "Connected-app service returned an invalid response" }));
   return json(body, response.status);
 }
 
