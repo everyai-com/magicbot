@@ -286,13 +286,10 @@ store.seedIfEmpty();
 const wireTask = ({ resumeCursors, lastInstanceId, ...task }: TaskRecord) => task;
 
 const wireBot = (bot: NonNullable<ReturnType<typeof store.bot>>) => {
-  const { resumeCursors, tasks, ...rest } = bot;
-  return {
-    ...rest,
-    cloudBackend: rest.cloudBackend ?? "cloudflare",
-    avatarUrl: rest.avatarUrl ?? null,
-    ...(tasks ? { tasks: tasks.map(wireTask) } : {}),
-  };
+  const { resumeCursors: _cursors, tasks, ...rest } = bot;
+  const wire = { ...rest, cloudBackend: rest.cloudBackend ?? "cloudflare" };
+  if (tasks) return { ...wire, tasks: tasks.map(wireTask) };
+  return wire;
 };
 
 /** Profile URLs are app-owned references, not merely strings with a trusted
