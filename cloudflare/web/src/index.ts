@@ -528,16 +528,17 @@ const AUTH_HEADERS: HeadersInit = {
   "referrer-policy": "no-referrer",
   "x-frame-options": "DENY",
   // Auth pages are static HTML with inline styles and (optionally) the
-  // Cloudflare Turnstile widget. `script-src-elem` is set explicitly:
-  // without it the two Cloudflare first-party scripts (Speed Brain
-  // speculation rules at /cdn-cgi/speculation, Web Analytics beacon)
-  // fall back to `default-src 'none'` and log console errors. Everything
-  // else stays blocked.
+  // Cloudflare Turnstile widget. `script-src-elem` / `script-src-attr`
+  // are set explicitly: without them Cloudflare's first-party scripts
+  // (Speed Brain speculation rules at /cdn-cgi/speculation, Web Analytics
+  // beacon) fall back to `default-src 'none'`. The speculation-rules JSON
+  // fetch additionally needs `connect-src`. Everything else stays blocked.
   "content-security-policy":
     "default-src 'none'; style-src 'unsafe-inline'; " +
     "script-src 'self' https://challenges.cloudflare.com https://static.cloudflareinsights.com https://bots.magicteams.ai; " +
     "script-src-elem 'self' https://challenges.cloudflare.com https://static.cloudflareinsights.com https://bots.magicteams.ai; " +
-    "frame-src https://challenges.cloudflare.com; connect-src 'self' https://cloudflareinsights.com; " +
+    "script-src-attr 'none'; " +
+    "frame-src https://challenges.cloudflare.com; connect-src 'self' https://cloudflareinsights.com https://bots.magicteams.ai; " +
     "img-src 'self' data:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
 };
 
