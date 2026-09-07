@@ -117,6 +117,15 @@ interface User {
   name: string;
 }
 
+interface TaskTranscript {
+  messages: Message[];
+  activeLeafId?: string | null;
+}
+
+interface MessageCard {
+  [key: string]: JsonValue | undefined;
+}
+
 interface Message {
   id: string;
   role: "bot" | "user";
@@ -126,7 +135,7 @@ interface Message {
   parentId: string | null;
   from?: { botId: string; name: string; color: string };
   reactions?: Array<{ emoji: string; by: string }>;
-  [key: string]: unknown;
+  card?: MessageCard;
 }
 
 interface Group {
@@ -139,7 +148,8 @@ interface Group {
   unread: boolean;
   createdAt: number;
   messages: Message[];
-  [key: string]: unknown;
+  setupCompletedAt?: number | null;
+  setupSkippedAt?: number | null;
 }
 
 interface Routine {
@@ -160,6 +170,15 @@ interface Routine {
 interface RoutineRun {
   id: string;
   routineId: string;
+  threadId?: string;
+  engineId?: string;
+  model?: string;
+  inputTokens?: number;
+  outputTokens?: number;
+  usageSource?: string;
+  cost?: number | null;
+  costSource?: string;
+  durationMs?: number;
   routineName: string;
   prompt: string;
   botId: string;
@@ -174,7 +193,6 @@ interface RoutineRun {
   output?: string;
   error?: string;
   seenAt?: number;
-  [key: string]: unknown;
 }
 
 interface WebhookRecord {
@@ -188,12 +206,12 @@ interface WebhookRecord {
   createdAt: number;
   updatedAt: number;
   deliveryCount: number;
+  lastPayload?: JsonValue;
   verificationPending?: boolean;
   verifiedAt?: number;
   lastReceivedAt?: number;
   lastRunId?: string;
   eventTypes?: string[];
-  [key: string]: unknown;
 }
 
 interface Bot {
@@ -205,9 +223,24 @@ interface Bot {
   notifications: boolean;
   color: string;
   personality?: "calm" | "energetic" | "curious" | "analytical" | "creative" | "friendly";
+  mascotExpression?: string;
+  avatarUrl?: string;
+  avatarCrop?: string;
   unread: boolean;
   busy: boolean;
   activity: "idle";
+  hidden?: boolean;
+  chiefOfStaff?: boolean;
+  approvePeerComms?: boolean;
+  composio?: boolean;
+  cwd?: string;
+  autoApprove?: boolean;
+  alwaysAllow?: boolean;
+  speakReplies?: boolean;
+  voice?: string;
+  pinned?: boolean;
+  section?: string;
+  pinnedMessageId?: string | null;
   modelSelection: { instanceId: string; model: string; effort?: "none" | "low" | "medium" | "high" | "xhigh" };
   computer: "cloud";
   cloudBackend: "cloudflare";
@@ -215,7 +248,14 @@ interface Bot {
   tasks: Array<{ threadId: string; title: string; createdAt: number; closedAt?: number; closeoutId?: string; continuedInThreadId?: string }>;
   messages: Message[];
   activeLeafId: string | null;
-  [key: string]: unknown;
+  memory?: string;
+  memoryTopics?: Record<string, string>;
+  specialistId?: string;
+  specialistBundle?: string;
+  specialistSummary?: string;
+  specialistStarterPrompts?: string[];
+  recommendedCapabilities?: string[];
+  _taskMessages?: Record<string, TaskTranscript>;
 }
 
 const PASSWORD_RESET_AGE = 30 * 60;
@@ -4028,7 +4068,7 @@ async function api(request: Request, env: Env, user: User, path: string, ctx: Ex
     if (request.method === "PATCH") {
       const body = await request.json<Partial<WebhookRecord>>();
       for (const key of ["name", "prompt", "botId", "runOn", "enabled", "verificationPending", "eventTypes"] as const) {
-        if (body[key] !== undefined) (webhook as Record<string, unknown>)[key] = body[key];
+        if (body[key] !== undefined) webhook[key] = body[key] as never;
       }
       webhook.updatedAt = Date.now();
       await saveWebhook(env, user.id, webhook);
@@ -4181,9 +4221,9 @@ async function api(request: Request, env: Env, user: User, path: string, ctx: Ex
       return json({ ok: true });
     }
     if (request.method === "PATCH") {
-      const body = await request.json<Record<string, unknown>>();
-      for (const key of ["name", "memberIds", "defaultResponder", "bulletin", "unread", "section", "pinnedMessageId"] as const) {
-        if (body[key] !== undefined) (group as Record<string, unknown>)[key] = body[key];
+      const body = await request.json<Partial<Group>>();
+      for (const key of ["name", "memberIds", "defaultResponder", "bulletin", "unread"] as const) {
+        if (body[key] !== undefined) group[key] = body[key] as never;
       }
       await saveRecord(env, "groups", user.id, group.id, group, group.createdAt);
       return json({ group });
@@ -4803,7 +4843,7 @@ async function api(request: Request, env: Env, user: User, path: string, ctx: Ex
       if (bot.tasks.length <= 1) return json({ error: "A bot keeps at least one task" }, 400);
       const deletingActive = bot.threadId === threadId;
       bot.tasks = bot.tasks.filter((item) => item.threadId !== threadId);
-      const taskMessages = (bot._taskMessages ?? {}) as Record<string, unknown>;
+      const taskMessages = bot._taskMessages ?? {};
       delete taskMessages[threadId];
       bot._taskMessages = taskMessages;
       if (deletingActive) {
@@ -4864,8 +4904,10 @@ async function api(request: Request, env: Env, user: User, path: string, ctx: Ex
     if (!bot) return json({ error: "Bot not found" }, 404);
     const message = bot.messages.find((item) => item.id === decodeURIComponent(cardMatch[2]));
     if (!message) return json({ error: "Card not found" }, 404);
-    const patch = await request.json<Record<string, unknown>>();
-    message.card = { ...((message.card ?? {}) as object), ...patch };
+    const patch = await request.json<JsonRecord>();
+    const card: MessageCard = { ...(message.card ?? {}) };
+    for (const [key, value] of Object.entries(patch)) card[key] = value;
+    message.card = card;
     await saveBot(env, user.id, bot);
     return json({ message });
   }
@@ -4886,13 +4928,13 @@ async function api(request: Request, env: Env, user: User, path: string, ctx: Ex
       return json({ ok: true });
     }
     if (request.method === "PATCH") {
-      const patch = await request.json<Record<string, unknown>>();
+      const patch = await request.json<Partial<Bot>>();
       const personalities = new Set(["calm", "energetic", "curious", "analytical", "creative", "friendly"]);
       if (patch.personality !== undefined && !personalities.has(String(patch.personality))) {
         return json({ error: "personality is not supported" }, 400);
       }
-      const allowed = ["name", "title", "description", "notifications", "color", "mascotExpression", "personality", "avatarUrl", "avatarCrop", "unread", "modelSelection", "computer", "cloudBackend", "cwd", "autoApprove", "alwaysAllow", "speakReplies", "voice", "pinned", "hidden", "section", "pinnedMessageId", "chiefOfStaff", "approvePeerComms", "composio"];
-      for (const key of allowed) if (key in patch) bot[key] = patch[key];
+      const allowed = ["name", "title", "description", "notifications", "color", "mascotExpression", "personality", "avatarUrl", "avatarCrop", "unread", "modelSelection", "computer", "cloudBackend", "cwd", "autoApprove", "alwaysAllow", "speakReplies", "voice", "pinned", "hidden", "section", "pinnedMessageId", "chiefOfStaff", "approvePeerComms", "composio"] as const;
+      for (const key of allowed) if (patch[key] !== undefined) bot[key] = patch[key] as never;
       await saveBot(env, user.id, bot);
       const { messages: _messages, ...announcement } = bot;
       return json({ bot: announcement });
