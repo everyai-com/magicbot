@@ -12,10 +12,12 @@ export type JsonValue =
   | boolean
   | null
   | JsonValue[]
-  | { [key: string]: JsonValue };
+  | JsonRecord;
 
 /** A decoded JSON object whose members may be absent. */
-export type JsonRecord = Record<string, JsonValue | undefined>;
+export interface JsonRecord {
+  [key: string]: JsonValue | undefined;
+}
 
 /** A decoded JSON object with all members present. */
 export type JsonObject = Record<string, JsonValue>;

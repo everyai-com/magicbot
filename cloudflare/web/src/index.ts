@@ -7,6 +7,7 @@ import {
   type ChatGPTTokens,
 } from "@opencoredev/loginwithchatgpt-core";
 import { automaticBotAppearance } from "../../../shared/bot-personality";
+import { isJsonRecord, type JsonRecord, type JsonValue } from "../../../shared/json";
 import {
   decideAutonomy,
   isAutonomyMode,
@@ -51,6 +52,15 @@ import {
   withinRateLimit,
 } from "./auth";
 
+interface ComputerRunResult {
+  ok: boolean;
+  stdout?: string;
+  stderr?: string;
+  exitCode?: number;
+  error?: string | null;
+  content?: string;
+}
+
 interface Env {
   DB: D1Database;
   AI: Ai;
@@ -62,16 +72,16 @@ interface Env {
     request(userId: string, apiKey: string, path: string, method?: string, body?: string, mcpSession?: string): Promise<{ status: number; body: string; contentType?: string; mcpSession?: string }>;
   };
   COMPUTER: {
-    status(botId: string): Promise<{ running: boolean; exit: unknown }>;
+    status(botId: string): Promise<{ running: boolean; exit: ComputerRunResult | null }>;
     exec(botId: string, command: string): Promise<{ ok: boolean; stdout: string; stderr: string; exitCode: number }>;
-    run(botId: string, code: string, language?: "python" | "javascript" | "typescript"): Promise<unknown>;
-    writeFile(botId: string, path: string, content: string): Promise<unknown>;
-    readFile(botId: string, path: string): Promise<unknown>;
-    sleep(botId: string): Promise<unknown>;
-    destroy(botId: string): Promise<unknown>;
-    browser(botId: string, action: "open" | "state" | "text" | "snapshot" | "click" | "fill" | "press" | "screenshot" | "close", input?: Record<string, unknown>): Promise<Record<string, unknown>>;
+    run(botId: string, code: string, language?: "python" | "javascript" | "typescript"): Promise<ComputerRunResult>;
+    writeFile(botId: string, path: string, content: string): Promise<ComputerRunResult>;
+    readFile(botId: string, path: string): Promise<ComputerRunResult>;
+    sleep(botId: string): Promise<ComputerRunResult>;
+    destroy(botId: string): Promise<ComputerRunResult>;
+    browser(botId: string, action: "open" | "state" | "text" | "snapshot" | "click" | "fill" | "press" | "screenshot" | "close", input?: Record<string, JsonValue | undefined>): Promise<Record<string, JsonValue | undefined>>;
     codex(botId: string, authJson: string, prompt: string, model: string, effort?: "low" | "medium" | "high" | "xhigh"): Promise<{ ok: boolean; text: string; stderr: string; exitCode: number; runtime: string }>;
-    whatsapp(botId: string, action: "start" | "status" | "events" | "send" | "stop" | "logout", input?: Record<string, unknown>): Promise<Record<string, unknown>>;
+    whatsapp(botId: string, action: "start" | "status" | "events" | "send" | "stop" | "logout", input?: Record<string, JsonValue | undefined>): Promise<Record<string, JsonValue | undefined>>;
   };
 }
 
@@ -1049,17 +1059,26 @@ async function generatedImage(env: Env, userId: string, prompt: string, name = "
   return `/api/attachments/${id}`;
 }
 
-function parseMcpPayload(text: string): Record<string, unknown> {
+function parseMcpPayload(text: string): JsonRecord {
   const trimmed = text.trim();
   if (!trimmed) return {};
-  if (trimmed.startsWith("{")) return JSON.parse(trimmed) as Record<string, unknown>;
+  const decode = (raw: string): JsonRecord => {
+    const parsed = JSON.parse(raw) as JsonValue;
+    return isJsonRecord(parsed) ? parsed : {};
+  };
+  if (trimmed.startsWith("{")) return decode(trimmed);
   const data = trimmed.split(/\r?\n/).filter((line) => line.startsWith("data:")).map((line) => line.slice(5).trim()).join("");
-  return data ? JSON.parse(data) as Record<string, unknown> : {};
+  return data ? decode(data) : {};
+}
+
+interface McpCallResult {
+  payload: JsonRecord;
+  session: string;
 }
 
 async function mcpRequest(
-  env: Env, userId: string, session: string, method: string, params: Record<string, unknown> = {}, id = crypto.randomUUID(),
-): Promise<{ payload: Record<string, unknown>; session: string }> {
+  env: Env, userId: string, session: string, method: string, params: JsonRecord = {}, id = crypto.randomUUID(),
+): Promise<McpCallResult> {
   const response = await connectorRequest(env, userId, "/v1/mcp", {
     method: "POST", headers: session ? { "mcp-session-id": session } : {},
     body: JSON.stringify({ jsonrpc: "2.0", id, method, params }),
@@ -1223,15 +1242,14 @@ function contextChunks(text: string, maxChunks = 80): string[] {
   return chunks;
 }
 
-function connectorText(value: unknown, depth = 0): string {
-  if (depth > 6 || value == null) return "";
+function connectorText(value: JsonValue | undefined, depth = 0): string {
+  if (depth > 6 || value === null || value === undefined) return "";
   if (typeof value === "string") return value;
   if (typeof value === "number" || typeof value === "boolean") return String(value);
   if (Array.isArray(value)) return value.map((item) => connectorText(item, depth + 1)).filter(Boolean).join("\n");
-  if (typeof value === "object") {
-    const record = value as Record<string, unknown>;
-    if (record.type === "image" || record.type === "audio") return "";
-    return Object.entries(record).map(([key, item]) => {
+  if (isJsonRecord(value)) {
+    if (value.type === "image" || value.type === "audio") return "";
+    return Object.entries(value).map(([key, item]) => {
       const text = connectorText(item, depth + 1);
       return text ? `${key}: ${text}` : "";
     }).filter(Boolean).join("\n");
@@ -1281,11 +1299,14 @@ async function storeSourceContent(env: Env, userId: string, source: ContextSourc
 
 async function syncContextSource(env: Env, userId: string, source: ContextSourceRow): Promise<void> {
   try {
-    const config = JSON.parse(source.config || "{}") as { attachmentId?: string; arguments?: Record<string, unknown> };
+    const rawConfig = JSON.parse(source.config || "{}") as JsonValue;
+    const config = isJsonRecord(rawConfig) ? rawConfig : {};
+    const sourceArguments = isJsonRecord(config.arguments) ? config.arguments : {};
+    const attachmentId = typeof config.attachmentId === "string" ? config.attachmentId : "";
     let text = "";
     if (source.source_type === "attachment") {
       const row = await env.DB.prepare("SELECT object_key, mime, name, bytes FROM attachments WHERE id = ? AND user_id = ?")
-        .bind(config.attachmentId ?? "", userId).first<{ object_key: string; mime: string; name: string; bytes: number }>();
+        .bind(attachmentId, userId).first<{ object_key: string; mime: string; name: string; bytes: number }>();
       if (!row) throw new Error("Uploaded file no longer exists");
       if (!isReadableAttachment(row.mime, row.name) || row.bytes > 2_000_000) throw new Error("Only text-based files up to 2 MB can be indexed");
       const object = await env.FILES.get(row.object_key);
@@ -1296,7 +1317,7 @@ async function syncContextSource(env: Env, userId: string, source: ContextSource
       if (!isReadOnlyConnectorTool(tool)) throw new Error("Only read-only connector tools can be indexed");
       const available = await connectorTools(env, userId);
       if (!available.tools.some((entry) => entry.name === tool)) throw new Error("Connected-app read tool is not available");
-      const called = await mcpRequest(env, userId, available.session, "tools/call", { name: tool, arguments: config.arguments ?? {} });
+      const called = await mcpRequest(env, userId, available.session, "tools/call", { name: tool, arguments: sourceArguments });
       text = connectorText(called.payload.result ?? called.payload).slice(0, 500_000);
     }
     if (!text.trim()) throw new Error("The source returned no readable text");
@@ -1494,7 +1515,7 @@ type AnthropicContentBlock = {
   text?: string;
   id?: string;
   name?: string;
-  input?: Record<string, unknown>;
+  input?: JsonRecord;
 };
 
 const BROWSER_TOOL_SPECS = [
@@ -1515,14 +1536,14 @@ function hostedBrowserTools(schemaKey: "input_schema" | "parameters"): Array<Rec
   }));
 }
 
-type HostedToolCall = { id?: string; name?: string; arguments?: Record<string, unknown> | string };
+type HostedToolCall = { id?: string; name?: string; arguments?: JsonRecord | string };
 
-function toolArguments(call: HostedToolCall): Record<string, unknown> {
+function toolArguments(call: HostedToolCall): JsonRecord {
   if (typeof call.arguments !== "string") return call.arguments ?? {};
   try {
-    const parsed = JSON.parse(call.arguments);
-    if (typeof parsed === "string") return JSON.parse(parsed) as Record<string, unknown>;
-    return parsed as Record<string, unknown>;
+    const parsed = JSON.parse(call.arguments) as JsonValue;
+    if (typeof parsed === "string") return JSON.parse(parsed) as JsonRecord;
+    return isJsonRecord(parsed) ? parsed : {};
   } catch {
     // Some Workers AI models occasionally serialize a tool call as text with
     // an unescaped nested JSON string. Recover only the public URL; never
@@ -1537,9 +1558,12 @@ function toolArguments(call: HostedToolCall): Record<string, unknown> {
 
 function embeddedToolCall(response: string): HostedToolCall | null {
   const source = response.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
-  let raw: { name?: unknown; arguments?: unknown } | null = null;
+  let raw: JsonRecord | null = null;
   try {
-    raw = JSON.parse(source) as { name?: unknown; arguments?: unknown };
+    const parsed = JSON.parse(source) as JsonValue;
+    // SAFETY: the browser-tool call below only reads `name` (string-checked)
+    // and `arguments` (passed through as tool input); nothing else is trusted.
+    raw = isJsonRecord(parsed) ? parsed : null;
   } catch {
     const name = source.match(/["']name["']\s*:\s*["']([^"']+)["']/i)?.[1]?.replaceAll("\\_", "_");
     if (name) raw = { name, arguments: source };
@@ -1547,10 +1571,11 @@ function embeddedToolCall(response: string): HostedToolCall | null {
   if (!raw || typeof raw.name !== "string") return null;
   const name = raw.name.replaceAll("\\_", "_");
   if (!BROWSER_TOOL_SPECS.some((tool) => tool.name === name)) return null;
-  return { name, arguments: raw.arguments as HostedToolCall["arguments"] };
+  const args = raw.arguments;
+  return { name, arguments: isJsonRecord(args) || typeof args === "string" ? args : undefined };
 }
 
-async function hostedBrowserCall(env: Env, userId: string, botId: string, name: string, args: Record<string, unknown>): Promise<unknown | undefined> {
+async function hostedBrowserCall(env: Env, userId: string, botId: string, name: string, args: JsonRecord): Promise<JsonValue | undefined> {
   const actions: Record<string, "open" | "state" | "text" | "snapshot" | "click" | "fill" | "press"> = {
     open_url: "open", browser_state: "state", browser_text: "text", browser_snapshot: "snapshot",
     browser_click: "click", browser_fill: "fill", browser_press: "press",
@@ -1724,7 +1749,7 @@ async function aiReply(env: Env, userId: string, bot: Bot, text: string, forceBr
   for (let step = 0; step < 10; step += 1) {
     const result = await env.AI.run(MODEL as keyof AiModels, { messages, tools, max_tokens: 2048 } as never) as {
       response?: string;
-      tool_calls?: Array<{ id?: string; name?: string; arguments?: Record<string, unknown> | string }>;
+      tool_calls?: HostedToolCall[];
       choices?: Array<{ message?: { content?: string | null; tool_calls?: Array<{ id?: string; function?: { name?: string; arguments?: string } }> } }>;
     };
     const openAiMessage = result.choices?.[0]?.message;
@@ -2402,19 +2427,20 @@ async function executeToolApproval(env: Env, userId: string, id: string) {
   const claimed = await env.DB.prepare("UPDATE tool_approvals SET status = 'executing', reviewed_at = ?, updated_at = ? WHERE id = ? AND user_id = ? AND status = 'pending'")
     .bind(Date.now(), Date.now(), id, userId).run();
   if (!(claimed.meta.changes ?? 0)) throw new Error("This approval is already being handled");
-  const args = JSON.parse(approval.arguments_json) as Record<string, unknown>;
+  const args = JSON.parse(approval.arguments_json) as JsonValue;
+  const toolArgs = isJsonRecord(args) ? args : {};
   try {
-    let result: unknown;
-    if (approval.connector === "computer" && approval.tool_name === "computer_exec" && typeof args.command === "string") {
-      result = await env.COMPUTER.exec(hostedComputerId(userId, approval.bot_id), args.command.slice(0, 20_000));
-    } else if (approval.connector === "image" && approval.tool_name === "generate_image" && typeof args.prompt === "string") {
-      result = { ok: true, url: await generatedImage(env, userId, args.prompt.slice(0, 2_000)) };
+    let result: JsonValue | undefined;
+    if (approval.connector === "computer" && approval.tool_name === "computer_exec" && typeof toolArgs.command === "string") {
+      result = await env.COMPUTER.exec(hostedComputerId(userId, approval.bot_id), toolArgs.command.slice(0, 20_000));
+    } else if (approval.connector === "image" && approval.tool_name === "generate_image" && typeof toolArgs.prompt === "string") {
+      result = { ok: true, url: await generatedImage(env, userId, toolArgs.prompt.slice(0, 2_000)) };
     } else if (approval.connector === "browser") {
-      result = await hostedBrowserCall(env, userId, approval.bot_id, approval.tool_name, args);
+      result = await hostedBrowserCall(env, userId, approval.bot_id, approval.tool_name, toolArgs);
     } else if (approval.connector === "connected-app") {
       const available = await connectorTools(env, userId);
       if (!available.tools.some((tool) => tool.name === approval.tool_name)) throw new Error("This connected-app tool is no longer available");
-      result = (await mcpRequest(env, userId, available.session, "tools/call", { name: approval.tool_name, arguments: args })).payload;
+      result = (await mcpRequest(env, userId, available.session, "tools/call", { name: approval.tool_name, arguments: toolArgs })).payload;
     } else throw new Error("Unsupported approval action");
     const now = Date.now();
     await env.DB.prepare("UPDATE tool_approvals SET status = 'executed', result_json = ?, error = NULL, updated_at = ? WHERE id = ? AND user_id = ?")
