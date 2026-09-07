@@ -5229,17 +5229,17 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
       return redirect("/login", { "set-cookie": clearSessionCookie() });
     }
     const user = await currentUser(request, env);
-    if (!user) {
-      if (url.pathname.startsWith("/api/")) return json({ error: "Authentication required" }, 401);
-      return redirect(`/login?next=${encodeURIComponent(url.pathname + url.search)}`);
-    }
-    if (url.pathname.startsWith("/api/")) return api(request, env, user, url.pathname, ctx);
     // Static app shell and assets are public bytes: serve them before any
     // redirect so logged-out crawlers, link previews, and cold loads never
     // see a 303 to /login for a .js bundle.
     if (url.pathname === "/" || url.pathname.startsWith("/assets/") || url.pathname === "/favicon.ico" || url.pathname === "/manifest.webmanifest" || url.pathname === "/robots.txt") {
       return env.ASSETS.fetch(request);
     }
+    if (!user) {
+      if (url.pathname.startsWith("/api/")) return json({ error: "Authentication required" }, 401);
+      return redirect(`/login?next=${encodeURIComponent(url.pathname + url.search)}`);
+    }
+    if (url.pathname.startsWith("/api/")) return api(request, env, user, url.pathname, ctx);
     return env.ASSETS.fetch(request);
 }
 
