@@ -139,13 +139,14 @@ export function IntegrationsSection() {
   const [source, setSource] = useState<CatalogSource>(initialCatalog?.source ?? "curated");
   const [configured, setConfigured] = useState(initialCatalog?.configured ?? true);
   const [mode, setMode] = useState<ConnectionMode>(initialCatalog?.mode ?? "unavailable");
-  const [status, setStatus] = useState<Record<string, ConnectorStatus>>(initialCatalog?.services ?? {});
+  const [status, setStatus] = useState<Record<string, ConnectorStatus>>({});
   const [pendingUrls, setPendingUrls] = useState<Record<string, string>>({});
   const [busySlug, setBusySlug] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const statusGenerations = useRef(new Map<string, number>());
+  const connectionBaseline = useRef(new Map<string, Set<string>>());
   const hadInitialCatalog = useRef(cards !== null);
 
   const refreshConnectedStatus = useCallback(() => {
@@ -158,7 +159,7 @@ export function IntegrationsSection() {
         setStatus((current) => mergeCompleteConnectorStatus(current, services, statusGenerations.current, requestGenerations));
         return services;
       })
-      .catch(() => ({}))
+      .catch((e): Record<string, ConnectorStatus> => { setError(e instanceof Error ? e.message : "Could not refresh connection status."); return {}; })
       .finally(() => setRefreshing(false));
   }, []);
 
@@ -173,7 +174,7 @@ export function IntegrationsSection() {
       setSource(cached.source);
       setConfigured(cached.configured);
       setMode(cached.mode);
-      setStatus((current) => ({ ...current, ...cached.services }));
+
       if (cached.configured) void refreshConnectedStatus();
     } catch (e) {
       if (signal.aborted && signal.reason?.name === "AbortError") return;
@@ -188,7 +189,7 @@ export function IntegrationsSection() {
 
   useEffect(() => {
     const controller = new AbortController();
-    if (hadInitialCatalog.current) void refreshConnectedStatus();
+    if (hadInitialCatalog.current) { void refreshConnectedStatus(); return () => controller.abort(); }
     void loadCatalog(AbortSignal.any([controller.signal, AbortSignal.timeout(35_000)]));
     return () => controller.abort();
   }, [loadCatalog, refreshConnectedStatus]);
@@ -209,6 +210,7 @@ export function IntegrationsSection() {
   const connect = async (card: ToolkitCard) => {
     const reservedWindow = reserveConnectWindow();
     const slug = card.slug;
+    connectionBaseline.current.set(slug, new Set((status[slug]?.accounts ?? []).map((account) => account.id)));
     statusGenerations.current.set(slug, (statusGenerations.current.get(slug) ?? 0) + 1);
     setBusySlug(slug);
     setError(null);
@@ -231,12 +233,36 @@ export function IntegrationsSection() {
   };
 
   const disconnectAccount = (slug: string, accountId: string) => {
+    statusGenerations.current.set(slug, (statusGenerations.current.get(slug) ?? 0) + 1);
     setBusySlug(slug);
     api(`/api/connectors/${slug}/accounts/${encodeURIComponent(accountId)}`, { method: "DELETE" })
-      .then(() => refreshConnectedStatus())
+      .then(() => {
+        statusGenerations.current.set(slug, (statusGenerations.current.get(slug) ?? 0) + 1);
+        setStatus((current) => {
+          const accounts = (current[slug]?.accounts ?? []).filter((account) => account.id !== accountId);
+          const connected = activeConnectorAccounts(accounts).length > 0;
+          return { ...current, [slug]: { connected, pending: false, status: connected ? "ACTIVE" : "not_connected", accounts } };
+        });
+      })
       .catch((e) => setError(e.message))
       .finally(() => setBusySlug(null));
   };
+
+  useEffect(() => {
+    if (!Object.keys(pendingUrls).length) return;
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const poll = async () => {
+      const services = await refreshConnectedStatus();
+      if (stopped) return;
+      setPendingUrls((current) => { const remaining = Object.entries(current).filter(([slug]) => !services[slug]?.accounts?.some((account) => /^active$/i.test(account.status) && !connectionBaseline.current.get(slug)?.has(account.id))); return remaining.length === Object.keys(current).length ? current : Object.fromEntries(remaining); });
+      timer = setTimeout(poll, 2000);
+    };
+    const onFocus = () => { clearTimeout(timer); void poll(); };
+    window.addEventListener("focus", onFocus);
+    void poll();
+    return () => { stopped = true; clearTimeout(timer); window.removeEventListener("focus", onFocus); };
+  }, [pendingUrls, refreshConnectedStatus]);
 
   const visible = (cards ?? []).filter(
     (card) => !search || `${card.label} ${card.slug} ${card.blurb}`.toLowerCase().includes(search.toLowerCase()),
@@ -271,7 +297,7 @@ export function IntegrationsSection() {
 
         {!configured ? (
           <div className="rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-[12.5px] text-warning">
-            Integrations are temporarily unavailable. Configure the connection service in AI Analysis.
+            Integrations are temporarily unavailable. Configure the connection service in Campaigns.
           </div>
         ) : null}
         {configured && source === "curated" && mode === "self-hosted" ? (

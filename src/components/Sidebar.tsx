@@ -746,7 +746,7 @@ function BotListItem({
   useEffect(() => {
     if (iconOnly) setRenaming(false);
   }, [iconOnly]);
-  const avatarSize = iconOnly ? 44 : density === "compact" ? 40 : 56;
+  const avatarSize = iconOnly ? 40 : density === "compact" ? 36 : 48;
   // the visible branch, so a version switch changes the row with the chat
   const visible = visibleMessages(bot);
   const last = visible.at(-1);
@@ -765,7 +765,7 @@ function BotListItem({
       ? "justify-center px-1 py-1.5"
       : density === "compact"
         ? "gap-2 px-2 py-1.5 pr-12"
-        : "gap-3 px-3 py-2.5 pr-12",
+        : "gap-2.5 px-3 py-2 pr-12",
     bot.chiefOfStaff
       ? selected
         ? "border-accent/40 bg-accent/15"
@@ -1556,7 +1556,7 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
           </button>}
           {(state.config?.hosted || betterAuthToken()) && <button
             type="button"
-            onClick={signOutBetterAuth}
+            onClick={() => signOutBetterAuth(state.config?.hosted === true)}
             className="flex size-10 items-center justify-center rounded-md text-ink-secondary transition-colors hover:bg-raised hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
             title="Sign out"
             aria-label="Sign out"

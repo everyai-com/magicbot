@@ -77,9 +77,18 @@ export function clearBetterAuthSession() {
   localStorage.removeItem(AUTH_USER_KEY);
 }
 
-export function signOutBetterAuth() {
+export function signOutBetterAuth(hosted = false) {
+  const token = betterAuthToken();
   clearBetterAuthSession();
-  window.location.reload();
+  if (hosted) {
+    void fetch("/logout", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: token ? { authorization: "Bearer " + token } : {},
+    }).finally(() => window.location.replace("/logout"));
+  } else {
+    window.location.reload();
+  }
 }
 
 export function betterAuthToken(): string | null {

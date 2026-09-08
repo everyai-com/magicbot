@@ -1,3 +1,6 @@
+import { accountConnectors } from "../../../server/account-connectors";
+import { whatsappSettings } from "../../../server/whatsapp-settings";
+import { platformResources } from "./platform-resources";
 import { generateAnalysisText, ANALYSIS_PROVIDERS, type AnalysisProvider } from "../../../server/analysis";
 import { campaignWorkspaceRoute } from "../../../server/campaign-workspace";
 import {
@@ -1487,6 +1490,35 @@ async function connectorJson(response: Response): Promise<Response> {
 
 async function api(request: Request, env: Env, user: User, path: string): Promise<Response> {
   if (request.method !== "GET" && !sameOrigin(request)) return json({ error: "Cross-origin request refused" }, 403);
+  if (path.startsWith("/api/whatsapp/configs")) {
+    const authorization = await platformAuthorization(env, user.id, request.headers.get("authorization"));
+    try {
+      const result = await whatsappSettings(request.method, path, request.method === "GET" ? {} : await request.json(), authorization ?? undefined, platformJson);
+      if (result) return json(result.body, result.status);
+    } catch (error) {
+      return json({ error: error instanceof Error ? error.message : "WhatsApp settings request failed" }, Number((error as {status?: number}).status) || 502);
+    }
+  }
+  if (path.startsWith("/api/platform/")) {
+    const authorization = await platformAuthorization(env, user.id, request.headers.get("authorization"));
+    if (authorization) {
+      try {
+        const result = await platformResources(request, path, authorization, await ultravoxApiKey(env, user.id) || "", platformJson);
+        if (result) return result;
+      } catch (error) {
+        const status = Number((error as { status?: number }).status) || 502;
+        return json({ error: error instanceof Error ? error.message : "Platform request failed" }, status);
+      }
+    }
+  }
+  if (path === "/api/outcome-sheets/execute" && request.method === "POST") {
+    const authorization = await platformAuthorization(env, user.id, request.headers.get("authorization"));
+    if (!authorization) return json({ error: "Sign in again to access Google Sheets." }, 401);
+    const body = await request.json<{ tool: string; arguments: Record<string, unknown> }>();
+    if (!["GOOGLESHEETS_BATCH_UPDATE", "GOOGLESHEETS_UPDATE_SPREADSHEET_PROPERTIES", "GOOGLESHEETS_SEARCH_SPREADSHEETS", "GOOGLESHEETS_CREATE_GOOGLE_SHEET1", "GOOGLESHEETS_GET_SPREADSHEET_INFO", "GOOGLESHEETS_VALUES_GET", "GOOGLESHEETS_VALUES_UPDATE", "GOOGLESHEETS_SPREADSHEETS_VALUES_APPEND"].includes(body.tool)) return json({ error: "Unsupported Sheets action" }, 400);
+    try { return json(await platformJson("/api/composio/execute", { method: "POST", authorization, body })); }
+    catch (error) { return json({ error: error instanceof Error ? error.message : "Sheets request failed" }, 502); }
+  }
   if (path.startsWith("/api/campaign-workspace/")) {
     const remote = campaignWorkspaceRoute(request.method, path.slice("/api/campaign-workspace/".length));
     if (!remote) return json({ error: "Unknown campaign action" }, 404);
@@ -1787,6 +1819,18 @@ async function api(request: Request, env: Env, user: User, path: string): Promis
       defaultEngine,
     });
   }
+  if (path === "/api/connectors" || path.startsWith("/api/connectors/")) {
+    const token = await credentialValue(env, user.id, PLATFORM_CREDENTIAL);
+    const ownKey = await credentialValue(env, user.id, "composio");
+    if (token && !ownKey) {
+      try {
+        const result = await accountConnectors(request, "Bearer " + token, platformJson);
+        if (result) return result;
+      } catch (error) {
+        return json({error: error instanceof Error ? error.message : "Composio connection failed"}, Number((error as {status?: number}).status) || 502);
+      }
+    }
+  }
   if (path === "/api/connectors/catalog" && request.method === "GET") {
     try {
       const response = await connectorRequest(env, user.id, "/v1/catalog");
@@ -1806,9 +1850,10 @@ async function api(request: Request, env: Env, user: User, path: string): Promis
           return json({ configured: true, mode: "managed", source: "api", cards });
         }
       }
-    } catch { /* fall back to the curated catalog */ }
-    const cards = CURATED_CONNECTORS.map(([slug, label, blurb, domain]) => ({ slug, label, blurb, logo: null, domain }));
-    return json({ configured: true, mode: "managed", source: "curated", cards });
+      return json({ error: "Composio catalog could not be loaded. Check the integration connection in General." }, 502);
+    } catch (error) {
+      return json({ error: error instanceof Error ? error.message : "Composio catalog unavailable" }, 502);
+    }
   }
   if (path === "/api/connectors/connected" && request.method === "GET") {
     return connectorJson(await connectorRequest(env, user.id, "/v1/connectors/connected"));
@@ -2752,8 +2797,8 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
       return redirect(safeNext(url.searchParams.get("next")), { "set-cookie": sessionCookie(token) });
     }
     if (url.pathname === "/logout") {
-      const token = cookieValue(request, SESSION_COOKIE);
-      if (token) await env.DB.prepare("DELETE FROM sessions WHERE token_hash = ?").bind(await sha256(token)).run();
+      const tokens = new Set([cookieValue(request, SESSION_COOKIE), bearerToken(request)].filter((token): token is string => Boolean(token)));
+      for (const token of tokens) await env.DB.prepare("DELETE FROM sessions WHERE token_hash = ?").bind(await sha256(token)).run();
       return redirect("/login", { "set-cookie": clearSessionCookie() });
     }
     const user = await currentUser(request, env);

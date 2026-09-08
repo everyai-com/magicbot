@@ -12,7 +12,7 @@ import { voiceLanguageName } from "@/lib/voice-language";
 // is the stuff shared by every bot: who you are, your keys, and the
 // machine your bots can borrow.
 import { useEffect, useRef, useState } from "react";
-import { CalendarDays, Check, ChevronLeft, Coins, Loader2, LogOut, Pause, Play, Puzzle, Search, User, Volume2, Wrench, X } from "lucide-react";
+import { CalendarDays, Check, Coins, Loader2, LogOut, Pause, Play, Puzzle, Search, User, Volume2, Wrench, X } from "lucide-react";
 import { api, useStore, type AppSettingsSection, type ConfigStatus } from "@/state/store";
 import { signOutBetterAuth } from "@/lib/auth";
 import { ApiKeyRow, CloudflareConnection, VpsConnection } from "./ApiKeys";
@@ -30,7 +30,7 @@ const SECTIONS: Array<{
   keywords: string[];
 }> = [
   { id: "general", label: "General", icon: User, keywords: ["profile", "name", "email", "analysis", "provider", "model", "language", "account"] },
-  { id: "analysis", label: "AI Analysis", icon: Coins, keywords: ["csv", "campaigns", "analysis", "sms", "email", "whatsapp", "outcomes"] },
+  { id: "analysis", label: "Campaigns", icon: Coins, keywords: ["csv", "campaigns", "analysis", "sms", "email", "whatsapp", "outcomes"] },
   { id: "voices", label: "Voices", icon: Volume2, keywords: ["voice", "voices", "speech", "audio", "ultravox"] },
   { id: "computer", label: "Tools & Setup", icon: Wrench, keywords: ["tools", "setup", "phone", "calendar", "whatsapp", "vm", "virtual", "desktop"] },
   { id: "integrations", label: "Integrations", icon: Puzzle, keywords: ["apps", "plugins", "connected", "integrations"] },
@@ -59,13 +59,8 @@ const NAV_ITEMS: Array<
   ...SECTIONS.filter((section) => section.id === "integrations" || section.id === "usage").map((section) => ({ ...section, kind: "section" as const })),
 ];
 
-const HOSTED_SECTIONS = SECTIONS.filter(
-  ({ id }) => id === "general" || id === "analysis" || id === "connections" || id === "integrations",
-);
-
-const HOSTED_NAV_ITEMS = NAV_ITEMS.filter(
-  (entry) => entry.kind === "section" && (entry.id === "general" || entry.id === "analysis" || entry.id === "connections" || entry.id === "integrations"),
-);
+const HOSTED_SECTIONS = SECTIONS;
+const HOSTED_NAV_ITEMS = NAV_ITEMS;
 
 function sectionMatches(section: (typeof NAV_ITEMS)[number], query: string): boolean {
   if (!query) return true;
@@ -111,11 +106,12 @@ function ProfileFields() {
 }
 
 function AccountRow() {
+  const { state } = useStore();
   return (
     <Card title="Account" subtitle="Sign out on this browser and return to the login screen.">
       <button
         type="button"
-        onClick={signOutBetterAuth}
+        onClick={() => signOutBetterAuth(state.config?.hosted === true)}
         className="inline-flex items-center gap-2 rounded-lg border border-danger/30 px-3 py-1.5 text-[13px] text-danger transition-colors hover:bg-danger/10"
       >
         <LogOut size={14} />
@@ -702,11 +698,7 @@ export function SettingsModal() {
   const [query, setQuery] = useState("");
   const q = query.trim().toLowerCase();
   const visibleSections = navItems.filter((entry) => sectionMatches(entry, q));
-  const goBack = () => {
-    const backTarget = state.appSettingsBackTarget;
-    dispatch({ type: "toggleAppSettings", open: false });
-    if (backTarget === "plugins") dispatch({ type: "togglePlugins", open: true });
-  };
+
 
   useEffect(() => {
     const visible = navItems.filter(
@@ -829,15 +821,6 @@ export function SettingsModal() {
         <div className="flex min-w-0 flex-1 flex-col">
           <div className="flex items-center justify-between px-4 py-3 sm:px-5">
             <div className="flex min-w-0 items-center gap-2">
-              <button
-                type="button"
-                onClick={goBack}
-                aria-label="Back from settings"
-                title="Back"
-                className="-ml-1 rounded-md p-1 text-ink-secondary hover:bg-control hover:text-ink"
-              >
-                <ChevronLeft size={18} />
-              </button>
               <span className="truncate text-[15px] font-semibold text-ink">
                 {sections.find((s) => s.id === section)?.label}
               </span>

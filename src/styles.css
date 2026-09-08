@@ -1126,3 +1126,15 @@ button:disabled.bg-danger {
   color: var(--color-ink-secondary);
   opacity: 1;
 }
+
+/* A diagonal wave across the chat's nine-pixel thinking indicator. */
+@keyframes chat-thinking-wave {
+  0%, 70%, 100% { opacity: 0.35; transform: scale(0.85); }
+  35% { opacity: 1; transform: scale(1); }
+}
+.chat-thinking-pixel {
+  animation: chat-thinking-wave 1.4s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .chat-thinking-pixel { animation: none; }
+}

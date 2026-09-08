@@ -1,0 +1,122 @@
+--- a/worker-api/src/composio-gmail.ts
++++ b/worker-api/src/composio-gmail.ts
+@@ -0,0 +1,39 @@
++/** Gmail credentials stay with Composio; use the authenticated platform user ID. */
++export type ComposioGmailEnv = { COMPOSIO_API_KEY?: string };
++const base = "https://backend.composio.dev/api/v3";
++async function call(env: ComposioGmailEnv, path: string, body?: unknown): Promise<any> {
++  if (!env.COMPOSIO_API_KEY) throw new Error("Composio is not configured on this deployment.");
++  const response = await fetch(base + path, {
++    method: body === undefined ? "GET" : "POST",
++    headers: { "x-api-key": env.COMPOSIO_API_KEY, "Content-Type": "application/json" },
++    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
++  });
++  const result: any = await response.json();
++  if (!response.ok || result.error || result.successful === false) {
++    throw new Error(String(result.error?.message ?? result.error ?? result.message ?? "Composio Gmail request failed"));
++  }
++  return result;
++}
++export async function gmailAccounts(env: ComposioGmailEnv, userId: string) {
++  const result = await call(env, `/connected_accounts?user_ids=${encodeURIComponent(userId)}&toolkit_slugs=gmail&statuses=ACTIVE&limit=200`);
++  if (!Array.isArray(result.items)) throw new Error("Composio returned an invalid account list.");
++  return result.items.filter((account: any) =>
++    String(account.status).toUpperCase() === "ACTIVE" &&
++    String(account.toolkit?.slug ?? account.appName ?? "").toLowerCase() === "gmail" &&
++    (!account.user_id || account.user_id === userId),
++  ).map((account: any) => ({ id: String(account.id), _id: String(account.id), provider: "gmail", is_active: true, display_name: String(account.data?.email ?? account.id), source: "composio" }));
++}
++export async function composioGmailSender(env: ComposioGmailEnv, userId: string) {
++  const accounts = await gmailAccounts(env, userId);
++  if (!accounts.length) throw new Error("Connect Gmail in Integrations before sending email.");
++  const accountId = accounts[0].id;
++  return async (recipientEmail: string, subject: string, body: string) => {
++    const result = await call(env, "/tools/execute/GMAIL_SEND_EMAIL", {
++      user_id: userId, connected_account_id: accountId,
++      arguments: { user_id: "me", recipient_email: recipientEmail, subject, body, is_html: false },
++    });
++    const providerMessageId = result.data?.id ?? result.data?.message_id;
++    if (result.successful !== true || !providerMessageId) throw new Error("Composio did not confirm delivery. Check the provider logs before retrying.");
++    return { providerMessageId: String(providerMessageId), raw: result };
++  };
++}
+--- a/worker-api/src/routes/messaging.ts
++++ b/worker-api/src/routes/messaging.ts
+@@ -1,3 +1,4 @@
++import { composioGmailSender, gmailAccounts } from "../composio-gmail";
+ /**
+  * messaging — port of the convex/messaging/* modules (customers,
+  * customer_conversations, sms/gmail templates + campaigns, webhook_logs).
+@@ -36,7 +37,7 @@
+   type SafetySettings,
+ } from "../campaign-runner";
+ type Env = {
+-  Bindings: { DB: D1Database; GOOGLE_CLIENT_ID?: string; GOOGLE_CLIENT_SECRET?: string };
++  Bindings: { DB: D1Database; COMPOSIO_API_KEY?: string; GOOGLE_CLIENT_ID?: string; GOOGLE_CLIENT_SECRET?: string };
+   Variables: { userId: string };
+ };
+ type Ctx = Context<Env>;
+@@ -933,6 +934,7 @@
+ /** GET /api/messaging/gmail-campaigns/accounts — connected Gmail accounts (gmailCampaigns.listGmailAccounts). */
+ app.get("/gmail-campaigns/accounts", async (c) => {
+   const userId = c.get("userId");
++  if (c.env.COMPOSIO_API_KEY) return c.json(await gmailAccounts(c.env, userId));
+   const { results } = await c.env.DB.prepare(
+     "SELECT * FROM calendar_integrations WHERE user_id = ? AND provider = 'gmail'",
+   ).bind(userId).all();
+@@ -1186,7 +1188,7 @@
+  * explicit template_id.
+  */
+ export async function prepareGmailResume(
+-  env: { DB: D1Database; GOOGLE_CLIENT_ID?: string; GOOGLE_CLIENT_SECRET?: string },
++  env: { DB: D1Database; COMPOSIO_API_KEY?: string; GOOGLE_CLIENT_ID?: string; GOOGLE_CLIENT_SECRET?: string },
+   completedId: string,
+   templateIdOverride?: unknown,
+ ): Promise<ResumePlan> {
+@@ -1237,7 +1239,7 @@
+  * object, that meant a fresh token request for every single recipient).
+  */
+ async function runGmailBatch(
+-  env: { DB: D1Database; GOOGLE_CLIENT_ID?: string; GOOGLE_CLIENT_SECRET?: string },
++  env: { DB: D1Database; COMPOSIO_API_KEY?: string; GOOGLE_CLIENT_ID?: string; GOOGLE_CLIENT_SECRET?: string },
+   completedId: string,
+   templateConfig: { to: string; subject: string; body: string },
+   sourceCampaignId: string | null,
+@@ -1263,20 +1265,20 @@
+     await db.prepare(sql).bind(...binds, completedId).run();
+   };
+ 
+-  // Token first: without it every contact would fail identically, so fail the
+-  // whole run once with the real reason instead of N copies of it.
+-  const integrationRow = await db
+-    .prepare("SELECT * FROM calendar_integrations WHERE user_id = ? AND provider = 'gmail' AND is_active = 1")
+-    .bind(userId)
+-    .first<Record<string, any>>();
+-  let accessToken: string;
++  let send: (recipient: string, subject: string, body: string) => Promise<{ providerMessageId: string | null }>;
+   try {
++    if (env.COMPOSIO_API_KEY) {
++      send = await composioGmailSender(env, userId);
++    } else {
++      const integrationRow = await db.prepare("SELECT * FROM calendar_integrations WHERE user_id = ? AND provider = 'gmail' AND is_active = 1").bind(userId).first<Record<string, any>>();
+     if (!integrationRow) throw new Error("Connected Gmail account not found");
+     const resolved = await resolveGmailAccessToken(integrationRow, env);
+-    accessToken = resolved.accessToken;
++    const accessToken = resolved.accessToken;
+     if (resolved.persist) {
+       const { sql, binds } = buildUpdate("calendar_integrations", { ...resolved.persist, updated_at: Date.now() });
+       await db.prepare(sql).bind(...binds, integrationRow.id).run();
++    }
++      send = (recipient, subject, body) => sendGmailMessage(accessToken, recipient, subject, body);
+     }
+   } catch (error) {
+     await persist({
+@@ -1320,7 +1322,7 @@
+     }
+ 
+     try {
+-      const result = await sendGmailMessage(accessToken, recipient, subject, body);
++      const result = await send(recipient, subject, body);
+       sent += 1;
+       outcomes.push({ ...base, status: "sent", provider_message_id: result.providerMessageId });
+     } catch (error) {

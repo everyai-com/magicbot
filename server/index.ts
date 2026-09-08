@@ -1,3 +1,7 @@
+import { whatsappTemplateAction } from "./whatsapp-template-actions.ts";
+import { WhatsappCampaigns } from "./whatsapp-campaigns.ts";
+import { EmailCampaigns } from "./email-campaigns.ts";
+import { whatsappSettings } from "./whatsapp-settings.ts";
 import { campaignWorkspaceRoute } from "./campaign-workspace.ts";
 // OpenMausBot server — the harness host. Clients hold no transports
 // (upstream rule): the React app dispatches typed commands over HTTP and
@@ -2824,6 +2828,8 @@ function remoteAgentRows(value: unknown): RemoteAgentRow[] {
   });
 }
 
+let localEmailCampaigns: EmailCampaigns | undefined;
+let localWhatsappCampaigns: WhatsappCampaigns | undefined;
 async function platformJson(
   path: string,
   options: { method?: string; authorization?: string | string[]; body?: unknown } = {},
@@ -5015,6 +5021,11 @@ const server = createServer(async (req, res) => {
     if (method === "GET" && path === "/api/config") {
       return json(res, 200, configStatus());
     }
+    if (path.startsWith("/api/whatsapp/configs")) {
+      const authorization = Array.isArray(req.headers.authorization) ? req.headers.authorization[0] : req.headers.authorization;
+      const result = await whatsappSettings(method, path, method === "GET" ? {} : await readBody(req), authorization, platformJson);
+      if (result) return json(res, result.status, result.body);
+    }
     if (method === "GET" && path === "/api/whatsapp/configs") {
       ensureWhatsappWebhookForAccount();
       return json(res, 200, {
@@ -5538,6 +5549,18 @@ const server = createServer(async (req, res) => {
       if (!remote) return json(res, 404, { error: "Unknown campaign action" });
       const authorization = Array.isArray(req.headers.authorization) ? req.headers.authorization[0] : req.headers.authorization;
       if (!authorization) return json(res, 401, { error: "Sign in to manage campaigns." });
+      if (method === "POST" && ["/api/whatsapp/templates/edit", "/api/whatsapp/templates/delete"].includes(remote)) {
+        return json(res, 200, await whatsappTemplateAction(remote.split("/").at(-1)!, await readBody(req), (route, options) => platformJson(route, { ...options, authorization })));
+      }
+      if ((method === "GET" && /^\/api\/whatsapp\/campaigns(?:\/[A-Za-z0-9_-]+)?$/.test(remote)) || (method === "POST" && /^\/api\/whatsapp\/campaigns\/[A-Za-z0-9_-]+\/start$/.test(remote))) {
+        localWhatsappCampaigns ??= new WhatsappCampaigns(join(DATA_DIR, "whatsapp-campaigns.db"));
+        return json(res, 200, await localWhatsappCampaigns.handle(remote, method, method === "GET" ? {} : await readBody(req), (route, options) => platformJson(route, { ...options, authorization })));
+      }
+      if (["/api/messaging/gmail-campaigns/start", "/api/messaging/gmail-campaigns/accounts", "/api/messaging/gmail-campaigns/completed"].includes(remote)) {
+        localEmailCampaigns ??= new EmailCampaigns(join(DATA_DIR, "email-campaigns.db"));
+        const result = await localEmailCampaigns.handle(remote, method, method === "GET" ? null : await readBody(req), (route, options) => platformJson(route, { ...options, authorization }));
+        return json(res, 200, result);
+      }
       const result = await platformJson(remote, {
         method, authorization,
         ...(method === "GET" ? {} : { body: await readBody(req) }),
@@ -6205,16 +6228,18 @@ const server = createServer(async (req, res) => {
       const { cards, source } = await composio.listToolkits(cfg);
       return json(res, 200, { configured: composio.configured(cfg), mode: composio.connectionMode(cfg), source, cards });
     }
+    if (method === "POST" && path === "/api/outcome-sheets/execute") {
+      const authorization = Array.isArray(req.headers.authorization) ? req.headers.authorization[0] : req.headers.authorization;
+      if (!usableBearer(authorization)) return json(res, 401, { error: "Sign in again to access Google Sheets." });
+      const body = await readBody(req);
+      if (!["GOOGLESHEETS_BATCH_UPDATE", "GOOGLESHEETS_UPDATE_SPREADSHEET_PROPERTIES", "GOOGLESHEETS_SEARCH_SPREADSHEETS", "GOOGLESHEETS_CREATE_GOOGLE_SHEET1", "GOOGLESHEETS_GET_SPREADSHEET_INFO", "GOOGLESHEETS_VALUES_GET", "GOOGLESHEETS_VALUES_UPDATE", "GOOGLESHEETS_SPREADSHEETS_VALUES_APPEND"].includes(body.tool)) return json(res, 400, { error: "Unsupported Sheets action" });
+      return json(res, 200, await platformJson("/api/composio/execute", { method: "POST", authorization, body: { tool: body.tool, arguments: body.arguments } }));
+    }
     if (method === "GET" && path === "/api/connectors/connected") {
-      if (composio.configured(cfg)) {
-        return json(res, 200, { configured: true, services: await composio.connectedServices(cfg) });
-      }
       const authorization = Array.isArray(req.headers.authorization) ? req.headers.authorization[0] : req.headers.authorization;
       if (usableBearer(authorization)) {
         const connections = await platformJson("/api/composio/connections", { authorization });
-        const catalog = await platformJson("/api/composio/catalog?limit=500", { authorization });
-        const { services } = platformConnectorCatalog(catalog);
-        return json(res, 200, { configured: true, services: { ...services, ...platformConnectorServices(connections) } });
+        return json(res, 200, { configured: true, services: platformConnectorServices(connections) });
       }
       if (!composio.configured(cfg)) {
         return json(res, 200, { configured: false, services: {} });
@@ -6300,9 +6325,6 @@ const server = createServer(async (req, res) => {
     }
     m = path.match(/^\/api\/connectors\/([\w-]+)\/accounts\/([A-Za-z0-9][A-Za-z0-9_-]{0,127})$/);
     if (m && method === "DELETE") {
-      if (composio.configured(cfg)) {
-        return json(res, 200, await composio.removeAccount(cfg, m[1], m[2]));
-      }
       const authorization = Array.isArray(req.headers.authorization) ? req.headers.authorization[0] : req.headers.authorization;
       if (usableBearer(authorization)) {
         await platformJson(`/api/composio/connections/${encodeURIComponent(m[2])}`, { method: "DELETE", authorization });

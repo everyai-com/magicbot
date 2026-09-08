@@ -92,7 +92,7 @@ function TaskTimeline({ messages, busy }: { messages: Message[]; busy: boolean }
   if (events.length === 0) return null;
   const recent = events.slice(-8);
   return (
-    <div className="mx-auto w-full max-w-[900px] px-3 pt-1 sm:px-5">
+    <div className="mx-auto w-full max-w-none px-4 pt-1 sm:px-10">
       <button
         type="button"
         onClick={() => setOpen((value) => !value)}
@@ -379,7 +379,7 @@ function Bubble({
     <div className={cn("group animate-msg-in flex w-full flex-col", user ? "items-end" : "items-start")}>
       <div className={cn("flex w-full items-center gap-1.5", user ? "justify-end" : "justify-start")}>
         {message.kind === "text" && (
-          <div className="relative hidden sm:block" ref={menuRef}>
+          <div className={cn("relative hidden sm:block", !user && "order-2")} ref={menuRef}>
             <button
               type="button"
               onClick={() => setMenuOpen((open) => !open)}
@@ -440,7 +440,7 @@ function Bubble({
             })
           }
           aria-label={bot.pinnedMessageId === message.id ? "Unpin message" : "Pin message"}
-          className="hidden rounded-md p-1.5 text-ink-secondary opacity-0 transition-opacity hover:bg-raised hover:text-ink focus-visible:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100 sm:block"
+          className={cn("hidden rounded-md p-1.5 text-ink-secondary opacity-0 transition-opacity hover:bg-raised hover:text-ink focus-visible:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100 sm:block", !user && "order-2")}
           title={
             bot.pinnedMessageId === message.id
               ? "Unpin this message"
@@ -696,19 +696,19 @@ function StreamingBubble({ text }: { text: string }) {
   );
 }
 
-/** "Working for 12s" that ticks by mutating textContent on an interval —
+/** Elapsed working time that ticks by mutating textContent on an interval —
  * no React commit per second while a turn streams (upstream trick). */
 function WorkingTimer({ since }: { since: number }) {
   const ref = useRef<HTMLSpanElement>(null);
   useEffect(() => {
     const tick = () => {
-      if (ref.current) ref.current.textContent = `Working for ${Math.max(0, Math.round((Date.now() - since) / 1000))}s`;
+      if (ref.current) ref.current.textContent = `${Math.max(0, Math.round((Date.now() - since) / 1000))}s`;
     };
     tick();
     const timer = setInterval(tick, 1000);
     return () => clearInterval(timer);
   }, [since]);
-  return <span ref={ref} className="text-[12.5px] text-ink-secondary" />;
+  return <span ref={ref} aria-label="Elapsed thinking time" className="shrink-0 text-[12.5px] tabular-nums text-ink-secondary" />;
 }
 
 /** The settled transcript, memoized as one unit: during streaming every
@@ -842,7 +842,7 @@ function PinnedBanner({
   const text = (pinned.text ?? "").replace(/\s+/g, " ").trim();
   if (!text) return null;
   return (
-    <div className="mx-auto w-full max-w-[900px] px-3 sm:px-5">
+    <div className="mx-auto w-full max-w-none px-4 sm:px-10">
       <div className="mb-2 flex items-center gap-2 rounded-lg border border-accent/25 bg-accent/[0.07] px-3 py-1.5">
         <Pin size={12} className="shrink-0 text-accent" />
         <button
@@ -1119,7 +1119,7 @@ export function ChatView({ bot }: { bot: Bot }) {
 
       {/* Error banner */}
       {state.error && (
-        <div className="mx-auto w-full max-w-[900px] px-3 sm:px-5">
+        <div className="mx-auto w-full max-w-none px-4 sm:px-10">
           <div className="mb-2 rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-[13px] text-danger">
             {state.error}
           </div>
@@ -1144,7 +1144,7 @@ export function ChatView({ bot }: { bot: Bot }) {
       {/* Messages */}
       <div
         ref={scrollRef}
-        className="min-h-0 flex-1 overflow-y-auto px-3 [overflow-anchor:none] [overscroll-behavior-y:contain] sm:px-5"
+        className="min-h-0 flex-1 overflow-y-auto px-4 [overflow-anchor:none] [overscroll-behavior-y:contain] sm:px-10"
         onWheel={(e) => {
           if (e.deltaY < 0) setBottomFollow(false);
           else if (atEnd()) setBottomFollow(true);
@@ -1170,7 +1170,7 @@ export function ChatView({ bot }: { bot: Bot }) {
         }}
       >
         <div
-          className="mx-auto flex max-w-[900px] flex-col gap-3 pb-4"
+          className="mx-auto flex max-w-none flex-col gap-3 pb-4"
           role="log"
           aria-live="polite"
           aria-label={`Conversation with ${bot.name}`}
@@ -1223,12 +1223,14 @@ export function ChatView({ bot }: { bot: Bot }) {
           ) : (
             showWorkingDots(bot.busy, streaming, messages.at(-1)) && (
               <div className="flex justify-start">
-                <div className="flex items-center gap-2.5 rounded-2xl bg-raised px-4 py-3">
-                  <span className="flex items-center gap-1.5">
-                    <span className="size-1.5 animate-bounce rounded-full bg-ink-secondary [animation-delay:0ms]" />
-                    <span className="size-1.5 animate-bounce rounded-full bg-ink-secondary [animation-delay:150ms]" />
-                    <span className="size-1.5 animate-bounce rounded-full bg-ink-secondary [animation-delay:300ms]" />
+                <div className="flex max-w-full items-center gap-3 rounded-xl border border-hairline/40 bg-panel px-4 py-3 shadow-sm sm:gap-4">
+                  <span aria-hidden="true" className="grid shrink-0 grid-cols-3 gap-[3px]">
+                    {Array.from({ length: 9 }, (_, index) => <span key={index} className="chat-thinking-pixel size-1 rounded-[1px] bg-accent" style={{ animationDelay: `${(index % 3 + Math.floor(index / 3)) * 140}ms` }} />)}
                   </span>
+                  <div role="status" className="min-w-0">
+                    <div className="flex items-center gap-2 text-[14px] font-medium text-ink"><Brain size={15} aria-hidden="true" className="shrink-0 text-accent" />Understanding the task</div>
+                    <p className="mt-1 text-[13px] leading-relaxed text-ink-secondary">Preparing a response to your message</p>
+                  </div>
                   <WorkingTimer since={lastUserMessage?.at ?? Date.now()} />
                 </div>
               </div>
