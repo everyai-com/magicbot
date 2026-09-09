@@ -3,6 +3,7 @@ export function campaignWorkspaceRoute(method: string, path: string): string | n
   const id = "[A-Za-z0-9_-]+";
   const rules: Record<string, RegExp[]> = {
     GET: [
+      /^billing\/balance$/, /^call-logs\/with-agent-name$/,
       /^campaign-configs\/phone-configs$/, /^agents$/, /^phone-configs$/, /^campaigns$/,
       new RegExp(`^campaigns/${id}$`),
       new RegExp(`^(contacts|call-outcomes)/by-campaign/${id}$`),

@@ -18,7 +18,7 @@ import { signOutBetterAuth } from "@/lib/auth";
 import { ApiKeyRow, CloudflareConnection, VpsConnection } from "./ApiKeys";
 import { LocalComputerSection } from "./LocalComputerSection";
 import { Card } from "./SettingsPrimitives";
-import { UsageSection } from "./UsageSection";
+import { HistorySection } from "./HistorySection";
 import { TranscriptionSettings } from "./TranscriptionSettings";
 import { IntegrationsSection } from "./PluginsPanel";
 import { cn } from "@/lib/cn";
@@ -34,7 +34,7 @@ const SECTIONS: Array<{
   { id: "voices", label: "Voices", icon: Volume2, keywords: ["voice", "voices", "speech", "audio", "ultravox"] },
   { id: "computer", label: "Tools & Setup", icon: Wrench, keywords: ["tools", "setup", "phone", "calendar", "whatsapp", "vm", "virtual", "desktop"] },
   { id: "integrations", label: "Integrations", icon: Puzzle, keywords: ["apps", "plugins", "connected", "integrations"] },
-  { id: "usage", label: "Usage", icon: Coins, keywords: ["tokens", "cost", "billing"] },
+  { id: "usage", label: "History", icon: Coins, keywords: ["history", "calls", "sms", "email", "whatsapp"] },
 ];
 
 const NAV_ITEMS: Array<
@@ -914,7 +914,7 @@ export function SettingsModal() {
 
             {section === "integrations" && <IntegrationsSection />}
 
-            {section === "usage" && <UsageSection />}
+            {section === "usage" && <HistorySection />}
           </div>
         </div>
       </div>

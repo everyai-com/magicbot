@@ -51,3 +51,8 @@ it("permits contact-saving routes for all four campaign channels", () => {
     expect(campaignWorkspaceRoute("POST", path)).toBe("/api/" + path);
   }
 });
+
+it('allows reading the signed-in balance but rejects balance writes', () => {
+  expect(campaignWorkspaceRoute('GET', 'billing/balance')).toBe('/api/billing/balance');
+  expect(campaignWorkspaceRoute('POST', 'billing/balance')).toBeNull();
+});

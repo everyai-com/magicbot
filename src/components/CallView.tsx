@@ -333,6 +333,7 @@ export function CallTargetButton({
           ultravox_call_id: demoCallIdRef.current ?? undefined,
         }),
       });
+      window.dispatchEvent(new Event("minute-balance-changed"));
     } catch (error) {
       setDemoError(error instanceof Error ? error.message : "Demo call finalization failed.");
     }
@@ -342,6 +343,7 @@ export function CallTargetButton({
     demoCleanupRef.current?.();
     demoCleanupRef.current = null;
     demoSessionRef.current = null;
+    window.dispatchEvent(new CustomEvent("minute-call-activity", { detail: null }));
     demoStartedAtMsRef.current = null;
     demoCallIdRef.current = null;
     demoLogIdRef.current = null;
@@ -411,7 +413,17 @@ export function CallTargetButton({
 
       const { UltravoxSession } = await import("ultravox-client");
       const session = new UltravoxSession();
+      let connectedAt: number | null = null;
       const onStatus = () => {
+        if (isDemoCallConnected(session.status) && connectedAt === null) {
+          connectedAt = Date.now();
+          window.dispatchEvent(new CustomEvent("minute-call-activity", { detail: connectedAt }));
+        }
+        if (session.status === "disconnected" && connectedAt !== null) {
+          connectedAt = null;
+          window.dispatchEvent(new CustomEvent("minute-call-activity", { detail: null }));
+          void finalizeDemoCall("completed");
+        }
         setDemoStatus(session.status as DemoCallStatus);
         if (session.status === "disconnected") setDemoEnding(false);
       };

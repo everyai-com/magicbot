@@ -1,3 +1,4 @@
+import { MinuteBalance } from "./MinuteBalance";
 import { track } from "@/lib/analytics";
 import { Fragment, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -1518,6 +1519,7 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
       </div>
 
       {/* Footer */}
+      {density !== "icons" && <MinuteBalance key={state.config?.profile?.email ?? "balance"} />}
       <div className={cn("pb-3 pt-2", density === "icons" ? "px-2" : "px-3")}>
         {skillRecorderEnabled(state.config) && (
           <button
