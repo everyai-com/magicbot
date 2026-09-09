@@ -153,6 +153,20 @@ export function updateMessage(threadId: string, message: Message): void {
     .run(message.at, message.role, message.kind, message.text ?? null, JSON.stringify(message), threadId, message.id);
 }
 
+export function deleteMessages(threadId: string, messageIds: string[]): void {
+  if (messageIds.length === 0) return;
+  const database = db();
+  const remove = database.prepare("DELETE FROM messages WHERE thread_id = ? AND id = ?");
+  database.exec("BEGIN IMMEDIATE");
+  try {
+    for (const messageId of messageIds) remove.run(threadId, messageId);
+    database.exec("COMMIT");
+  } catch (error) {
+    database.exec("ROLLBACK");
+    throw error;
+  }
+}
+
 export function setActiveLeaf(threadId: string, leafId: string | null): void {
   db()
     .prepare(

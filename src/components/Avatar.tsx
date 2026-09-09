@@ -8,7 +8,6 @@ import {
   useImperativeHandle,
   useRef,
   useState,
-  type PointerEvent as ReactPointerEvent,
 } from "react";
 import { MAUS_COLORS, type MausColor, type MausMotion, type MausState } from "@/lib/mascot";
 import { CircleBotAvatar, type CircleBotAvatarHandle } from "./CircleBotAvatar";
@@ -36,6 +35,7 @@ const POINTER_GAZE = { forward: 1, authored: 0.25 };
  * states keep their authored gaze instead of being interrupted by a cursor. */
 const POINTER_ATTENTION_STATES = new Set<MausState>([
   "idle",
+  "listening",
   "happy",
   "curious",
   "bored",
@@ -177,27 +177,40 @@ function MausAvatarComponent(
 
   // Pointer-follow gaze, composed with any gaze the caller pins.
   const [pointer, setPointer] = useState({ x: 0, y: 0 });
+  const wrapperRef = useRef<HTMLSpanElement>(null);
   const displayedState = motionState ?? state;
   const acceptsPointer = POINTER_ATTENTION_STATES.has(displayedState);
   useEffect(() => {
     if (!acceptsPointer) setPointer({ x: 0, y: 0 });
   }, [acceptsPointer]);
   const range = forward ? POINTER_GAZE.forward : POINTER_GAZE.authored;
-  const onPointerMove = (event: ReactPointerEvent<HTMLSpanElement>) => {
+  useEffect(() => {
     if (!trackPointer || !animated || !acceptsPointer) return;
-    const rect = event.currentTarget.getBoundingClientRect();
-    setPointer({
-      x: Math.max(-1, Math.min(1, ((event.clientX - rect.left) / rect.width) * 2 - 1)) * range,
-      y: Math.max(-1, Math.min(1, ((event.clientY - rect.top) / rect.height) * 2 - 1)) * range,
-    });
-  };
-  const onPointerLeave = () => setPointer({ x: 0, y: 0 });
+    const onPointerMove = (event: PointerEvent) => {
+      const rect = wrapperRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      const scaleX = Math.max(1, rect.width * 1.4);
+      const scaleY = Math.max(1, rect.height * 1.4);
+      const x = (event.clientX - (rect.left + rect.width / 2)) / scaleX;
+      const y = (event.clientY - (rect.top + rect.height / 2)) / scaleY;
+      setPointer({
+        x: Math.max(-1, Math.min(1, x)) * range,
+        y: Math.max(-1, Math.min(1, y)) * range,
+      });
+    };
+    const resetPointer = () => setPointer({ x: 0, y: 0 });
+    window.addEventListener("pointermove", onPointerMove, { passive: true });
+    window.addEventListener("pointerleave", resetPointer);
+    return () => {
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerleave", resetPointer);
+    };
+  }, [acceptsPointer, animated, range, trackPointer]);
 
   return (
     <span
+      ref={wrapperRef}
       className="inline-flex shrink-0"
-      onPointerMove={trackPointer && animated && acceptsPointer ? onPointerMove : undefined}
-      onPointerLeave={trackPointer && animated ? onPointerLeave : undefined}
     >
       <CircleBotAvatar
         ref={inner}

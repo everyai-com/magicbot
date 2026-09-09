@@ -1,11 +1,12 @@
-// Connected apps marketplace, backed by Composio Sessions. Catalog comes
+// Integrations marketplace, backed by Composio Sessions. Catalog comes
 // from /api/connectors/catalog — the full toolkit list with logos when a
 // Composio API key is configured, a curated set otherwise. Icons resolve
 // logo → favicon → monogram.
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Check, Loader2, RefreshCw, Search, X } from "lucide-react";
+import { Check, ChevronLeft, Loader2, RefreshCw, Search, X } from "lucide-react";
 import { api, useStore } from "@/state/store";
 import { cn } from "@/lib/cn";
+import { Card } from "./SettingsPrimitives";
 
 interface ToolkitCard {
   slug: string;
@@ -13,6 +14,46 @@ interface ToolkitCard {
   blurb: string;
   logo: string | null;
   domain: string | null;
+  authConfigId?: string;
+}
+
+type CatalogSource = "api" | "curated";
+type ConnectionMode = "managed" | "self-hosted" | "unavailable";
+
+interface IntegrationsCatalogCache {
+  cards: ToolkitCard[];
+  source: CatalogSource;
+  configured: boolean;
+  mode: ConnectionMode;
+  services: Record<string, ConnectorStatus>;
+  at: number;
+}
+
+const INTEGRATIONS_CATALOG_CACHE_MS = 10 * 60_000;
+let integrationsCatalogCache: IntegrationsCatalogCache | null = null;
+
+function getFreshIntegrationsCatalogCache() {
+  if (!integrationsCatalogCache) return null;
+  if (Date.now() - integrationsCatalogCache.at > INTEGRATIONS_CATALOG_CACHE_MS) return null;
+  return integrationsCatalogCache;
+}
+
+function saveIntegrationsCatalogCache(result: {
+  cards?: ToolkitCard[];
+  source?: CatalogSource;
+  configured?: boolean;
+  mode?: ConnectionMode;
+  services?: Record<string, ConnectorStatus>;
+}) {
+  integrationsCatalogCache = {
+    cards: Array.isArray(result.cards) ? result.cards : [],
+    source: result.source ?? "curated",
+    configured: Boolean(result.configured),
+    mode: result.mode ?? "unavailable",
+    services: result.services && typeof result.services === "object" ? result.services : {},
+    at: Date.now(),
+  };
+  return integrationsCatalogCache;
 }
 
 export interface ConnectorStatus {
@@ -24,6 +65,10 @@ export interface ConnectorStatus {
     alias?: string;
     status: string;
   }>;
+}
+
+function activeConnectorAccounts(accounts: ConnectorStatus["accounts"] = []) {
+  return accounts.filter((account) => /^active$/i.test(account.status));
 }
 
 export function disconnectAccountConfirmation(
@@ -87,14 +132,283 @@ function ServiceIcon({ card }: { card: ToolkitCard }) {
   );
 }
 
+export function IntegrationsSection() {
+  const { dispatch } = useStore();
+  const initialCatalog = getFreshIntegrationsCatalogCache();
+  const [cards, setCards] = useState<ToolkitCard[] | null>(initialCatalog?.cards ?? null);
+  const [source, setSource] = useState<CatalogSource>(initialCatalog?.source ?? "curated");
+  const [configured, setConfigured] = useState(initialCatalog?.configured ?? true);
+  const [mode, setMode] = useState<ConnectionMode>(initialCatalog?.mode ?? "unavailable");
+  const [status, setStatus] = useState<Record<string, ConnectorStatus>>({});
+  const [pendingUrls, setPendingUrls] = useState<Record<string, string>>({});
+  const [busySlug, setBusySlug] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
+  const statusGenerations = useRef(new Map<string, number>());
+  const connectionBaseline = useRef(new Map<string, Set<string>>());
+  const hadInitialCatalog = useRef(cards !== null);
+
+  const refreshConnectedStatus = useCallback(() => {
+    const requestGenerations = new Map(statusGenerations.current);
+    setError(null);
+    setRefreshing(true);
+    return api("/api/connectors/connected")
+      .then((r) => {
+        const services: Record<string, ConnectorStatus> = r.services ?? {};
+        setStatus((current) => mergeCompleteConnectorStatus(current, services, statusGenerations.current, requestGenerations));
+        return services;
+      })
+      .catch((e): Record<string, ConnectorStatus> => { setError(e instanceof Error ? e.message : "Could not refresh connection status."); return {}; })
+      .finally(() => setRefreshing(false));
+  }, []);
+
+  const loadCatalog = useCallback(async (signal: AbortSignal) => {
+    setRefreshing(true);
+    setError(null);
+    try {
+      const r = await api("/api/connectors/catalog", { signal });
+      if (signal.aborted) return;
+      const cached = saveIntegrationsCatalogCache(r);
+      setCards(cached.cards);
+      setSource(cached.source);
+      setConfigured(cached.configured);
+      setMode(cached.mode);
+
+      if (cached.configured) void refreshConnectedStatus();
+    } catch (e) {
+      if (signal.aborted && signal.reason?.name === "AbortError") return;
+      setCards((current) => current ?? []);
+      setError(signal.aborted
+        ? "Integrations took too long to load. Click Refresh to try again."
+        : e instanceof Error ? e.message : String(e));
+    } finally {
+      if (signal.reason?.name !== "AbortError") setRefreshing(false);
+    }
+  }, [refreshConnectedStatus]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    if (hadInitialCatalog.current) { void refreshConnectedStatus(); return () => controller.abort(); }
+    void loadCatalog(AbortSignal.any([controller.signal, AbortSignal.timeout(35_000)]));
+    return () => controller.abort();
+  }, [loadCatalog, refreshConnectedStatus]);
+
+  const reserveConnectWindow = () => window.ogb?.openExternal ? null : window.open("", "_blank");
+
+  const openConnectUrl = async (url: string, reservedWindow: Window | null = null) => {
+    if (window.ogb?.openExternal) {
+      await window.ogb.openExternal(url);
+      return;
+    }
+    const opened = reservedWindow ?? window.open("", "_blank");
+    if (!opened) throw new Error("Your browser blocked the connection page. Click Connect again to open it.");
+    opened.opener = null;
+    opened.location.replace(url);
+  };
+
+  const connect = async (card: ToolkitCard) => {
+    const reservedWindow = reserveConnectWindow();
+    const slug = card.slug;
+    connectionBaseline.current.set(slug, new Set((status[slug]?.accounts ?? []).map((account) => account.id)));
+    statusGenerations.current.set(slug, (statusGenerations.current.get(slug) ?? 0) + 1);
+    setBusySlug(slug);
+    setError(null);
+    try {
+      const request: RequestInit = { method: "POST" };
+      if (card.authConfigId) request.body = JSON.stringify({ authConfigId: card.authConfigId, auth_config_id: card.authConfigId });
+      const { url } = await api(`/api/connectors/${slug}/authorize`, request);
+      setPendingUrls((current) => ({ ...current, [slug]: url }));
+      setStatus((current) => ({
+        ...current,
+        [slug]: { ...current[slug], connected: current[slug]?.connected ?? false, pending: true, status: "INITIATED" },
+      }));
+      await openConnectUrl(url, reservedWindow);
+    } catch (e) {
+      reservedWindow?.close();
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusySlug(null);
+    }
+  };
+
+  const disconnectAccount = (slug: string, accountId: string) => {
+    statusGenerations.current.set(slug, (statusGenerations.current.get(slug) ?? 0) + 1);
+    setBusySlug(slug);
+    api(`/api/connectors/${slug}/accounts/${encodeURIComponent(accountId)}`, { method: "DELETE" })
+      .then(() => {
+        statusGenerations.current.set(slug, (statusGenerations.current.get(slug) ?? 0) + 1);
+        setStatus((current) => {
+          const accounts = (current[slug]?.accounts ?? []).filter((account) => account.id !== accountId);
+          const connected = activeConnectorAccounts(accounts).length > 0;
+          return { ...current, [slug]: { connected, pending: false, status: connected ? "ACTIVE" : "not_connected", accounts } };
+        });
+      })
+      .catch((e) => setError(e.message))
+      .finally(() => setBusySlug(null));
+  };
+
+  useEffect(() => {
+    if (!Object.keys(pendingUrls).length) return;
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const poll = async () => {
+      const services = await refreshConnectedStatus();
+      if (stopped) return;
+      setPendingUrls((current) => { const remaining = Object.entries(current).filter(([slug]) => !services[slug]?.accounts?.some((account) => /^active$/i.test(account.status) && !connectionBaseline.current.get(slug)?.has(account.id))); return remaining.length === Object.keys(current).length ? current : Object.fromEntries(remaining); });
+      timer = setTimeout(poll, 2000);
+    };
+    const onFocus = () => { clearTimeout(timer); void poll(); };
+    window.addEventListener("focus", onFocus);
+    void poll();
+    return () => { stopped = true; clearTimeout(timer); window.removeEventListener("focus", onFocus); };
+  }, [pendingUrls, refreshConnectedStatus]);
+
+  const visible = (cards ?? []).filter(
+    (card) => !search || `${card.label} ${card.slug} ${card.blurb}`.toLowerCase().includes(search.toLowerCase()),
+  );
+
+  return (
+    <Card title="Integrations" subtitle="Connect the integrations your bots can use.">
+      <div className="flex flex-col gap-3">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <label className="flex h-10 min-w-0 flex-1 items-center gap-2 rounded-lg border border-hairline/40 bg-inset px-3">
+            <Search size={15} className="shrink-0 text-ink-secondary" />
+            <input
+              value={search}
+              onChange={(event) => {
+                setSearch(event.target.value);
+                setError(null);
+              }}
+              placeholder="Search integrations"
+              className="min-w-0 flex-1 bg-transparent text-[13px] text-ink placeholder:text-ink-secondary focus:outline-none"
+            />
+          </label>
+          <button
+            type="button"
+            disabled={refreshing}
+            onClick={() => void loadCatalog(AbortSignal.timeout(35_000))}
+            className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-hairline/40 px-3 text-[13px] text-ink hover:bg-control"
+          >
+            <RefreshCw size={14} className={cn(refreshing && "animate-spin")} />
+            Refresh
+          </button>
+        </div>
+
+        {!configured ? (
+          <div className="rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-[12.5px] text-warning">
+            Integrations are temporarily unavailable. Configure the connection service in Campaigns.
+          </div>
+        ) : null}
+        {configured && source === "curated" && mode === "self-hosted" ? (
+          <div className="text-[12px] text-ink-secondary">
+            Showing featured apps.{" "}
+            <button
+              className="underline underline-offset-2 hover:text-ink"
+              onClick={() => dispatch({ type: "toggleAppSettings", open: true, section: "connections", backTarget: "plugins" })}
+            >
+              Update your Composio key
+            </button>{" "}
+            for the full catalog.
+          </div>
+        ) : null}
+        {error ? <div role="alert" className="rounded-lg bg-danger/10 px-3 py-2 text-[12px] text-danger">{error}</div> : null}
+
+        {cards === null ? (
+          <div className="flex items-center gap-2 rounded-lg border border-hairline/35 bg-inset px-3 py-4 text-[13px] text-ink-secondary">
+            <Loader2 size={14} className="animate-spin" />
+            Loading integrations...
+          </div>
+        ) : visible.length === 0 ? (
+          <div className="rounded-lg border border-hairline/35 bg-inset px-3 py-6 text-center text-[13px] text-ink-secondary">
+            No integrations found.
+          </div>
+        ) : (
+          <div className="flex flex-col">
+            <div className="grid grid-cols-[1fr_auto_auto] gap-x-4 border-b border-hairline/40 pb-2 text-[11.5px] font-medium uppercase tracking-wide text-ink-secondary">
+              <span>Integration</span>
+              <span className="text-right">Status</span>
+              <span className="text-right">Action</span>
+            </div>
+            {visible.map((card) => {
+              const serviceStatus = status[card.slug];
+              const pending = serviceStatus?.pending;
+              const failed = serviceStatus?.status && /^(expired|failed)$/i.test(serviceStatus.status);
+              const accounts = serviceStatus?.accounts ?? [];
+              const activeAccounts = activeConnectorAccounts(accounts);
+              const included = serviceStatus?.connected === true && !activeAccounts.length && !pending && !failed;
+              const busy = busySlug === card.slug;
+              return (
+                <div key={card.slug} className="border-b border-hairline/20 py-2.5">
+                  <div className="grid grid-cols-[1fr_auto_auto] items-center gap-x-4 text-[13px]">
+                    <span className="flex min-w-0 items-center gap-3 text-ink">
+                      <ServiceIcon card={card} />
+                      <span className="min-w-0">
+                        <span className="block truncate font-medium">{card.label}</span>
+                        <span className="mt-0.5 block truncate text-[12px] text-ink-secondary">
+                          {pending ? "Finish setup in your browser" : failed && !accounts.length ? "Authorization expired" : card.blurb}
+                        </span>
+                      </span>
+                    </span>
+                    <span className="text-right text-[12px] text-ink-secondary">
+                      {activeAccounts.length ? `${activeAccounts.length} connected` : pending ? "Pending" : included ? "Included" : "Not connected"}
+                    </span>
+                    <button
+                      type="button"
+                      disabled={!configured || busy || included}
+                      onClick={() => {
+                        if (pending && pendingUrls[card.slug]) {
+                          setError(null);
+                          void openConnectUrl(pendingUrls[card.slug]).catch((e) => setError(e.message));
+                        } else void connect(card);
+                      }}
+                      className="min-w-[88px] rounded-lg border border-hairline/40 px-3 py-1.5 text-[12.5px] text-ink hover:bg-control disabled:opacity-40"
+                    >
+                      {busy ? <Loader2 size={13} className="mx-auto animate-spin" /> : pending && pendingUrls[card.slug] ? "Continue" : included ? "Included" : failed ? "Retry" : activeAccounts.length ? "Add" : "Connect"}
+                    </button>
+                  </div>
+                  {activeAccounts.length > 0 ? (
+                    <div className="ml-14 mt-2 flex flex-col gap-1.5">
+                      {activeAccounts.map((account) => (
+                        <div key={account.id} className="grid grid-cols-[1fr_auto] items-center gap-3 rounded-lg bg-inset px-3 py-2 text-[12px]">
+                          <span className="min-w-0">
+                            <span className="flex items-center gap-1.5 text-ink">
+                              {/active/i.test(account.status) ? <Check size={13} className="text-success" /> : null}
+                              <span className="truncate">{account.alias || account.id}</span>
+                            </span>
+                            <span className="mt-0.5 block truncate text-[11px] text-ink-secondary">{account.status.toLowerCase()}</span>
+                          </span>
+                          <button
+                            type="button"
+                            disabled={busy}
+                            onClick={() => disconnectAccount(card.slug, account.id)}
+                            className="rounded-md px-2 py-1 text-[11px] text-ink-secondary hover:bg-danger/10 hover:text-danger disabled:opacity-40"
+                          >
+                            Disconnect
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </Card>
+  );
+}
+
 export function PluginsPanel() {
   const { dispatch } = useStore();
   const dialogRef = useRef<HTMLDivElement>(null);
-  const [cards, setCards] = useState<ToolkitCard[] | null>(null);
-  const [source, setSource] = useState<"api" | "curated">("curated");
-  const [configured, setConfigured] = useState(true);
-  const [mode, setMode] = useState<"managed" | "self-hosted" | "unavailable">("unavailable");
-  const [status, setStatus] = useState<Record<string, ConnectorStatus>>({});
+  const initialCatalog = getFreshIntegrationsCatalogCache();
+  const [cards, setCards] = useState<ToolkitCard[] | null>(initialCatalog?.cards ?? null);
+  const [source, setSource] = useState<CatalogSource>(initialCatalog?.source ?? "curated");
+  const [configured, setConfigured] = useState(initialCatalog?.configured ?? true);
+  const [mode, setMode] = useState<ConnectionMode>(initialCatalog?.mode ?? "unavailable");
+  const [status, setStatus] = useState<Record<string, ConnectorStatus>>(initialCatalog?.services ?? {});
   const [pendingUrls, setPendingUrls] = useState<Record<string, string>>({});
   const [aliasSlug, setAliasSlug] = useState<string | null>(null);
   const [aliasDraft, setAliasDraft] = useState("");
@@ -103,13 +417,20 @@ export function PluginsPanel() {
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [tab, setTab] = useState<"marketplace" | "connected">("marketplace");
+  const [disconnectTarget, setDisconnectTarget] = useState<{
+    slug: string;
+    service: string;
+    account: { id: string; alias?: string; status: string };
+  } | null>(null);
 
   const pollTimers = useRef(new Map<string, ReturnType<typeof setInterval>>());
   const statusGenerations = useRef(new Map<string, number>());
+  const hadInitialCatalog = useRef(cards !== null);
 
   const refreshStatus = useCallback((slugs: string[]): Promise<Record<string, ConnectorStatus>> => {
     if (!slugs.length) return Promise.resolve({});
     const requestGenerations = new Map(slugs.map((slug) => [slug, statusGenerations.current.get(slug) ?? 0]));
+    setError(null);
     setRefreshing(true);
     return api(`/api/connectors?services=${slugs.join(",")}`)
       .then((r) => {
@@ -124,8 +445,7 @@ export function PluginsPanel() {
           requestGenerations,
         ));
         for (const [slug, state] of Object.entries(services)) {
-          const isCurrent = (statusGenerations.current.get(slug) ?? 0) === (requestGenerations.get(slug) ?? 0);
-          if (isCurrent && state.connected && !state.pending) setPendingUrls((current) => {
+          if (state.connected && !state.pending) setPendingUrls((current) => {
             if (!current[slug]) return current;
             const next = { ...current };
             delete next[slug];
@@ -140,6 +460,7 @@ export function PluginsPanel() {
 
   const refreshConnectedStatus = useCallback((): Promise<Record<string, ConnectorStatus>> => {
     const requestGenerations = new Map(statusGenerations.current);
+    setError(null);
     setRefreshing(true);
     return api("/api/connectors/connected")
       .then((r) => {
@@ -151,8 +472,7 @@ export function PluginsPanel() {
           requestGenerations,
         ));
         for (const [slug, state] of Object.entries(services)) {
-          const isCurrent = (statusGenerations.current.get(slug) ?? 0) === (requestGenerations.get(slug) ?? 0);
-          if (isCurrent && state.connected && !state.pending) setPendingUrls((current) => {
+          if (state.connected && !state.pending) setPendingUrls((current) => {
             if (!current[slug]) return current;
             const next = { ...current };
             delete next[slug];
@@ -172,18 +492,36 @@ export function PluginsPanel() {
 
   useEffect(() => {
     let alive = true;
+    if (hadInitialCatalog.current) void refreshConnectedStatus();
     api("/api/connectors/catalog")
       .then((r) => {
         if (!alive) return;
-        setCards(r.cards ?? []);
-        setSource(r.source ?? "curated");
-        setConfigured(Boolean(r.configured));
-        setMode(r.mode ?? "unavailable");
-        if (r.configured) void refreshConnectedStatus();
+        const cached = saveIntegrationsCatalogCache(r);
+        setCards(cached.cards);
+        setSource(cached.source);
+        setConfigured(cached.configured);
+        setMode(cached.mode);
+        setStatus((current) => ({ ...current, ...cached.services }));
+        if (cached.configured) void refreshConnectedStatus();
       })
       .catch((e) => alive && setError(e.message));
     return () => {
       alive = false;
+    };
+  }, [refreshConnectedStatus]);
+
+  useEffect(() => {
+    const syncAfterOAuth = () => {
+      if (document.visibilityState === "hidden") return;
+      void refreshConnectedStatus();
+    };
+    window.addEventListener("focus", syncAfterOAuth);
+    window.addEventListener("pageshow", syncAfterOAuth);
+    document.addEventListener("visibilitychange", syncAfterOAuth);
+    return () => {
+      window.removeEventListener("focus", syncAfterOAuth);
+      window.removeEventListener("pageshow", syncAfterOAuth);
+      document.removeEventListener("visibilitychange", syncAfterOAuth);
     };
   }, [refreshConnectedStatus]);
 
@@ -309,9 +647,9 @@ export function PluginsPanel() {
     (c) => !search || `${c.label} ${c.slug} ${c.blurb}`.toLowerCase().includes(search.toLowerCase()),
   );
   const visible = matching.filter((card) =>
-    tab === "marketplace" || status[card.slug]?.connected || Boolean(status[card.slug]?.accounts?.length)
+    tab === "marketplace" || activeConnectorAccounts(status[card.slug]?.accounts).length > 0
   );
-  const connectedCount = Object.values(status).filter((service) => service.connected || service.accounts?.length).length;
+  const connectedCount = Object.values(status).filter((service) => activeConnectorAccounts(service.accounts).length > 0).length;
   const close = () => dispatch({ type: "togglePlugins", open: false });
 
   return (
@@ -323,14 +661,25 @@ export function PluginsPanel() {
         ref={dialogRef}
         role="dialog"
         aria-modal="true"
-        aria-labelledby="connected-apps-title"
+        aria-labelledby="integrations-title"
         tabIndex={-1}
-        className="animate-pop-in flex h-[min(780px,calc(100dvh-2rem))] w-full max-w-[1040px] flex-col overflow-hidden rounded-[24px] border border-hairline/50 bg-panel shadow-2xl shadow-black/50"
+        className="relative animate-pop-in flex h-[min(780px,calc(100dvh-2rem))] w-full max-w-[1040px] flex-col overflow-hidden rounded-[24px] border border-hairline/50 bg-panel shadow-2xl shadow-black/50"
       >
         <header className="flex items-start justify-between gap-4 px-6 pb-3 pt-6 sm:px-8 sm:pt-7">
-          <div>
-            <h2 id="connected-apps-title" className="text-[22px] font-semibold tracking-[-0.01em] text-ink">Connected apps</h2>
-            <p className="mt-1 text-[13px] text-ink-secondary">Connect the apps your bots can use.</p>
+          <div className="flex min-w-0 items-start gap-3">
+            <button
+              type="button"
+              onClick={close}
+              aria-label="Back from integrations"
+              title="Back"
+              className="-ml-2 mt-0.5 rounded-lg p-2 text-ink-secondary hover:bg-raised hover:text-ink"
+            >
+              <ChevronLeft size={21} />
+            </button>
+            <div className="min-w-0">
+              <h2 id="integrations-title" className="text-[22px] font-semibold tracking-[-0.01em] text-ink">Integrations</h2>
+              <p className="mt-1 text-[13px] text-ink-secondary">Connect the integrations your bots can use.</p>
+            </div>
           </div>
           <div className="flex items-center gap-1">
             <button
@@ -342,7 +691,7 @@ export function PluginsPanel() {
             </button>
             <button
               onClick={close}
-              aria-label="Close connected apps"
+              aria-label="Close integrations"
               className="rounded-lg p-2 text-ink-secondary hover:bg-raised hover:text-ink"
             >
               <X size={21} />
@@ -351,7 +700,7 @@ export function PluginsPanel() {
         </header>
 
         <div className="flex flex-col gap-3 px-6 pb-4 pt-5 sm:flex-row sm:items-center sm:justify-between sm:px-8">
-          <div className="flex w-fit rounded-xl bg-raised/70 p-1" role="tablist" aria-label="Connected apps view">
+          <div className="flex w-fit rounded-xl bg-raised/70 p-1" role="tablist" aria-label="Integrations view">
             <button
               role="tab"
               aria-selected={tab === "marketplace"}
@@ -389,12 +738,12 @@ export function PluginsPanel() {
 
         {!configured && (
           <div className="mx-6 mb-1 rounded-xl bg-warning/10 px-4 py-3 text-[13px] text-warning sm:mx-8">
-            Connected apps are temporarily unavailable. You can retry after restarting, or configure your own connection service.{" "}
+            Integrations are temporarily unavailable. You can retry after restarting, or configure your own connection service.{" "}
             <button
               className="font-medium underline underline-offset-2"
               onClick={() => {
                 close();
-                dispatch({ type: "toggleAppSettings", open: true });
+                dispatch({ type: "toggleAppSettings", open: true, backTarget: "plugins" });
               }}
             >
               Open settings
@@ -408,7 +757,7 @@ export function PluginsPanel() {
               className="underline underline-offset-2 hover:text-ink"
               onClick={() => {
                 close();
-                dispatch({ type: "toggleAppSettings", open: true });
+                dispatch({ type: "toggleAppSettings", open: true, backTarget: "plugins" });
               }}
             >
               Update your Composio key
@@ -434,10 +783,11 @@ export function PluginsPanel() {
               const pending = serviceStatus?.pending;
               const failed = serviceStatus?.status && /^(expired|failed)$/i.test(serviceStatus.status);
               const accounts = serviceStatus?.accounts ?? [];
+              const activeAccounts = activeConnectorAccounts(accounts);
               // connected with no accounts and nothing in flight = a no-auth
               // toolkit: there is no OAuth to run, so "Connect" would mint a
               // pointless authorize. It ships included.
-              const included = serviceStatus?.connected === true && !accounts.length && !pending && !failed;
+              const included = serviceStatus?.connected === true && !activeAccounts.length && !pending && !failed;
               const addingAccount = aliasSlug === card.slug;
               const busy = busySlug === card.slug;
               return (
@@ -460,7 +810,7 @@ export function PluginsPanel() {
                         if (pending && pendingUrls[card.slug]) {
                           setError(null);
                           void openConnectUrl(pendingUrls[card.slug]).catch((e) => setError(e.message));
-                        } else if (accounts.length) {
+                        } else if (activeAccounts.length) {
                           setAliasSlug((current) => current === card.slug ? null : card.slug);
                           setAliasDraft("");
                         } else void connect(card.slug);
@@ -471,7 +821,7 @@ export function PluginsPanel() {
                         <Loader2 size={13} className="mx-auto animate-spin" />
                       ) : pending && pendingUrls[card.slug] ? (
                         "Continue"
-                      ) : accounts.length ? (
+                      ) : activeAccounts.length ? (
                         "Add account"
                       ) : included ? (
                         "Included"
@@ -482,9 +832,9 @@ export function PluginsPanel() {
                       )}
                     </button>
                   </div>
-                  {accounts.length > 0 && (
+                  {activeAccounts.length > 0 && (
                     <div className="ml-14 mt-3 space-y-2">
-                      {accounts.map((account) => {
+                      {activeAccounts.map((account) => {
                         const active = /^active$/i.test(account.status);
                         return (
                           <div key={account.id} className="flex items-center gap-2 rounded-lg bg-raised/45 px-3 py-2">
@@ -500,10 +850,7 @@ export function PluginsPanel() {
                             <button
                               type="button"
                               disabled={busy}
-                              onClick={() => {
-                                if (!window.confirm(disconnectAccountConfirmation(card.label, account))) return;
-                                disconnectAccount(card.slug, account.id);
-                              }}
+                              onClick={() => setDisconnectTarget({ slug: card.slug, service: card.label, account })}
                               className="rounded-md px-2 py-1 text-[11px] text-ink-secondary transition-colors hover:bg-danger/10 hover:text-danger disabled:opacity-40"
                               aria-label={`Disconnect ${account.alias || account.id} from ${card.label}`}
                             >
@@ -554,7 +901,7 @@ export function PluginsPanel() {
           {cards !== null && visible.length === 0 && (
             <div className="flex min-h-56 flex-col items-center justify-center text-center">
               <div className="text-[14px] font-medium text-ink">
-                {tab === "connected" ? "No connected apps yet" : "No apps found"}
+                {tab === "connected" ? "No integrations connected yet" : "No integrations found"}
               </div>
               <div className="mt-1 text-[12.5px] text-ink-secondary">
                 {tab === "connected" ? "Connect an app from Marketplace and it will appear here." : "Try a different search."}
@@ -562,6 +909,68 @@ export function PluginsPanel() {
             </div>
           )}
         </div>
+        {disconnectTarget && (
+          <div
+            className="absolute inset-0 z-10 flex items-center justify-center bg-black/45 px-5 backdrop-blur-[1px]"
+            onMouseDown={(event) => event.target === event.currentTarget && setDisconnectTarget(null)}
+          >
+            <div
+              role="alertdialog"
+              aria-modal="true"
+              aria-labelledby="disconnect-app-title"
+              aria-describedby="disconnect-app-description"
+              className="w-full max-w-[420px] rounded-2xl border border-hairline/60 bg-panel p-5 shadow-2xl shadow-black/50"
+            >
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <h3 id="disconnect-app-title" className="text-[16px] font-semibold text-ink">
+                    Disconnect {disconnectTarget.service}
+                  </h3>
+                  <p id="disconnect-app-description" className="mt-2 text-[13px] leading-relaxed text-ink-secondary">
+                    Only this account will be revoked. Other {disconnectTarget.service} accounts will stay connected.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setDisconnectTarget(null)}
+                  aria-label="Cancel disconnect"
+                  className="rounded-lg p-1.5 text-ink-secondary hover:bg-raised hover:text-ink"
+                >
+                  <X size={17} />
+                </button>
+              </div>
+              <div className="mt-4 rounded-xl bg-raised/60 px-3 py-2">
+                <div className="truncate text-[13px] font-medium text-ink">
+                  {disconnectTarget.account.alias || disconnectTarget.account.id}
+                </div>
+                <div className="mt-0.5 truncate text-[11px] text-ink-secondary">
+                  {disconnectTarget.account.alias ? `${disconnectTarget.account.id} · ` : ""}
+                  {disconnectTarget.account.status.toLowerCase()}
+                </div>
+              </div>
+              <div className="mt-5 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setDisconnectTarget(null)}
+                  className="rounded-lg bg-raised px-4 py-2 text-[13px] text-ink transition-colors hover:bg-raised-hover"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const target = disconnectTarget;
+                    setDisconnectTarget(null);
+                    disconnectAccount(target.slug, target.account.id);
+                  }}
+                  className="rounded-lg border border-danger/40 bg-danger/10 px-4 py-2 text-[13px] font-medium text-danger transition-colors hover:bg-danger/15"
+                >
+                  Disconnect
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

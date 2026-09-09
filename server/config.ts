@@ -64,6 +64,50 @@ const featureConfigSchema = z.object({
   /** Experimental desktop workflow recorder. Hidden unless explicitly enabled. */
   skillRecorder: z.boolean().optional(),
 });
+const whatsappConfigSchema = z.object({
+  autoReplyEnabled: z.boolean().optional(),
+  autoReplyWebhookUrl: optionalText,
+  metaAccessToken: optionalText,
+  metaPhoneNumberId: optionalText,
+  metaBusinessAccountId: optionalText,
+  metaAppId: optionalText,
+  displayPhoneNumber: optionalText,
+  verifiedName: optionalText,
+  validatedAt: z.number().optional(),
+  webhookKey: optionalText,
+  verifyToken: optionalText,
+  webhookAccountEmail: optionalText,
+});
+const analysisProviderSchema = z.enum([
+  "gemini",
+  "chatgpt",
+  "perplexity",
+  "grok",
+  "deepseek",
+  "cloudflare",
+  "claude",
+  "nvidia",
+  "mistral",
+  "ollama",
+]);
+const analysisConfigSchema = z.object({
+  provider: analysisProviderSchema.optional(),
+  model: optionalText,
+  language: optionalText,
+  cloudflareAccountId: optionalText,
+  ollamaBaseUrl: optionalText,
+  keys: z.object({
+    gemini: optionalText,
+    chatgpt: optionalText,
+    perplexity: optionalText,
+    grok: optionalText,
+    deepseek: optionalText,
+    cloudflare: optionalText,
+    claude: optionalText,
+    nvidia: optionalText,
+    mistral: optionalText,
+  }).optional(),
+});
 const instanceConfigSchema = z.object({
   driver: z.string().min(1),
   displayName: optionalText,
@@ -84,15 +128,20 @@ const appConfigSchema = z.object({
   vps: vpsConfigSchema.optional(),
   /** Optional OpenCode key; persisted write-only and passed only to its child. */
   opencodeGo: z.object({ apiKey: optionalText }).optional(),
+  /** Ultravox key used for voice catalog and voice previews. */
+  ultravox: z.object({ apiKey: optionalText }).optional(),
   /** Voice credentials and the selected voice id. */
   tts: z.object({ key: optionalText, voice: optionalText }).optional(),
   /** OpenAI key used only by the in-process avatar image generator. */
   imageGen: z.object({ key: optionalText }).optional(),
+  /** Shared AI analysis provider, model, and write-only provider keys. */
+  analysis: analysisConfigSchema.optional(),
   /** Non-secret profile details shown in the sidebar. */
   profile: z.object({ name: optionalText, email: optionalText }).optional(),
   rooms: roomConfigSchema.optional(),
   localVm: localVmConfigSchema.optional(),
   features: featureConfigSchema.optional(),
+  whatsapp: whatsappConfigSchema.optional(),
   instances: instanceConfigMapSchema.optional(),
 });
 const appConfigPatchSchema = appConfigSchema.omit({ instances: true });
@@ -108,8 +157,17 @@ export interface AppConfig {
   /** A named host from the user's SSH config. Authentication stays with SSH. */
   vps?: { sshAlias?: string };
   opencodeGo?: { apiKey?: string };
+  ultravox?: { apiKey?: string };
   tts?: { key?: string; voice?: string };
   imageGen?: { key?: string };
+  analysis?: {
+    provider?: "gemini" | "chatgpt" | "perplexity" | "grok" | "deepseek" | "cloudflare" | "claude" | "nvidia" | "mistral" | "ollama";
+    model?: string;
+    language?: string;
+    cloudflareAccountId?: string;
+    ollamaBaseUrl?: string;
+    keys?: Partial<Record<"gemini" | "chatgpt" | "perplexity" | "grok" | "deepseek" | "cloudflare" | "claude" | "nvidia" | "mistral", string>>;
+  };
   profile?: { name?: string; email?: string };
   rooms?: { turnTimeoutMinutes: number };
   /** Shared preserves the historical singleton. Per-bot gives every bot a
@@ -117,6 +175,20 @@ export interface AppConfig {
   localVm?: { mode?: "shared" | "per-bot"; maxInstances?: number };
   /** Opt-in product experiments. Every flag defaults to disabled. */
   features?: { skillRecorder?: boolean };
+  whatsapp?: {
+    autoReplyEnabled?: boolean;
+    autoReplyWebhookUrl?: string;
+    metaAccessToken?: string;
+    metaPhoneNumberId?: string;
+    metaBusinessAccountId?: string;
+    metaAppId?: string;
+    displayPhoneNumber?: string;
+    verifiedName?: string;
+    validatedAt?: number;
+    webhookKey?: string;
+    verifyToken?: string;
+    webhookAccountEmail?: string;
+  };
   instances?: InstanceConfigMap;
 }
 export type ConfigPatch = z.output<typeof appConfigPatchSchema>;
@@ -213,10 +285,22 @@ export function loadConfig(): AppConfig {
   }
   cfg.opencodeGo = { ...cfg.opencodeGo };
   if (process.env.OPENCODE_API_KEY !== undefined) cfg.opencodeGo.apiKey = process.env.OPENCODE_API_KEY;
+  cfg.ultravox = { ...cfg.ultravox };
+  if (process.env.ULTRAVOX_API_KEY !== undefined) cfg.ultravox.apiKey = process.env.ULTRAVOX_API_KEY;
   cfg.tts = { ...cfg.tts };
   if (process.env.OMB_TTS_KEY !== undefined) cfg.tts.key = process.env.OMB_TTS_KEY;
   cfg.imageGen = { ...cfg.imageGen };
   if (process.env.OMB_OPENAI_IMAGE_KEY !== undefined) cfg.imageGen.key = process.env.OMB_OPENAI_IMAGE_KEY;
+  cfg.analysis = { ...cfg.analysis, keys: { ...cfg.analysis?.keys } };
+  if (process.env.GEMINI_API_KEY !== undefined) cfg.analysis.keys!.gemini = process.env.GEMINI_API_KEY;
+  if (process.env.OPENAI_API_KEY !== undefined) cfg.analysis.keys!.chatgpt = process.env.OPENAI_API_KEY;
+  if (process.env.PERPLEXITY_API_KEY !== undefined) cfg.analysis.keys!.perplexity = process.env.PERPLEXITY_API_KEY;
+  if (process.env.XAI_API_KEY !== undefined) cfg.analysis.keys!.grok = process.env.XAI_API_KEY;
+  if (process.env.DEEPSEEK_API_KEY !== undefined) cfg.analysis.keys!.deepseek = process.env.DEEPSEEK_API_KEY;
+  if (process.env.CLOUDFLARE_API_TOKEN !== undefined) cfg.analysis.keys!.cloudflare = process.env.CLOUDFLARE_API_TOKEN;
+  if (process.env.ANTHROPIC_API_KEY !== undefined) cfg.analysis.keys!.claude = process.env.ANTHROPIC_API_KEY;
+  if (process.env.NVIDIA_API_KEY !== undefined) cfg.analysis.keys!.nvidia = process.env.NVIDIA_API_KEY;
+  if (process.env.MISTRAL_API_KEY !== undefined) cfg.analysis.keys!.mistral = process.env.MISTRAL_API_KEY;
   return cfg;
 }
 
@@ -234,8 +318,18 @@ export function syncCredentialEnv(patch: Partial<AppConfig>): void {
     [patch.box?.token, "BOX_TOKEN"],
     [patch.cfComputer?.token, "OMB_CF_COMPUTER_TOKEN"],
     [patch.opencodeGo?.apiKey, "OPENCODE_API_KEY"],
+    [patch.ultravox?.apiKey, "ULTRAVOX_API_KEY"],
     [patch.tts?.key, "OMB_TTS_KEY"],
     [patch.imageGen?.key, "OMB_OPENAI_IMAGE_KEY"],
+    [patch.analysis?.keys?.gemini, "GEMINI_API_KEY"],
+    [patch.analysis?.keys?.chatgpt, "OPENAI_API_KEY"],
+    [patch.analysis?.keys?.perplexity, "PERPLEXITY_API_KEY"],
+    [patch.analysis?.keys?.grok, "XAI_API_KEY"],
+    [patch.analysis?.keys?.deepseek, "DEEPSEEK_API_KEY"],
+    [patch.analysis?.keys?.cloudflare, "CLOUDFLARE_API_TOKEN"],
+    [patch.analysis?.keys?.claude, "ANTHROPIC_API_KEY"],
+    [patch.analysis?.keys?.nvidia, "NVIDIA_API_KEY"],
+    [patch.analysis?.keys?.mistral, "MISTRAL_API_KEY"],
   ];
   for (const [value, name] of secrets) {
     if (value === undefined) continue;
@@ -254,8 +348,17 @@ export const WORKSPACE_CREDENTIAL_ENV = [
   "BOX_TOKEN",
   "OMB_CF_COMPUTER_TOKEN",
   "OPENCODE_API_KEY",
+  "ULTRAVOX_API_KEY",
   "OMB_TTS_KEY",
   "OMB_OPENAI_IMAGE_KEY",
+  "GEMINI_API_KEY",
+  "OPENAI_API_KEY",
+  "PERPLEXITY_API_KEY",
+  "DEEPSEEK_API_KEY",
+  "CLOUDFLARE_API_TOKEN",
+  "ANTHROPIC_API_KEY",
+  "NVIDIA_API_KEY",
+  "MISTRAL_API_KEY",
   "COMPOSIO_API_KEY",
   "OMB_COMPOSIO_BROKER_TOKEN",
 ] as const;
@@ -296,13 +399,27 @@ export function saveConfig(patch: Partial<AppConfig>): void {
     /* first write */
   }
   const checkedPatch = appConfigSchema.partial().parse(patch);
-  for (const key of ["xai", "composio", "box", "cfComputer", "opencodeGo", "tts", "imageGen", "profile", "rooms", "localVm", "features"] as const) {
+  for (const key of ["xai", "composio", "box", "cfComputer", "opencodeGo", "ultravox", "tts", "imageGen", "profile", "rooms", "localVm", "features", "whatsapp"] as const) {
     const section = checkedPatch[key];
     if (!section) continue;
     const current = jsonObjectSchema.safeParse(disk[key]);
     const merged: JsonObject = current.success ? { ...current.data } : {};
     Object.assign(merged, section);
     disk[key] = merged;
+  }
+  if (checkedPatch.analysis) {
+    const current = jsonObjectSchema.safeParse(disk.analysis);
+    const merged: JsonObject = current.success ? { ...current.data } : {};
+    const existingKeys = jsonObjectSchema.safeParse(merged.keys);
+    const patchKeys = jsonObjectSchema.safeParse(checkedPatch.analysis.keys);
+    Object.assign(merged, checkedPatch.analysis);
+    if (checkedPatch.analysis.keys) {
+      merged.keys = {
+        ...(existingKeys.success ? existingKeys.data : {}),
+        ...(patchKeys.success ? patchKeys.data : {}),
+      };
+    }
+    disk.analysis = merged;
   }
   if (checkedPatch.vps !== undefined) disk.vps = normalizeVpsConfig(checkedPatch.vps);
   if (checkedPatch.instances) {
@@ -384,9 +501,28 @@ function injectedEnvironment(cfg: AppConfig, driver: string): Map<string, string
     environment.set("OPENAI_COMPAT_API_KEY", cfg.openaiCompat.key);
   if (driver === "openai-compat" && cfg.openaiCompat?.url)
     environment.set("OPENAI_COMPAT_URL", cfg.openaiCompat.url);
+  if (driver === "analysis-api") {
+    if (cfg.analysis?.keys?.gemini) environment.set("GEMINI_API_KEY", cfg.analysis.keys.gemini);
+    if (cfg.analysis?.keys?.chatgpt) environment.set("OPENAI_API_KEY", cfg.analysis.keys.chatgpt);
+    if (cfg.analysis?.keys?.perplexity) environment.set("PERPLEXITY_API_KEY", cfg.analysis.keys.perplexity);
+    if (cfg.analysis?.keys?.grok) environment.set("XAI_API_KEY", cfg.analysis.keys.grok);
+    if (cfg.analysis?.keys?.deepseek) environment.set("DEEPSEEK_API_KEY", cfg.analysis.keys.deepseek);
+    if (cfg.analysis?.keys?.cloudflare) environment.set("CLOUDFLARE_API_TOKEN", cfg.analysis.keys.cloudflare);
+    if (cfg.analysis?.keys?.claude) environment.set("ANTHROPIC_API_KEY", cfg.analysis.keys.claude);
+    if (cfg.analysis?.keys?.nvidia) environment.set("NVIDIA_API_KEY", cfg.analysis.keys.nvidia);
+    if (cfg.analysis?.keys?.mistral) environment.set("MISTRAL_API_KEY", cfg.analysis.keys.mistral);
+  }
   if (driver === "boxAgent" && cfg.box?.token) environment.set("BOX_TOKEN", cfg.box.token);
   if (driver === "opencodeGo" && cfg.opencodeGo?.apiKey) environment.set("OPENCODE_API_KEY", cfg.opencodeGo.apiKey);
   return environment;
+}
+
+function analysisChatConfigured(cfg: AppConfig): boolean {
+  const provider = cfg.analysis?.provider;
+  if (!provider) return false;
+  if (provider === "ollama") return Boolean(cfg.analysis?.ollamaBaseUrl);
+  if (provider === "cloudflare") return Boolean(cfg.analysis?.keys?.cloudflare && cfg.analysis?.cloudflareAccountId);
+  return Boolean(cfg.analysis?.keys?.[provider]);
 }
 
 // Default fleet: one instance per built-in driver (upstream
@@ -409,6 +545,20 @@ export function instanceConfigs(cfg: AppConfig): InstanceConfigMap {
   // The driver stays registered for enterprise licences, which keep Gemini
   // CLI — `{"instances": {"gemini": {"driver": "geminiAgent"}}}` restores it.
   const DEFAULT_FLEET: InstanceConfigMap = {
+    ...(analysisChatConfigured(cfg)
+      ? {
+          analysisApi: {
+            driver: "analysis-api",
+            config: {
+              provider: cfg.analysis?.provider,
+              model: cfg.analysis?.model,
+              language: cfg.analysis?.language,
+              cloudflareAccountId: cfg.analysis?.cloudflareAccountId,
+              ollamaBaseUrl: cfg.analysis?.ollamaBaseUrl,
+            },
+          },
+        }
+      : {}),
     grok: { driver: "grokAgent" },
     kimi: { driver: "kimiAgent" },
     droid: { driver: "droidAgent" },
@@ -431,6 +581,20 @@ export function instanceConfigs(cfg: AppConfig): InstanceConfigMap {
   // never see. Custom-only engines stay in CUSTOM_ONLY so a one-off test map
   // is not expanded, matching the claude/grok/codex product-fleet probe.
   const PRODUCT_FLEET_ADDITIONS = {
+    ...(analysisChatConfigured(cfg)
+      ? {
+          analysisApi: {
+            driver: "analysis-api",
+            config: {
+              provider: cfg.analysis?.provider,
+              model: cfg.analysis?.model,
+              language: cfg.analysis?.language,
+              cloudflareAccountId: cfg.analysis?.cloudflareAccountId,
+              ollamaBaseUrl: cfg.analysis?.ollamaBaseUrl,
+            },
+          },
+        }
+      : {}),
     cursor: { driver: "cursorAgent" },
     openaiCompat: { driver: "openai-compat" },
     ...CUSTOM_ONLY,

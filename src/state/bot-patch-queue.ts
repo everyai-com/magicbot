@@ -18,6 +18,7 @@ export type BotUpdatePatch = Partial<
     | "autoApprove"
     | "speakReplies"
     | "voice"
+    | "agentConfig"
     | "pinned"
     | "hidden"
     | "section"

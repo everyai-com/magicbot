@@ -21,3 +21,6 @@ release
 cloudflare/composio-broker/worker-configuration.d.ts
 .claude/worktrees/
 .vercel/
+
+# Local Netlify folder
+.netlify

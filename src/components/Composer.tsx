@@ -287,13 +287,13 @@ export function Composer({
   };
 
   return (
-    <div className="shrink-0 border-t border-hairline/30 bg-app/95 px-2.5 pb-[max(0.6rem,env(safe-area-inset-bottom))] pt-2.5 backdrop-blur-xl sm:px-5 sm:pb-5 sm:pt-3">
+    <div className="shrink-0 border-t border-hairline/30 bg-app/95 px-4 pb-[max(0.6rem,env(safe-area-inset-bottom))] pt-2.5 backdrop-blur-xl sm:px-10 sm:pb-5 sm:pt-3">
       {speechError && (
-        <div className="mx-auto mb-2 max-w-[900px] rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-[12px] text-warning">
+        <div className="mx-auto mb-2 max-w-none rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-[12px] text-warning">
           {speechError}
         </div>
       )}
-      <div className="relative mx-auto max-w-[900px]">
+      <div className="relative mx-auto max-w-none">
         {pendingChip && (
           <div className="mb-2 flex items-center gap-2 rounded-lg border border-hairline/40 bg-panel px-3 py-2 text-[12.5px] text-ink-secondary">
             <Clock size={13} className="shrink-0" />

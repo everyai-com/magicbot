@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { botAvatarCropSchema, botAvatarUrlSchema } from "../shared/bot-avatar.ts";
+import { AGENT_CONFIG_TEXT_LIMIT } from "../shared/agent-config.ts";
 import { BOT_PROFILE_LIMITS } from "../shared/bot-profile.ts";
 
 import type { BotRecord } from "./store.ts";
@@ -13,8 +14,36 @@ export const BOT_PROFILE_PATCH_FIELDS = [
   "avatarUrl",
   "avatarCrop",
   "voice",
+  "agentConfig",
   "speakReplies",
 ] as const;
+
+const optionalTrimmedText = z
+  .string({ error: "agent config values must be strings" })
+  .max(AGENT_CONFIG_TEXT_LIMIT, { error: `agent config values must be at most ${AGENT_CONFIG_TEXT_LIMIT} characters` })
+  .optional();
+
+const agentConfigSchema = z
+  .object({
+    voices: optionalTrimmedText,
+    knowledgeBase: optionalTrimmedText,
+    aiProvider: optionalTrimmedText,
+    model: optionalTrimmedText,
+    firstSpeaker: z.enum(["agent", "caller"], { error: "firstSpeaker must be agent or caller" }).optional(),
+    temperature: z.number({ error: "temperature must be a number" }).min(0).max(2).optional(),
+    language: optionalTrimmedText,
+    maxDuration: z.number({ error: "maxDuration must be a number" }).int().min(1).max(86400).optional(),
+    callForwarding: optionalTrimmedText,
+    phoneNumberId: optionalTrimmedText,
+    phoneNumber: optionalTrimmedText,
+    knowledgeBaseIds: optionalTrimmedText,
+    knowledgeBaseCorpusMap: optionalTrimmedText,
+    appointmentTools: optionalTrimmedText,
+    customTools: optionalTrimmedText,
+    customCrm: optionalTrimmedText,
+    webhooks: optionalTrimmedText,
+  })
+  .strict();
 
 const profilePatchSchema = z.object({
   name: z
@@ -41,6 +70,7 @@ const profilePatchSchema = z.object({
     .string({ error: "voice must be a string" })
     .max(BOT_PROFILE_LIMITS.voice, { error: "voice must be at most 200 characters" })
     .optional(),
+  agentConfig: agentConfigSchema.optional(),
   speakReplies: z.boolean({ error: "speakReplies must be true or false" }).optional(),
 });
 
@@ -49,7 +79,15 @@ export type BotProfilePatchInput = z.input<typeof profilePatchSchema>;
 export type BotProfilePatch = Partial<
   Pick<
     BotRecord,
-    "name" | "title" | "description" | "notifications" | "avatarUrl" | "avatarCrop" | "voice" | "speakReplies"
+    | "name"
+    | "title"
+    | "description"
+    | "notifications"
+    | "avatarUrl"
+    | "avatarCrop"
+    | "voice"
+    | "agentConfig"
+    | "speakReplies"
   >
 >;
 

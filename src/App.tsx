@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { Loader2, Menu } from "lucide-react";
 import { StoreProvider, useStore } from "@/state/store";
 import { Onboarding } from "@/components/Onboarding";
-import { emailGateDone, initAnalytics } from "@/lib/analytics";
+import { initAnalytics } from "@/lib/analytics";
+import { betterAuthToken } from "@/lib/auth";
 import { Sidebar } from "@/components/Sidebar";
 import { ChatView } from "@/components/ChatView";
 import { GroupView } from "@/components/GroupView";
@@ -150,7 +151,7 @@ export default function App() {
   const [gated, setGated] = useState(false);
   useEffect(() => {
     initAnalytics();
-    if (emailGateDone()) return;
+    if (betterAuthToken()) return;
     fetch("/api/auth/me")
       .then((response) => {
         if (!response.ok) setGated(true);

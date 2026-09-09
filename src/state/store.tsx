@@ -17,6 +17,7 @@ import type { CloudBackend, EffortLevel } from "../../server/contracts.ts";
 import type { MausColor, MausMotion } from "@/lib/mascot";
 import type { BotPersonality } from "../../shared/bot-personality";
 import type { BotAvatarCrop } from "../../shared/bot-avatar";
+import type { AgentProfileConfig } from "../../shared/agent-config";
 import type { Routine, RoutineInput, RoutineRun } from "@/lib/routines";
 import type { WebhookAttempt, WebhookIngressStatus, WebhookTrigger } from "@/lib/webhooks";
 import { currentCall } from "@/lib/call";
@@ -24,6 +25,7 @@ import { showNotification, type NotificationTarget } from "@/lib/notify";
 import { speaker } from "@/lib/tts";
 import { createBotPatchQueue, type BotUpdatePatch } from "./bot-patch-queue";
 import { skillRecorderEnabled } from "@/lib/feature-flags";
+import { betterAuthToken } from "@/lib/auth";
 
 export type { MausColor } from "@/lib/mascot";
 
@@ -154,6 +156,8 @@ export interface TaskUsage {
 
 export interface Bot {
   id: string;
+  /** D1 agent id when this local bot mirrors a signed-in account bot. */
+  remoteAgentId?: string;
   threadId: string;
   /** every context this bot has, newest first */
   tasks?: Task[];
@@ -188,6 +192,8 @@ export interface Bot {
   speakReplies?: boolean;
   /** this bot's own voice id (falls back to the app-wide one) */
   voice?: string;
+  /** Voice/call/integration settings shown below the prompt in Bot profile. */
+  agentConfig?: AgentProfileConfig;
   pinned?: boolean;
   hidden?: boolean;
   /** Sidebar section this bot renders under; absent = unsectioned. */
@@ -257,7 +263,23 @@ export interface ConfigStatus {
   vps: { configured: boolean; sshAlias: string };
   rooms: { turnTimeoutMinutes: number };
   localVm: { mode: "shared" | "per-bot"; maxInstances: number };
+  whatsapp?: {
+    autoReplyEnabled: boolean;
+    autoReplyWebhookUrl: string;
+    apiConfigured: boolean;
+    metaPhoneNumberId: string;
+    metaBusinessAccountId: string;
+    metaAppId: string;
+    displayPhoneNumber: string;
+    verifiedName: string;
+    validatedAt: number | null;
+    webhookKey?: string;
+    webhookUrl?: string;
+    verifyToken?: string;
+    webhookAccountEmail?: string;
+  };
   opencodeGo?: { configured: boolean };
+  ultravox?: { configured: boolean };
   /** Per-user ChatGPT subscription connection used by the hosted Codex engine. */
   codex?: { configured: boolean; runtimeReady: boolean; modelCount: number; consentVersion: string };
   /** Per-user Claude Code subscription connection for the hosted web engine. */
@@ -270,6 +292,15 @@ export interface ConfigStatus {
   tts?: { configured: boolean; ready: boolean; voice: string; provider?: "elevenlabs" | "cloudflare" };
   /** Shared write-only credential for on-demand GPT Image avatars. */
   imageGen?: { configured: boolean; provider?: "openai" | "cloudflare" };
+  /** Shared AI analysis provider, model, and redacted per-provider connection status. */
+  analysis?: {
+    provider: "gemini" | "chatgpt" | "perplexity" | "grok" | "deepseek" | "cloudflare" | "claude" | "nvidia" | "mistral" | "ollama";
+    model: string;
+    language: string;
+    cloudflareAccountId: string;
+    ollamaBaseUrl: string;
+    configured: Record<"gemini" | "chatgpt" | "perplexity" | "grok" | "deepseek" | "cloudflare" | "claude" | "nvidia" | "mistral" | "ollama", boolean>;
+  };
   /** who's using the app — collected in onboarding, shown in the sidebar */
   profile?: { name: string; email: string };
   /** Experimental features are opt-in and default off when absent. */
@@ -278,7 +309,7 @@ export interface ConfigStatus {
 
 export type ConfigStatusFrame = Pick<
   ConfigStatus,
-  "hosted" | "xai" | "composio" | "cfComputer" | "vps" | "rooms" | "localVm" | "opencodeGo" | "codex" | "anthropic" | "defaultEngine" | "tts" | "imageGen" | "profile" | "features"
+  "hosted" | "xai" | "composio" | "cfComputer" | "vps" | "rooms" | "localVm" | "whatsapp" | "opencodeGo" | "ultravox" | "codex" | "anthropic" | "defaultEngine" | "tts" | "imageGen" | "analysis" | "profile" | "features"
 >;
 
 export function configStatusFromFrame(frame: ConfigStatusFrame): ConfigStatus {
@@ -290,12 +321,15 @@ export function configStatusFromFrame(frame: ConfigStatusFrame): ConfigStatus {
     vps: frame.vps,
     rooms: frame.rooms,
     localVm: frame.localVm,
+    whatsapp: frame.whatsapp,
     opencodeGo: frame.opencodeGo,
+    ultravox: frame.ultravox,
     codex: frame.codex,
     anthropic: frame.anthropic,
     defaultEngine: frame.defaultEngine,
     tts: frame.tts,
     imageGen: frame.imageGen,
+    analysis: frame.analysis,
     profile: frame.profile,
     features: frame.features,
   };
@@ -348,11 +382,13 @@ export interface InstanceInfo {
 }
 
 export type AppSettingsSection =
+  | "analysis"
   | "general"
   | "connections"
   | "engines"
-  | "companion"
+  | "voices"
   | "computer"
+  | "integrations"
   | "usage";
 
 export interface AppState {
@@ -375,6 +411,7 @@ export interface AppState {
   inspectorOpen: boolean;
   appSettingsOpen: boolean;
   appSettingsSection: AppSettingsSection;
+  appSettingsBackTarget: "plugins" | null;
   /** latest live frame of a bot's computer, per botId */
   screens: Record<string, { png: string; mime: string }>;
   /** bots whose cloud computer is being provisioned */
@@ -457,8 +494,10 @@ export type Action =
   | { type: "pendingQueued"; threadId: string; queueId: string; text: string }
   | { type: "consumePendingQueued"; threadId: string; queueId: string }
   | { type: "editMessage"; botId: string; messageId: string; text: string }
+  | { type: "deleteMessage"; botId: string; messageId: string }
+  | { type: "messagesDeleted"; threadId: string; messageIds: string[]; activeLeafId: string | null }
   | { type: "switchBranch"; botId: string; messageId: string }
-  | { type: "threadActive"; threadId: string; activeLeafId: string }
+  | { type: "threadActive"; threadId: string; activeLeafId: string | null }
   | { type: "answerCard"; botId: string; messageId: string; answer: string }
   | { type: "dismissCard"; botId: string; messageId: string }
   // permission cards answer by THREAD, so a request raised inside a room
@@ -498,7 +537,7 @@ export type Action =
   | { type: "toggleInspector"; open?: boolean }
   | { type: "focusMessage"; threadId: string; messageId: string }
   | { type: "focusMessageConsumed"; nonce: number }
-  | { type: "toggleAppSettings"; open?: boolean; section?: AppSettingsSection }
+  | { type: "toggleAppSettings"; open?: boolean; section?: AppSettingsSection; backTarget?: "plugins" | null }
   | {
       type: "updateBot";
       botId: string;
@@ -545,6 +584,14 @@ function withMascotMotion(
       kind,
     },
   };
+}
+
+const ERROR_RESPONSE_PATTERN =
+  /\b(api key expired|api error|request failed|fetch failed|invalid api key|unauthorized|forbidden|expired|failed|error|could not|unable)\b/i;
+
+function botTextMotion(message: Message): Exclude<MausMotion, "none"> | null {
+  if (message.role !== "bot" || message.kind !== "text") return null;
+  return ERROR_RESPONSE_PATTERN.test(message.text ?? "") ? "failure" : "success";
 }
 
 function patchCard(state: AppState, botId: string, messageId: string, patch: Partial<OptionCardData>): AppState {
@@ -812,15 +859,13 @@ export function reducer(state: AppState, action: Action): AppState {
       const motion =
         action.message.kind === "options"
           ? "thinking"
-          : action.message.kind === "activity"
-            ? action.message.tool?.ok === false
-              ? "failure"
-              : action.message.tool?.ok === true
-                ? "success"
-                : "working"
-            : action.message.role === "bot" && action.message.kind === "text"
-              ? "blink"
-              : null;
+            : action.message.kind === "activity"
+              ? action.message.tool?.ok === false
+                ? "failure"
+                : action.message.tool?.ok === true
+                  ? "success"
+                  : "working"
+            : botTextMotion(action.message);
       const animated = motion ? withMascotMotion(next, bot.id, motion) : next;
       return animated;
     }
@@ -934,6 +979,7 @@ export function reducer(state: AppState, action: Action): AppState {
         ...state,
         appSettingsOpen: open,
         appSettingsSection: action.section ?? state.appSettingsSection,
+        appSettingsBackTarget: open ? action.backTarget ?? null : null,
         settingsOpen: open ? false : state.settingsOpen,
         computerOpen: open ? false : state.computerOpen,
         inspectorOpen: open ? false : state.inspectorOpen,
@@ -970,6 +1016,31 @@ export function reducer(state: AppState, action: Action): AppState {
         ...b,
         activeLeafId: action.activeLeafId,
       }));
+    }
+    case "messagesDeleted": {
+      const deleted = new Set(action.messageIds);
+      return {
+        ...state,
+        bots: state.bots.map((b) =>
+          b.threadId === action.threadId
+            ? {
+                ...b,
+                messages: b.messages.filter((message) => !deleted.has(message.id)),
+                activeLeafId: action.activeLeafId,
+                pinnedMessageId: b.pinnedMessageId && deleted.has(b.pinnedMessageId) ? "" : b.pinnedMessageId,
+              }
+            : b,
+        ),
+        groups: state.groups.map((g) =>
+          g.threadId === action.threadId
+            ? {
+                ...g,
+                messages: g.messages.filter((message) => !deleted.has(message.id)),
+                pinnedMessageId: g.pinnedMessageId && deleted.has(g.pinnedMessageId) ? "" : g.pinnedMessageId,
+              }
+            : g,
+        ),
+      };
     }
     // optimistic leaf move; the server's thread frame confirms it later
     case "switchBranch": {
@@ -1064,6 +1135,26 @@ export function reducer(state: AppState, action: Action): AppState {
     }
     case "editMessage":
       return withMascotMotion(state, action.botId, "working");
+    case "deleteMessage": {
+      const bot = state.bots.find((b) => b.id === action.botId);
+      if (!bot) return state;
+      const source = bot.messages.find((message) => message.id === action.messageId);
+      if (!source) return state;
+      const parentId = source.parentId ?? null;
+      const childIds = new Set(bot.messages.filter((message) => message.parentId === action.messageId).map((message) => message.id));
+      return updateBot(state, action.botId, (b) => {
+        const messages = b.messages
+          .filter((message) => message.id !== action.messageId)
+          .map((message) => message.parentId === action.messageId ? { ...message, parentId } : message);
+        const children = messages.filter((message) => childIds.has(message.id));
+        return {
+          ...b,
+          messages,
+          activeLeafId: b.activeLeafId === action.messageId ? children.at(-1)?.id ?? parentId ?? messages.at(-1)?.id ?? null : b.activeLeafId ?? null,
+          pinnedMessageId: b.pinnedMessageId === action.messageId ? "" : b.pinnedMessageId,
+        };
+      });
+    }
     case "hostedTurnFailed":
       return updateBot(state, action.botId, (bot) => ({ ...bot, busy: false, activity: "idle" }));
     case "newTask":
@@ -1111,6 +1202,7 @@ export const initialState: AppState = {
   inspectorOpen: false,
   appSettingsOpen: false,
   appSettingsSection: "general",
+  appSettingsBackTarget: null,
   screens: {},
   provisioning: {},
   computerControl: {},
@@ -1124,9 +1216,13 @@ export const initialState: AppState = {
 
 // ── API client ─────────────────────────────────────────────────────────
 export async function api(path: string, init?: RequestInit): Promise<any> {
+  const headers = new Headers(init?.headers);
+  if (!headers.has("content-type")) headers.set("content-type", "application/json");
+  const token = betterAuthToken();
+  if (token && !headers.has("authorization")) headers.set("authorization", `Bearer ${token}`);
   const res = await fetch(path, {
-    headers: { "content-type": "application/json" },
     ...init,
+    headers,
   });
   const body = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(body.error ?? `${res.status} ${res.statusText}`);
@@ -1334,8 +1430,27 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             body: JSON.stringify({ text: action.text }),
           })
             .then((body) => {
+              if (typeof body?.threadId === "string" && body?.message) {
+                rawDispatch({ type: "messagePatched", threadId: body.threadId, message: body.message });
+              }
               if (Array.isArray(body?.messages) && typeof body?.threadId === "string") {
                 for (const message of body.messages) rawDispatch({ type: "messageAdded", threadId: body.threadId, message });
+              }
+            })
+            .catch(showError);
+          break;
+        case "deleteMessage":
+          api(`/api/bots/${action.botId}/messages/${action.messageId}`, {
+            method: "DELETE",
+          })
+            .then((body) => {
+              if (typeof body?.threadId === "string" && Array.isArray(body?.messageIds)) {
+                rawDispatch({
+                  type: "messagesDeleted",
+                  threadId: body.threadId,
+                  messageIds: body.messageIds.filter((id: unknown): id is string => typeof id === "string"),
+                  activeLeafId: typeof body.activeLeafId === "string" ? body.activeLeafId : null,
+                });
               }
             })
             .catch(showError);
@@ -1614,7 +1729,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     // gap before that connection opened.
     const hydrationFallback = setTimeout(hydrate, 1_000);
 
-    const es = new EventSource("/api/events");
+    const token = betterAuthToken();
+    const eventPath = token ? `/api/events?token=${encodeURIComponent(token)}` : "/api/events";
+    const es = new EventSource(eventPath);
     // The hydrate decision belongs to the hello frame, not to onopen: the
     // server replays what we missed when it can, and re-downloading every
     // transcript on a reconnect it already covered is pure waste.

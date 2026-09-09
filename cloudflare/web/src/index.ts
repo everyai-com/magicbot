@@ -1,3 +1,8 @@
+import { accountConnectors } from "../../../server/account-connectors";
+import { whatsappSettings } from "../../../server/whatsapp-settings";
+import { platformResources } from "./platform-resources";
+import { generateAnalysisText, ANALYSIS_PROVIDERS, type AnalysisProvider } from "../../../server/analysis";
+import { campaignWorkspaceRoute } from "../../../server/campaign-workspace";
 import {
   ensureFreshTokens,
   exchangeDeviceAuthorization,
@@ -15,6 +20,7 @@ interface Env {
   FILES: R2Bucket;
   EMAIL: SendEmail;
   CREDENTIAL_KEY: string;
+  ULTRAVOX_API_KEY?: string;
   CONNECTORS: {
     request(userId: string, apiKey: string, path: string, method?: string, body?: string, mcpSession?: string): Promise<{ status: number; body: string; contentType?: string; mcpSession?: string }>;
   };
@@ -163,11 +169,15 @@ const SESSION_COOKIE = "magicbot_session";
 const SESSION_AGE = 60 * 60 * 24 * 30;
 const PASSWORD_RESET_AGE = 30 * 60;
 const PASSWORD_RESET_SENDER = "noreply@mail.magicteams.ai";
+const BETTER_AUTH_BASE_URL = "https://magicteams-voice-api.everyai-com.workers.dev/api/auth/better";
+const BETTER_AUTH_API_ORIGIN = BETTER_AUTH_BASE_URL.replace(/\/api\/auth\/better\/?$/, "");
 const MODEL = "@cf/moonshotai/kimi-k2.6";
 const IMAGE_MODEL = "@cf/black-forest-labs/flux-1-schnell";
 const VOICE_MODEL = "@cf/deepgram/aura-2-en";
+const ULTRAVOX_API = "https://api.ultravox.ai/api";
 const CODEX_CREDENTIAL = "codex_subscription";
 const CODEX_PENDING_SECRET = "codex_pending_secret";
+const PLATFORM_CREDENTIAL = "platform_token";
 const CODEX_MODELS_CACHE = "codex_models";
 const CODEX_RUNTIME_READY = "codex_runtime_ready";
 const CODEX_CONSENT_VERSION = "2026-08-24";
@@ -190,6 +200,10 @@ const CLAUDE_REDIRECT = "https://console.anthropic.com/oauth/code/callback";
 const CLAUDE_TOKEN_URL = "https://console.anthropic.com/v1/oauth/token";
 const CLAUDE_MODELS = ["claude-sonnet-5", "claude-opus-5", "claude-haiku-4-5-20251001"];
 const encoder = new TextEncoder();
+
+function betterAuthApiUrl(path: string): URL {
+  return new URL(path, `${BETTER_AUTH_API_ORIGIN.replace(/\/+$/, "")}/`);
+}
 
 function json(value: unknown, status = 200, headers: HeadersInit = {}): Response {
   return new Response(JSON.stringify(value), {
@@ -291,6 +305,192 @@ async function credentialValue(env: Env, userId: string, kind: string): Promise<
 async function credentialConfigured(env: Env, userId: string, kind: string): Promise<boolean> {
   return Boolean(await env.DB.prepare("SELECT 1 AS present FROM user_credentials WHERE user_id = ? AND kind = ?")
     .bind(userId, kind).first());
+}
+
+async function ultravoxApiKey(env: Env, userId: string): Promise<string> {
+  return env.ULTRAVOX_API_KEY || (await credentialValue(env, userId, "ultravox")) || "";
+}
+
+function ultravoxMessage(status: number, body: unknown): string {
+  if (body && typeof body === "object") {
+    const record = body as { error?: unknown; detail?: unknown; message?: unknown };
+    const text = record.error ?? record.detail ?? record.message;
+    if (typeof text === "string" && text && !/<\s*html|<\s*!doctype/i.test(text)) return text;
+  }
+  if (typeof body === "string" && body && !/<\s*html|<\s*!doctype/i.test(body)) {
+    return body.length > 300 ? body.slice(0, 300) : body;
+  }
+  return status === 404
+    ? "Ultravox could not find this agent. It may belong to a different workspace or API key."
+    : `Ultravox returned ${status}`;
+}
+
+async function listUltravoxVoices(env: Env, userId: string): Promise<unknown[]> {
+  const key = await ultravoxApiKey(env, userId);
+  if (!key) throw new Error("Ultravox API key is not configured in the backend");
+  const voices: unknown[] = [];
+  let cursor = "";
+  for (let page = 0; page < 8; page += 1) {
+    const url = new URL(`${ULTRAVOX_API}/voices`);
+    url.searchParams.set("pageSize", "100");
+    if (cursor) url.searchParams.set("cursor", cursor);
+    const res = await fetch(url, { headers: { "X-API-Key": key } });
+    const contentType = res.headers.get("content-type") ?? "";
+    const body = contentType.includes("application/json") ? await res.json().catch(() => ({})) : await res.text().catch(() => "");
+    if (!res.ok) throw new Error(ultravoxMessage(res.status, body));
+    if (body && typeof body === "object" && Array.isArray((body as { results?: unknown }).results)) {
+      voices.push(...(body as { results: unknown[] }).results);
+    }
+    const next = body && typeof body === "object" ? (body as { next?: unknown }).next : null;
+    if (typeof next !== "string" || !next) break;
+    cursor = new URL(next).searchParams.get("cursor") ?? "";
+    if (!cursor) break;
+  }
+  return voices;
+}
+
+async function previewUltravoxVoice(env: Env, userId: string, voiceId: string): Promise<Response> {
+  if (!/^[\w-]+$/.test(voiceId)) return json({ error: "voiceId must be a valid voice id" }, 400);
+  const key = await ultravoxApiKey(env, userId);
+  if (!key) return json({ error: "Ultravox API key is not configured in the backend" }, 409);
+  const response = await fetch(`${ULTRAVOX_API}/voices/${encodeURIComponent(voiceId)}/preview`, {
+    headers: { "X-API-Key": key },
+  });
+  if (!response.ok) {
+    const contentType = response.headers.get("content-type") ?? "";
+    const body = contentType.includes("application/json") ? await response.json().catch(() => ({})) : await response.text().catch(() => "");
+    return json({ error: ultravoxMessage(response.status, body) }, response.status);
+  }
+  return new Response(response.body, {
+    headers: {
+      "content-type": response.headers.get("content-type") || "audio/wav",
+      "cache-control": "no-store",
+    },
+  });
+}
+
+function usableBearer(header: string | string[] | undefined | null): string | null {
+  if (typeof header !== "string") return null;
+  return /^Bearer\s+\S+/i.test(header.trim()) ? header.trim() : null;
+}
+
+function firstStringField(value: unknown, fields: string[]): string {
+  if (!value || typeof value !== "object") return "";
+  const record = value as Record<string, unknown>;
+  for (const field of fields) {
+    const direct = record[field];
+    if (typeof direct === "string" && direct.trim()) return direct.trim();
+  }
+  for (const nested of ["call", "demoCall", "data", "result"]) {
+    const found = firstStringField(record[nested], fields);
+    if (found) return found;
+  }
+  return "";
+}
+
+function normalizeDemoCallResponse(value: unknown): Record<string, unknown> {
+  const joinUrl = firstStringField(value, ["joinUrl", "join_url"]);
+  if (!joinUrl) throw Object.assign(new Error("Demo call did not return a join URL"), { status: 502 });
+  return {
+    success: true,
+    joinUrl,
+    callId: firstStringField(value, ["callId", "call_id", "ultravoxCallId", "ultravox_call_id"]) || null,
+    logId: firstStringField(value, ["logId", "log_id"]) || null,
+    provider: firstStringField(value, ["provider"]) || "ultravox",
+  };
+}
+
+function platformTokenFrom(source: Record<string, unknown>): string {
+  const direct = source.token ?? source.sessionToken;
+  if (typeof direct === "string" && direct.trim()) return direct.trim();
+  const session = source.session;
+  if (session && typeof session === "object") {
+    const record = session as Record<string, unknown>;
+    const nested = record.token ?? record.sessionToken;
+    if (typeof nested === "string" && nested.trim()) return nested.trim();
+  }
+  return "";
+}
+
+function asBearer(token: string): string {
+  return /^Bearer\s+/i.test(token) ? token.trim() : `Bearer ${token.trim()}`;
+}
+
+/** Local login tokens are only valid on this Worker. Prefer the platform-issued
+ *  token captured at login so platform agent routes (demo calls, finalize) work
+ *  in production the same way they do against the local dev server. */
+async function platformAuthorization(
+  env: Env,
+  userId: string,
+  authorization: string | null,
+): Promise<string | null> {
+  try {
+    const stored = await credentialValue(env, userId, PLATFORM_CREDENTIAL);
+    if (stored && stored.trim()) return asBearer(stored);
+  } catch {
+    // Fall through to the client-supplied bearer.
+  }
+  return usableBearer(authorization);
+}
+
+async function platformJson(
+  path: string,
+  options: { method?: string; authorization?: string | string[] | null; body?: unknown } = {},
+): Promise<unknown> {
+  const bearer = usableBearer(options.authorization);
+  if (!bearer) throw Object.assign(new Error("Sign in to load connected MagicTeams resources"), { status: 401 });
+  const response = await fetch(betterAuthApiUrl(path), {
+    method: options.method ?? "GET",
+    headers: { authorization: bearer, "content-type": "application/json" },
+    body: options.body === undefined ? undefined : JSON.stringify(options.body),
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const message = body && typeof body === "object" && typeof (body as { error?: unknown }).error === "string"
+      ? (body as { error: string }).error
+      : `MagicTeams request failed (${response.status})`;
+    throw Object.assign(new Error(message), { status: response.status });
+  }
+  return body;
+}
+
+async function createUltravoxDemoCall(
+  env: Env,
+  userId: string,
+  input: { agentId: string; voice?: string; maxDurationSeconds?: number },
+): Promise<{ callId: string | null; joinUrl: string; clientVersion?: string | null }> {
+  const agentId = input.agentId.trim();
+  if (!agentId) throw Object.assign(new Error("agentId is required"), { status: 400 });
+  const key = await ultravoxApiKey(env, userId);
+  if (!key) throw Object.assign(new Error("Ultravox API key is not configured in the backend"), { status: 409 });
+
+  const body: Record<string, unknown> = {
+    medium: { webRtc: { dataMessages: { state: true, transcript: true, callStarted: true, callEvent: true, toolUsed: true, invokingTool: true, userStartedSpeaking: true, userStoppedSpeaking: true } } },
+    joinTimeout: "30s",
+    metadata: { source: "magicteams-demo-call", localAgentId: agentId },
+  };
+  const voice = input.voice?.trim();
+  if (voice) body.voice = voice;
+  if (input.maxDurationSeconds && Number.isFinite(input.maxDurationSeconds)) {
+    body.maxDuration = `${Math.max(1, Math.floor(input.maxDurationSeconds))}s`;
+  }
+
+  const response = await fetch(`${ULTRAVOX_API}/agents/${encodeURIComponent(agentId)}/calls`, {
+    method: "POST",
+    headers: { "X-API-Key": key, "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const contentType = response.headers.get("content-type") ?? "";
+  const raw = contentType.includes("application/json") ? await response.json().catch(() => ({})) : await response.text().catch(() => "");
+  if (!response.ok) throw Object.assign(new Error(ultravoxMessage(response.status, raw)), { status: response.status });
+
+  const callId = typeof (raw as { callId?: unknown }).callId === "string" ? (raw as { callId: string }).callId : null;
+  const joinUrl = typeof (raw as { joinUrl?: unknown }).joinUrl === "string" ? (raw as { joinUrl: string }).joinUrl : "";
+  const clientVersion = typeof (raw as { clientVersion?: unknown }).clientVersion === "string"
+    ? (raw as { clientVersion: string }).clientVersion
+    : null;
+  if (!joinUrl) throw Object.assign(new Error("Ultravox did not return a join URL"), { status: 502 });
+  return { callId, joinUrl, clientVersion };
 }
 
 async function codexTokens(env: Env, userId: string): Promise<ChatGPTTokens | null> {
@@ -398,7 +598,7 @@ function constantTimeEqual(a: string, b: string): boolean {
 }
 
 async function currentUser(request: Request, env: Env): Promise<User | null> {
-  const token = cookieValue(request, SESSION_COOKIE);
+  const token = bearerToken(request) ?? urlToken(request) ?? cookieValue(request, SESSION_COOKIE);
   if (!token) return null;
   const tokenHash = await sha256(token);
   const row = await env.DB.prepare(
@@ -407,6 +607,18 @@ async function currentUser(request: Request, env: Env): Promise<User | null> {
       WHERE sessions.token_hash = ? AND sessions.expires_at > ?`,
   ).bind(tokenHash, Date.now()).first<User>();
   return row ?? null;
+}
+
+function bearerToken(request: Request): string | null {
+  const header = request.headers.get("authorization") ?? "";
+  const match = header.match(/^Bearer\s+(.+)$/i);
+  const token = match?.[1]?.trim() ?? "";
+  return token || null;
+}
+
+function urlToken(request: Request): string | null {
+  const token = new URL(request.url).searchParams.get("token")?.trim() ?? "";
+  return token || null;
 }
 
 async function createSession(env: Env, userId: string): Promise<string> {
@@ -1278,6 +1490,62 @@ async function connectorJson(response: Response): Promise<Response> {
 
 async function api(request: Request, env: Env, user: User, path: string): Promise<Response> {
   if (request.method !== "GET" && !sameOrigin(request)) return json({ error: "Cross-origin request refused" }, 403);
+  if (path.startsWith("/api/whatsapp/configs")) {
+    const authorization = await platformAuthorization(env, user.id, request.headers.get("authorization"));
+    try {
+      const result = await whatsappSettings(request.method, path, request.method === "GET" ? {} : await request.json(), authorization ?? undefined, platformJson);
+      if (result) return json(result.body, result.status);
+    } catch (error) {
+      return json({ error: error instanceof Error ? error.message : "WhatsApp settings request failed" }, Number((error as {status?: number}).status) || 502);
+    }
+  }
+  if (path.startsWith("/api/platform/")) {
+    const authorization = await platformAuthorization(env, user.id, request.headers.get("authorization"));
+    if (authorization) {
+      try {
+        const result = await platformResources(request, path, authorization, await ultravoxApiKey(env, user.id) || "", platformJson);
+        if (result) return result;
+      } catch (error) {
+        const status = Number((error as { status?: number }).status) || 502;
+        return json({ error: error instanceof Error ? error.message : "Platform request failed" }, status);
+      }
+    }
+  }
+  if (path === "/api/outcome-sheets/execute" && request.method === "POST") {
+    const authorization = await platformAuthorization(env, user.id, request.headers.get("authorization"));
+    if (!authorization) return json({ error: "Sign in again to access Google Sheets." }, 401);
+    const body = await request.json<{ tool: string; arguments: Record<string, unknown> }>();
+    if (!["GOOGLESHEETS_BATCH_UPDATE", "GOOGLESHEETS_UPDATE_SPREADSHEET_PROPERTIES", "GOOGLESHEETS_SEARCH_SPREADSHEETS", "GOOGLESHEETS_CREATE_GOOGLE_SHEET1", "GOOGLESHEETS_GET_SPREADSHEET_INFO", "GOOGLESHEETS_VALUES_GET", "GOOGLESHEETS_VALUES_UPDATE", "GOOGLESHEETS_SPREADSHEETS_VALUES_APPEND"].includes(body.tool)) return json({ error: "Unsupported Sheets action" }, 400);
+    try { return json(await platformJson("/api/composio/execute", { method: "POST", authorization, body })); }
+    catch (error) { return json({ error: error instanceof Error ? error.message : "Sheets request failed" }, 502); }
+  }
+  if (path.startsWith("/api/campaign-workspace/")) {
+    const remote = campaignWorkspaceRoute(request.method, path.slice("/api/campaign-workspace/".length));
+    if (!remote) return json({ error: "Unknown campaign action" }, 404);
+    const authorization = await platformAuthorization(env, user.id, request.headers.get("authorization"));
+    if (!authorization) return json({ error: "Sign in again to access campaigns." }, 401);
+    try {
+      return json(await platformJson(remote, { method: request.method, authorization,
+        ...(request.method === "GET" ? {} : { body: await request.json() }) }));
+    } catch (error) {
+      return json({ error: error instanceof Error ? error.message : "Campaign request failed" }, 502);
+    }
+  }
+  if (request.method === "POST" && ["/api/ai/generate-prompt", "/api/ai/test-connection"].includes(path)) {
+    if (!await withinRateLimit(env, `analysis:${user.id}`, 30, 60)) return json({ error: "Please wait before analyzing again." }, 429);
+    const body = await request.json<Record<string, unknown>>();
+    const analysis = JSON.parse(await credentialValue(env, user.id, "analysis_settings") || '{"provider":"gemini"}');
+    if (body.provider === "ollama" || analysis.provider === "ollama") return json({ error: "Local Ollama is available only in the desktop app." }, 400);
+    try {
+      const result = await generateAnalysisText({ analysis }, {
+        prompt: path.endsWith("test-connection") ? "Reply with OK only." : String(body.prompt ?? ""),
+        provider: body.provider, model: body.model,
+      });
+      return json(path.endsWith("test-connection") ? { connected: true, ...result } : result);
+    } catch (error) {
+      return json({ error: error instanceof Error ? error.message : "Analysis failed" }, 400);
+    }
+  }
   if (path === "/api/auth/me" && request.method === "GET") return json({ user });
   if (path === "/api/health") return json({ app: "magicbot-web", cloud: "cloudflare" });
   if (path === "/api/codex/login" && request.method === "POST") {
@@ -1490,7 +1758,23 @@ async function api(request: Request, env: Env, user: User, path: string): Promis
   }
   if (path === "/api/config") {
     if (request.method === "PUT") {
-      const body = await request.json<{ profile?: { name?: string; email?: string }; composio?: { apiKey?: string } }>();
+      const body = await request.json<{ profile?: { name?: string; email?: string }; composio?: { apiKey?: string }; analysis?: Record<string, unknown> }>();
+      if (body.analysis) {
+        const old = JSON.parse(await credentialValue(env, user.id, "analysis_settings") || '{"provider":"gemini"}');
+        const patch = body.analysis;
+        const provider = patch.provider ?? old.provider;
+        if (!ANALYSIS_PROVIDERS.includes(provider as AnalysisProvider) || provider === "ollama") return json({ error: "Choose a supported hosted AI provider." }, 400);
+        const settings = { ...old, provider, keys: { ...old.keys } };
+        for (const field of ["model", "language", "cloudflareAccountId"]) {
+          if (typeof patch[field] === "string") settings[field] = patch[field].trim().slice(0, 500);
+        }
+        if (patch.keys && typeof patch.keys === "object") {
+          for (const [key, value] of Object.entries(patch.keys)) {
+            if (ANALYSIS_PROVIDERS.includes(key as AnalysisProvider) && typeof value === "string") settings.keys[key] = value.trim();
+          }
+        }
+        await saveCredential(env, user.id, "analysis_settings", JSON.stringify(settings));
+      }
       const name = body.profile?.name?.trim().slice(0, 80) || user.name;
       const email = body.profile?.email?.trim().toLowerCase() || user.email;
       if (!/^\S+@\S+\.\S+$/.test(email)) return json({ error: "Use a valid email address" }, 400);
@@ -1519,9 +1803,12 @@ async function api(request: Request, env: Env, user: User, path: string): Promis
       credentialValue(env, user.id, CODEX_RUNTIME_READY), discoverCodexModels(env, user.id, false),
       credentialConfigured(env, user.id, CLAUDE_CREDENTIAL), credentialValue(env, user.id, CLAUDE_RUNTIME_READY),
     ]);
+    const storedAnalysis = JSON.parse(await credentialValue(env, user.id, "analysis_settings") || '{"provider":"gemini","keys":{}}');
+    const { keys: analysisKeys, ...analysisPublic } = storedAnalysis;
     const defaultEngine = await preferredHostedEngine(env, user.id);
     return json({
       hosted: true,
+      analysis: { ...analysisPublic, configured: Object.fromEntries(ANALYSIS_PROVIDERS.map((key) => [key, Boolean(analysisKeys?.[key])])) },
       xai: { configured: false }, composio: { configured: true, mode: composioConfigured ? "self-hosted" : "managed", keyConfigured: composioConfigured },
       codex: { configured: codexConfigured, runtimeReady: codexReady === "true", modelCount: codexModels.length, consentVersion: CODEX_CONSENT_VERSION },
       anthropic: { configured: anthropicConfigured, runtimeReady: anthropicReady === "true", modelCount: anthropicConfigured ? CLAUDE_MODELS.length : 0 },
@@ -1531,6 +1818,18 @@ async function api(request: Request, env: Env, user: User, path: string): Promis
       imageGen: { configured: true, provider: "cloudflare" }, profile: { name: user.name, email: user.email },
       defaultEngine,
     });
+  }
+  if (path === "/api/connectors" || path.startsWith("/api/connectors/")) {
+    const token = await credentialValue(env, user.id, PLATFORM_CREDENTIAL);
+    const ownKey = await credentialValue(env, user.id, "composio");
+    if (token && !ownKey) {
+      try {
+        const result = await accountConnectors(request, "Bearer " + token, platformJson);
+        if (result) return result;
+      } catch (error) {
+        return json({error: error instanceof Error ? error.message : "Composio connection failed"}, Number((error as {status?: number}).status) || 502);
+      }
+    }
   }
   if (path === "/api/connectors/catalog" && request.method === "GET") {
     try {
@@ -1551,9 +1850,10 @@ async function api(request: Request, env: Env, user: User, path: string): Promis
           return json({ configured: true, mode: "managed", source: "api", cards });
         }
       }
-    } catch { /* fall back to the curated catalog */ }
-    const cards = CURATED_CONNECTORS.map(([slug, label, blurb, domain]) => ({ slug, label, blurb, logo: null, domain }));
-    return json({ configured: true, mode: "managed", source: "curated", cards });
+      return json({ error: "Composio catalog could not be loaded. Check the integration connection in General." }, 502);
+    } catch (error) {
+      return json({ error: error instanceof Error ? error.message : "Composio catalog unavailable" }, 502);
+    }
   }
   if (path === "/api/connectors/connected" && request.method === "GET") {
     return connectorJson(await connectorRequest(env, user.id, "/v1/connectors/connected"));
@@ -1697,6 +1997,84 @@ async function api(request: Request, env: Env, user: User, path: string): Promis
   if (path === "/api/tts/voices" && request.method === "GET") {
     const ids = ["luna", "apollo", "athena", "atlas", "aurora", "cora", "hermes", "iris", "juno", "mars", "orpheus", "thalia"];
     return json({ voices: ids.map((id) => ({ id, label: id[0].toUpperCase() + id.slice(1), description: "Cloudflare Aura 2" })) });
+  }
+  if (path === "/api/ultravox/voices" && request.method === "GET") {
+    try {
+      return json({ configured: Boolean(await ultravoxApiKey(env, user.id)), voices: await listUltravoxVoices(env, user.id) });
+    } catch (error) {
+      return json({
+        configured: Boolean(await ultravoxApiKey(env, user.id)),
+        voices: [],
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+  {
+    const match = path.match(/^\/api\/ultravox\/voices\/([\w-]+)\/preview$/);
+    if (match && request.method === "GET") return previewUltravoxVoice(env, user.id, match[1]);
+  }
+  {
+    const match = path.match(/^\/api\/platform\/agents\/([^/]+)\/demo-call$/);
+    if (match && request.method === "POST") {
+      const authorization = request.headers.get("authorization");
+      const body = await request.json<Record<string, unknown>>().catch(() => ({} as Record<string, unknown>));
+      const voice = typeof body.voice === "string" ? body.voice.trim() : "";
+      const maxDurationSeconds = typeof body.maxDurationSeconds === "number" && Number.isFinite(body.maxDurationSeconds)
+        ? Math.max(1, Math.floor(body.maxDurationSeconds))
+        : undefined;
+      const configured = Boolean(await ultravoxApiKey(env, user.id));
+      const platformAuth = await platformAuthorization(env, user.id, authorization);
+
+      if (platformAuth) {
+        try {
+          const hosted = await platformJson("/api/demo-calls", {
+            method: "POST",
+            authorization: platformAuth,
+            body: { agent_id: match[1] },
+          });
+          return json(normalizeDemoCallResponse(hosted), 201);
+        } catch (error) {
+          const status = error && typeof error === "object" && typeof (error as { status?: unknown }).status === "number"
+            ? (error as { status: number }).status
+            : 502;
+          if (status === 401) {
+            try {
+              await saveCredential(env, user.id, PLATFORM_CREDENTIAL, "");
+            } catch {
+              // Stale token cleanup is best-effort; the message below still guides recovery.
+            }
+            return json({ error: "Your MagicTeams connection expired. Sign out and sign in again, then retry the demo call." }, 401);
+          }
+          if (!configured) {
+            return json({ error: error instanceof Error ? error.message : String(error) }, status);
+          }
+        }
+      }
+      try {
+        const direct = await createUltravoxDemoCall(env, user.id, { agentId: match[1], voice, maxDurationSeconds });
+        return json({ success: true, provider: "ultravox", ...direct, logId: null }, 201);
+      } catch (error) {
+        const status = error && typeof error === "object" && typeof (error as { status?: unknown }).status === "number"
+          ? (error as { status: number }).status
+          : 502;
+        return json({ error: error instanceof Error ? error.message : String(error) }, status);
+      }
+    }
+  }
+  if (request.method === "POST" && path === "/api/platform/demo-calls/finalize") {
+    const authorization = request.headers.get("authorization");
+    const platformAuth = await platformAuthorization(env, user.id, authorization);
+    if (!platformAuth) return json({ success: true, skipped: true });
+    const body = await request.json<Record<string, unknown>>().catch(() => ({} as Record<string, unknown>));
+    try {
+      const finalized = await platformJson("/api/demo-calls/finalize", { method: "POST", authorization: platformAuth, body });
+      return json(finalized, 200);
+    } catch (error) {
+      const status = error && typeof error === "object" && typeof (error as { status?: unknown }).status === "number"
+        ? (error as { status: number }).status
+        : 502;
+      return json({ error: error instanceof Error ? error.message : String(error) }, status);
+    }
   }
   if (path === "/api/tts/prepare" && request.method === "POST") {
     const body = await request.json<{ text?: string }>();
@@ -2311,8 +2689,12 @@ async function api(request: Request, env: Env, user: User, path: string): Promis
 
 async function handleRequest(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
+    if (["GET", "HEAD"].includes(request.method) && ["/app-icon.svg", "/icon-192.png", "/icon-512.png", "/manifest.webmanifest", "/sw.js"].includes(url.pathname)) {
+      return env.ASSETS.fetch(request);
+    }
     const hookMatch = url.pathname.match(/^\/hooks\/([A-Za-z0-9_-]+)$/);
     if (hookMatch && request.method === "POST") return handleWebhook(request, env, hookMatch[1]);
+    if (url.pathname.startsWith("/api/auth/better/")) return handleBetterAuthApi(request, env, url.pathname);
     if (url.pathname === "/login" && request.method === "GET") return loginPage();
     if (url.pathname === "/signup" && request.method === "GET") return loginPage("", "signup");
     if (url.pathname === "/forgot-password" && request.method === "GET") return forgotPasswordPage();
@@ -2415,8 +2797,8 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
       return redirect(safeNext(url.searchParams.get("next")), { "set-cookie": sessionCookie(token) });
     }
     if (url.pathname === "/logout") {
-      const token = cookieValue(request, SESSION_COOKIE);
-      if (token) await env.DB.prepare("DELETE FROM sessions WHERE token_hash = ?").bind(await sha256(token)).run();
+      const tokens = new Set([cookieValue(request, SESSION_COOKIE), bearerToken(request)].filter((token): token is string => Boolean(token)));
+      for (const token of tokens) await env.DB.prepare("DELETE FROM sessions WHERE token_hash = ?").bind(await sha256(token)).run();
       return redirect("/login", { "set-cookie": clearSessionCookie() });
     }
     const user = await currentUser(request, env);
@@ -2424,8 +2806,171 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
       if (url.pathname.startsWith("/api/")) return json({ error: "Authentication required" }, 401);
       return redirect(`/login?next=${encodeURIComponent(url.pathname + url.search)}`);
     }
-    if (url.pathname.startsWith("/api/")) return api(request, env, user, url.pathname);
-    return env.ASSETS.fetch(request);
+  if (url.pathname.startsWith("/api/")) return api(request, env, user, url.pathname);
+  return env.ASSETS.fetch(request);
+}
+
+async function handleBetterAuthApi(request: Request, env: Env, path: string): Promise<Response> {
+  const body: Record<string, unknown> = await request.json<Record<string, unknown>>().catch(() => ({}));
+  const email = String(body.email ?? "").trim().toLowerCase();
+  const password = String(body.password ?? "");
+  const clientAddress = request.headers.get("cf-connecting-ip") ?? "unknown";
+  const addressKey = await sha256(clientAddress);
+  const emailKey = await sha256(email);
+
+  if (request.method === "POST" && path === "/api/auth/better/login") {
+    if (!/^\S+@\S+\.\S+$/.test(email) || password.length < 8) {
+      return json({ error: "Email or password is incorrect" }, 401);
+    }
+    if (!await withinRateLimit(env, `login:${addressKey}:${emailKey}`, 10, 15 * 60)) {
+      return json({ error: "Too many attempts. Please wait and try again." }, 429);
+    }
+    const external = await externalBetterAuth("/login", { email, password });
+    if (external.ok) return hostedAuthSession(env, external.body, email);
+
+    const row = await env.DB.prepare("SELECT id, email, name, password_hash, password_salt FROM users WHERE email = ?")
+      .bind(email).first<User & { password_hash: string; password_salt: string }>();
+    if (!row || !constantTimeEqual(row.password_hash, await passwordHash(password, row.password_salt))) {
+      return json({ error: authError(external.body, "Email or password is incorrect") }, external.status || 401);
+    }
+    const token = await createSession(env, row.id);
+    return json({ token, user: { id: row.id, email: row.email, name: row.name } }, 200);
+  }
+
+  if (request.method === "POST" && path === "/api/auth/better/signup") {
+    const fullName = String(body.fullName ?? body.name ?? "").trim().slice(0, 80);
+    if (!/^\S+@\S+\.\S+$/.test(email) || password.length < 8) {
+      return json({ error: "Use a valid email and a password of at least 8 characters." }, 400);
+    }
+    if (!await withinRateLimit(env, `signup:${addressKey}`, 5, 60 * 60)) {
+      return json({ error: "Too many attempts. Please wait and try again." }, 429);
+    }
+    const external = await externalBetterAuth("/signup", { email, password, fullName });
+    if (external.ok) return hostedAuthSession(env, external.body, email, fullName, 201);
+
+    const existing = await env.DB.prepare("SELECT id FROM users WHERE email = ?").bind(email).first();
+    if (existing) return json({ error: "An account already exists for this email." }, 409);
+    const id = crypto.randomUUID();
+    const name = fullName || email.split("@")[0] || "MagicTeams user";
+    const salt = randomToken(18);
+    await env.DB.prepare("INSERT INTO users (id, email, name, password_hash, password_salt, created_at) VALUES (?, ?, ?, ?, ?, ?)")
+      .bind(id, email, name, await passwordHash(password, salt), salt, Date.now()).run();
+    const token = await createSession(env, id);
+    return json({ token, user: { id, email, name } }, 201);
+  }
+
+  if (request.method === "POST" && path === "/api/auth/better/password-reset/request") {
+    const external = await externalBetterAuth("/password-reset/request", {
+      email,
+      redirectOrigin: String(body.redirectOrigin ?? ""),
+    });
+    if (external.ok) return json(external.body, 200);
+
+    const redirectOrigin = String(body.redirectOrigin ?? "").replace(/\/+$/, "");
+    const validEmail = /^\S+@\S+\.\S+$/.test(email) && email.length <= 254;
+    const allowedByAddress = await withinRateLimit(env, `password-reset-ip:${addressKey}`, 5, 60 * 60);
+    const allowedByAccount = await withinRateLimit(env, `password-reset-email:${emailKey}`, 3, 60 * 60);
+    if (validEmail && allowedByAddress && allowedByAccount) {
+      const user = await env.DB.prepare("SELECT id, email, name FROM users WHERE email = ?")
+        .bind(email).first<User>();
+      if (user) {
+        const token = randomToken();
+        const tokenHash = await sha256(token);
+        await env.DB.batch([
+          env.DB.prepare("DELETE FROM password_reset_tokens WHERE user_id = ? OR expires_at <= ?").bind(user.id, Date.now()),
+          env.DB.prepare("INSERT INTO password_reset_tokens (token_hash, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)")
+            .bind(tokenHash, user.id, Date.now() + PASSWORD_RESET_AGE * 1000, Date.now()),
+        ]);
+        const origin = redirectOrigin || new URL(request.url).origin;
+        await sendPasswordResetEmail(env, user, `${origin}/reset-password?token=${encodeURIComponent(token)}`);
+      }
+    }
+    return json({ success: true, emailSent: true }, 200);
+  }
+
+  if (request.method === "POST" && path === "/api/auth/better/password-reset/confirm") {
+    const external = await externalBetterAuth("/password-reset/confirm", {
+      token: String(body.token ?? "").trim(),
+      password,
+    });
+    if (external.ok) return json(external.body, 200);
+
+    const token = String(body.token ?? "").trim();
+    if (!/^[A-Za-z0-9_-]{40,64}$/.test(token) || password.length < 8) {
+      return json({ error: "This reset link is invalid or has expired." }, 400);
+    }
+    const claimed = await env.DB.prepare(
+      "DELETE FROM password_reset_tokens WHERE token_hash = ? AND expires_at > ? RETURNING user_id",
+    ).bind(await sha256(token), Date.now()).first<{ user_id: string }>();
+    if (!claimed) return json({ error: "This reset link is invalid or has expired." }, 400);
+    const salt = randomToken(18);
+    await env.DB.batch([
+      env.DB.prepare("UPDATE users SET password_hash = ?, password_salt = ? WHERE id = ?")
+        .bind(await passwordHash(password, salt), salt, claimed.user_id),
+      env.DB.prepare("DELETE FROM password_reset_tokens WHERE user_id = ?").bind(claimed.user_id),
+      env.DB.prepare("DELETE FROM sessions WHERE user_id = ?").bind(claimed.user_id),
+    ]);
+    return json({ success: true }, 200);
+  }
+
+  return json({ error: "Not found" }, 404);
+}
+
+function authError(body: unknown, fallback: string): string {
+  if (body && typeof body === "object") {
+    const error = (body as { error?: unknown; message?: unknown }).error ?? (body as { message?: unknown }).message;
+    if (typeof error === "string" && error) return error;
+  }
+  return fallback;
+}
+
+async function externalBetterAuth(path: string, payload: Record<string, unknown>): Promise<{ ok: boolean; status: number; body: Record<string, unknown> }> {
+  try {
+    const response = await fetch(`${BETTER_AUTH_BASE_URL}${path}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const body = await response.json().catch(() => ({})) as Record<string, unknown>;
+    return { ok: response.ok, status: response.status, body };
+  } catch {
+    return { ok: false, status: 0, body: {} };
+  }
+}
+
+async function hostedAuthSession(
+  env: Env,
+  source: Record<string, unknown>,
+  fallbackEmail: string,
+  fallbackName = "",
+  status = 200,
+): Promise<Response> {
+  const sourceUser = source.user && typeof source.user === "object" ? source.user as Record<string, unknown> : {};
+  const email = String(sourceUser.email ?? fallbackEmail).trim().toLowerCase();
+  const name = String(sourceUser.name ?? fallbackName ?? email.split("@")[0] ?? "MagicTeams user").trim().slice(0, 80) || "MagicTeams user";
+  let user = await env.DB.prepare("SELECT id, email, name FROM users WHERE email = ?").bind(email).first<User>();
+  if (!user) {
+    const externalId = String(sourceUser.id ?? "").trim();
+    const id = externalId || crypto.randomUUID();
+    const salt = randomToken(18);
+    await env.DB.prepare("INSERT INTO users (id, email, name, password_hash, password_salt, created_at) VALUES (?, ?, ?, ?, ?, ?)")
+      .bind(id, email, name, "external-auth", salt, Date.now()).run();
+    user = { id, email, name };
+  } else if (user.name !== name || user.email !== email) {
+    await env.DB.prepare("UPDATE users SET email = ?, name = ? WHERE id = ?").bind(email, name, user.id).run();
+    user = { ...user, email, name };
+  }
+  // Keep the platform-issued token so platform agent routes (demo calls,
+  // finalize) authenticate the same way the local dev server does. Login must
+  // still succeed if this persistence fails.
+  try {
+    const platformToken = platformTokenFrom(source);
+    if (platformToken) await saveCredential(env, user.id, PLATFORM_CREDENTIAL, platformToken);
+  } catch {
+    // Best-effort only.
+  }
+  const token = await createSession(env, user.id);
+  return json({ token, user }, status);
 }
 
 function requestFailure(request: Request, error: unknown): Response {

@@ -143,8 +143,11 @@ export const PICKABLE_EXPRESSIONS = [
 export const PICKABLE_STATES: MausState[] = PICKABLE_EXPRESSIONS.map(({ state }) => state);
 
 type MascotMessage = {
+  role?: "bot" | "user";
   kind: string;
+  text?: string;
   tool?: { ok?: boolean };
+  at?: number;
 };
 
 export type MascotBotProfile = {
@@ -153,9 +156,17 @@ export type MascotBotProfile = {
   description?: string;
   mascotExpression?: string | null;
   busy?: boolean;
+  activity?: "working" | "waiting-on-you" | "idle" | "no-signal" | "dead";
   unread?: boolean;
+  active?: boolean;
+  onCall?: boolean;
   messages?: MascotMessage[];
 };
+
+const ERROR_MESSAGE_PATTERN =
+  /\b(api key expired|api error|request failed|fetch failed|invalid api key|unauthorized|forbidden|expired|failed|error)\b/i;
+const SOFT_ERROR_MESSAGE_PATTERN = /\b(confused|not sure|cannot|can't|could not|unable|blocked|stuck)\b/i;
+const RESULT_STATE_MS = 6000;
 
 /**
  * Selects a state from live state first, then from what the bot is about.
@@ -163,15 +174,30 @@ export type MascotBotProfile = {
  * visual identity stays stable while its title and description are edited.
  */
 export function stateForBot(bot: MascotBotProfile): MausState {
+  const last = bot.messages?.[bot.messages.length - 1];
+  const recentResult =
+    typeof last?.at === "number" &&
+    Date.now() - last.at >= 0 &&
+    Date.now() - last.at < RESULT_STATE_MS;
+  const useMessageState = bot.active !== false && recentResult;
+
+  if (bot.onCall) return "listening";
+  if (bot.busy || bot.activity === "working" || bot.activity === "waiting-on-you" || bot.activity === "no-signal") {
+    return "thinking";
+  }
+  if (bot.unread) return "notifying";
+
+  if (useMessageState) {
+    if (last?.kind === "activity" && last.tool?.ok === false) return "alerting";
+    if (last?.role === "bot" && last.text && ERROR_MESSAGE_PATTERN.test(last.text)) return "confused";
+    if (last?.role === "bot" && last.text && SOFT_ERROR_MESSAGE_PATTERN.test(last.text)) return "confused";
+    if (last?.kind === "options") return "curious";
+    if (last?.kind === "activity" && last.tool?.ok === true) return "happy";
+    if (last?.role === "bot" && last.kind === "text") return "happy";
+  }
+
   const pinned = normalizeState(bot.mascotExpression);
   if (pinned) return pinned;
-
-  const last = bot.messages?.[bot.messages.length - 1];
-
-  if (last?.kind === "activity" && last.tool?.ok === false) return "alerting";
-  if (bot.busy) return "working";
-  if (bot.unread) return "notifying";
-  if (last?.kind === "options") return "curious";
 
   const profile = `${bot.name} ${bot.title ?? ""} ${bot.description ?? ""}`.toLowerCase();
   const matches = (words: RegExp) => words.test(profile);

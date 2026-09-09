@@ -44,6 +44,18 @@ interface AccountLinkRequest {
   alias?: string;
 }
 
+const authConfigResponseSchema = z.object({
+  id: z.string().optional(),
+  status: z.string().optional(),
+  toolkit: z.object({ slug: z.string().optional() }).optional(),
+  is_composio_managed: z.boolean().optional(),
+  is_enabled_for_tool_router: z.boolean().optional(),
+});
+const authConfigsPageSchema = z.object({
+  items: z.array(authConfigResponseSchema).optional(),
+  data: z.array(authConfigResponseSchema).optional(),
+});
+
 const sessionWireSchema = z.object({
   session_id: z.string().min(1),
   mcp: z.object({
@@ -90,7 +102,11 @@ const catalogPageSchema = z.object({
   next_cursor: z.string().nullable().optional(),
 });
 const linkResponseSchema = z.object({ redirect_url: z.string().optional() });
-const aliasRequestSchema = z.object({ alias: z.string().nullable().optional() });
+const aliasRequestSchema = z.object({
+  alias: z.string().nullable().optional(),
+  authConfigId: z.string().nullable().optional(),
+  auth_config_id: z.string().nullable().optional(),
+});
 const upstreamErrorSchema = z.object({
   message: z.string().optional(),
   error: z.union([
@@ -195,6 +211,68 @@ function composioRequest(env: Env, path: string, init?: RequestInit) {
     ...init,
     headers,
     signal: init?.signal ?? AbortSignal.timeout(30_000),
+  });
+}
+
+async function createManagedAuthConfig(env: Env, slug: string) {
+  const response = await composioRequest(env, "/auth_configs", {
+    method: "POST",
+    body: JSON.stringify({
+      toolkit: { slug },
+      auth_config: {
+        type: "use_composio_managed_auth",
+        credentials: {},
+        restrict_to_following_tools: [],
+      },
+    }),
+  });
+  if (!response.ok && response.status !== 409) {
+    throw new Error(await upstreamError(response, `Auth config creation failed (${response.status})`));
+  }
+}
+
+async function enabledAuthConfigId(env: Env, slug: string): Promise<string | null> {
+  const query = new URLSearchParams({
+    toolkit_slug: slug,
+    show_disabled: "false",
+    limit: "50",
+  });
+  const response = await composioRequest(env, `/auth_configs?${query}`);
+  if (!response.ok) throw new Error(await upstreamError(response, `Auth config lookup failed (${response.status})`));
+  const body = authConfigsPageSchema.parse(await response.json());
+  const normalized = slug.toLowerCase();
+  const enabled = (body.items ?? body.data ?? []).filter((config) =>
+    config.id &&
+    config.toolkit?.slug?.toLowerCase() === normalized &&
+    !/disabled/i.test(config.status ?? "")
+  );
+  return (
+    enabled.find((config) => config.is_enabled_for_tool_router === true)?.id ??
+    enabled.find((config) => config.is_composio_managed === true)?.id ??
+    enabled[0]?.id ??
+    null
+  );
+}
+
+async function createConnectedAccountLink(
+  env: Env,
+  userId: string,
+  slug: string,
+  alias: string | undefined,
+  requestedAuthConfigId?: string | null,
+) {
+  const authConfigId = typeof requestedAuthConfigId === "string" && requestedAuthConfigId.trim()
+    ? requestedAuthConfigId.trim()
+    : await enabledAuthConfigId(env, slug);
+  if (!authConfigId) throw new Error(`No enabled auth config found for ${slug}`);
+  return composioRequest(env, "/connected_accounts/link", {
+    method: "POST",
+    body: JSON.stringify({
+      auth_config_id: authConfigId,
+      user_id: userId,
+      allow_multiple: true,
+      ...(alias ? { alias } : {}),
+    }),
   });
 }
 
@@ -504,6 +582,7 @@ async function connectionStatus(url: URL, installation: InstallationRow, env: En
 async function authorize(
   slug: string,
   alias: string | undefined,
+  authConfigId: string | undefined,
   installation: InstallationRow,
   env: Env,
   ctx: ExecutionContext,
@@ -525,14 +604,29 @@ async function authorize(
   }
   const linkRequest: AccountLinkRequest = { toolkit: slug };
   if (alias) linkRequest.alias = alias;
-  const response = await composioRequest(env, `/tool_router/session/${encodeURIComponent(session.sessionId)}/link`, {
+  const linkPath = `/tool_router/session/${encodeURIComponent(session.sessionId)}/link`;
+  const linkInit = {
     method: "POST",
     body: JSON.stringify(linkRequest),
-  });
+  };
+  let response = await composioRequest(env, linkPath, linkInit);
+  if (!response.ok) {
+    const firstError = await upstreamError(response, "Authorization unavailable");
+    if (!/auth[\s_-]*config|start connection|authorization unavailable/i.test(firstError)) {
+      return json({ error: firstError }, 502);
+    }
+    await createManagedAuthConfig(env, slug).catch(() => {});
+    response = await createConnectedAccountLink(env, installation.composio_user_id, slug, alias, authConfigId);
+  }
   if (!response.ok) return json({ error: await upstreamError(response, "Authorization unavailable") }, 502);
-  const body = linkResponseSchema.parse(await response.json());
-  if (!body.redirect_url) return json({ error: "Composio returned no authorization link" }, 502);
-  const redirect = new URL(body.redirect_url);
+  const body = await response.json() as { redirect_url?: unknown; url?: unknown };
+  const redirectValue = typeof body.redirect_url === "string"
+    ? body.redirect_url
+    : typeof body.url === "string"
+      ? body.url
+      : "";
+  if (!redirectValue) return json({ error: "Composio returned no authorization link" }, 502);
+  const redirect = new URL(redirectValue);
   if (redirect.protocol !== "https:" || (redirect.hostname !== "composio.dev" && !redirect.hostname.endsWith(".composio.dev"))) {
     return json({ error: "Composio returned an untrusted authorization link" }, 502);
   }
@@ -577,8 +671,8 @@ async function disconnectAccount(
   return json({ removed: 1 });
 }
 
-async function requestAlias(request: Request) {
-  if (!request.body) return undefined;
+async function requestConnectionOptions(request: Request) {
+  if (!request.body) return { alias: undefined, authConfigId: undefined };
   const declared = Number(request.headers.get("content-length") ?? "0");
   if (declared > 2048) throw new Response(JSON.stringify({ error: "request body is too large" }), { status: 413, headers: JSON_HEADERS });
   let body: z.infer<typeof aliasRequestSchema>;
@@ -593,7 +687,10 @@ async function requestAlias(request: Request) {
     throw new Response(JSON.stringify({ error: "invalid JSON body" }), { status: 400, headers: JSON_HEADERS });
   }
   try {
-    return normalizeAccountAlias(body.alias);
+    return {
+      alias: normalizeAccountAlias(body.alias),
+      authConfigId: body.authConfigId ?? body.auth_config_id ?? undefined,
+    };
   } catch (error) {
     throw new Response(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }), { status: 400, headers: JSON_HEADERS });
   }
@@ -616,7 +713,10 @@ async function route(request: Request, env: Env, ctx: ExecutionContext) {
     return disconnectAccount(accountMatch[1], accountMatch[2], installation, env, ctx);
   }
   const match = url.pathname.match(/^\/v1\/connectors\/([a-z0-9][a-z0-9_-]{0,80})(?:\/(authorize))?$/);
-  if (match?.[2] && request.method === "POST") return authorize(match[1], await requestAlias(request), installation, env, ctx);
+  if (match?.[2] && request.method === "POST") {
+    const options = await requestConnectionOptions(request);
+    return authorize(match[1], options.alias, options.authConfigId ?? undefined, installation, env, ctx);
+  }
   if (match && !match[2] && request.method === "DELETE") return disconnect(match[1], installation, env, ctx);
   return json({ error: "not found" }, 404);
 }
@@ -671,9 +771,8 @@ export class WebConnectors extends WorkerEntrypoint<Env> {
         const connector = url.pathname.match(/^\/v1\/connectors\/([a-z0-9][a-z0-9_-]{0,80})(?:\/(authorize))?$/);
         if (account && method === "DELETE") response = await disconnectAccount(account[1], account[2], installation, scopedEnv, this.ctx);
         else if (connector?.[2] && method === "POST") {
-          let alias: string | undefined;
-          if (body) alias = normalizeAccountAlias((JSON.parse(body) as { alias?: string }).alias);
-          response = await authorize(connector[1], alias, installation, scopedEnv, this.ctx);
+          const options = await requestConnectionOptions(new Request("https://local", { method: "POST", body: body || "{}" }));
+          response = await authorize(connector[1], options.alias, options.authConfigId ?? undefined, installation, scopedEnv, this.ctx);
         } else if (connector && method === "DELETE") response = await disconnect(connector[1], installation, scopedEnv, this.ctx);
         else response = json({ error: "not found" }, 404);
       }

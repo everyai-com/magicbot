@@ -68,10 +68,12 @@
     "web:deploy": "pnpm build && wrangler deploy --config cloudflare/web/wrangler.jsonc"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "@opencoredev/loginwithchatgpt-core": "0.2.0",
     "@trycua/cua-driver": "0.20.0",
     "clsx": "^2.1.1",
     "lucide-react": "^0.539.0",
+    "pdfjs-dist": "^6.3.289",
     "posthog-js": "^1.415.6",
     "qrcode.react": "^4.2.0",
     "react": "^19.1.0",
@@ -80,6 +82,7 @@
     "remark-gfm": "^4.0.1",
     "shiki": "^4.4.3",
     "tailwind-merge": "^3.3.1",
+    "ultravox-client": "0.6.0",
     "zod": "4.4.3"
   },
   "devDependencies": {

@@ -1,5 +1,5 @@
-const CACHE_NAME = "magicteams-shell-v2";
-const APP_SHELL = ["/", "/app-icon.svg", "/icon-192.png", "/icon-512.png", "/manifest.webmanifest"];
+const CACHE_NAME = "magicteams-shell-v6";
+const APP_SHELL = ["/", "/app-icon.svg?v=transparent-bot-large", "/icon-192.png?v=transparent-bot-large", "/icon-512.png?v=transparent-bot-large", "/manifest.webmanifest"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(APP_SHELL)));
@@ -19,7 +19,7 @@ self.addEventListener("fetch", (event) => {
   const request = event.request;
   if (request.method !== "GET") return;
   const url = new URL(request.url);
-  if (url.origin !== self.location.origin || url.pathname.startsWith("/api/")) return;
+  if (url.origin !== self.location.origin || url.pathname.startsWith("/api/") || ["/logout", "/login", "/signup"].includes(url.pathname)) return;
 
   if (request.mode === "navigate") {
     event.respondWith(
