@@ -202,17 +202,17 @@ type AskBehavior = "allow" | "deny" | "answer";
 type AskResolutionSource = "user" | "timeout" | "system";
 
 const DENY_TIMEOUT_NOTE =
-  "OpenMausBot: nobody answered this permission request in time. Skip this action and finish what you can without it.";
-const QUESTION_TIMEOUT_NOTE = "OpenMausBot: nobody answered in time. Use your best judgment and continue.";
-const DUPLICATE_ASK_ID_NOTE = "OpenMausBot: duplicate ask id — skipping this request.";
+  "MagicBots: nobody answered this permission request in time. Skip this action and finish what you can without it.";
+const QUESTION_TIMEOUT_NOTE = "MagicBots: nobody answered in time. Use your best judgment and continue.";
+const DUPLICATE_ASK_ID_NOTE = "MagicBots: duplicate ask id — skipping this request.";
 
 /** The system-source reply for an ask that outlives the turn — used both to
  * drain in-flight `pending` asks on close() and to answer one that arrives
  * on an already-closed broker (see the `closed` branch below). */
 function systemEndedReply(kind: Ask["kind"]): { behavior: AskBehavior; message: string } {
   return kind === "question"
-    ? { behavior: "answer", message: "OpenMausBot: the turn is ending — wrap up." }
-    : { behavior: "deny", message: "OpenMausBot: the turn ended" };
+    ? { behavior: "answer", message: "MagicBots: the turn is ending — wrap up." }
+    : { behavior: "deny", message: "MagicBots: the turn ended" };
 }
 
 /** One human-readable line for an ask — what the card subtitle shows. */
@@ -458,11 +458,11 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       stderr: string;
     }
     const sessions = new Map<string, Session>();
-    const configuredIdleMinimum = Number(process.env.OMB_CLAUDE_SESSION_IDLE_MIN_MS);
+    const configuredIdleMinimum = Number(process.env.MB_CLAUDE_SESSION_IDLE_MIN_MS);
     const sessionIdleMinimum = Number.isFinite(configuredIdleMinimum) && configuredIdleMinimum > 0
       ? configuredIdleMinimum
       : 10_000;
-    const SESSION_IDLE_MS = Math.max(sessionIdleMinimum, Number(process.env.OMB_CLAUDE_SESSION_IDLE_MS) || 10 * 60_000);
+    const SESSION_IDLE_MS = Math.max(sessionIdleMinimum, Number(process.env.MB_CLAUDE_SESSION_IDLE_MS) || 10 * 60_000);
 
     const closeSession = (threadId: string, why: string) => {
       const s = sessions.get(threadId);
@@ -580,7 +580,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
           env: local.env,
         };
         // The isolated Local VM preserves the established pre-allow behavior.
-        // Host tools always route through OpenMausBot's permission broker.
+        // Host tools always route through MagicBots's permission broker.
         if (!controlsHost) allowed.push("mcp__computer");
       }
       // peer-agent comms (list_bots/ask_bot) — the harness builds the whole
@@ -627,7 +627,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       // is removed when the turn settles.
       let mcpConfigPath: string | null = null;
       if (Object.keys(mcpServers).length) {
-        mcpConfigPath = join(mkdtempSync(join(tmpdir(), "omb-mcp-")), "mcp.json");
+        mcpConfigPath = join(mkdtempSync(join(tmpdir(), "mb-mcp-")), "mcp.json");
         writeFileSync(mcpConfigPath, JSON.stringify({ mcpServers }), { mode: 0o600 });
         args.push("--mcp-config", mcpConfigPath);
         args.push("--allowedTools", allowed.join(","));

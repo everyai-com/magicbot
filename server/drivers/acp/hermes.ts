@@ -115,7 +115,7 @@ function nonEmptyDotenvValue(text: string, name: string): string | null {
 
 /** Model Hermes' own config will use, when a remote provider is configured.
  *
- * Hermes is a BYOK harness and OpenMausBot only ever offered it *local* hosts
+ * Hermes is a BYOK harness and MagicBots only ever offered it *local* hosts
  * (Ollama, LM Studio, EXO...). A user who has configured Hermes with a hosted
  * provider — an OpenRouter key in `~/.hermes/.env`, which is how `hermes setup`
  * stores it — had no selectable model at all: the picker showed "No local

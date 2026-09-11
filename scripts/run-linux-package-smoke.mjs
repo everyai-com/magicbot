@@ -5,7 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const prefixName = "omb-linux-smoke-runtime-";
+const prefixName = "mb-linux-smoke-runtime-";
 const delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
 async function cleanupRuntime(directory) {
@@ -29,7 +29,7 @@ if (appImages.length !== 1) {
 const [appImage] = appImages;
 
 for (const executable of [
-  path.join(root, "release", "linux-unpacked", "openmausbot"),
+  path.join(root, "release", "linux-unpacked", "magicbots"),
   path.join(root, "release", appImage),
 ]) {
   const runtimeDirectory = mkdtempSync(path.join(tmpdir(), prefixName));
@@ -42,8 +42,8 @@ for (const executable of [
       env: {
         ...process.env,
         XDG_RUNTIME_DIR: runtimeDirectory,
-        OMB_SMOKE_BUNDLED_CUA: "1",
-        OMB_SMOKE_EXECUTABLE: executable,
+        MB_SMOKE_BUNDLED_CUA: "1",
+        MB_SMOKE_EXECUTABLE: executable,
       },
       stdio: "inherit",
     },
@@ -79,8 +79,8 @@ if (process.exitCode === undefined) for (const lane of [
       env: {
         ...process.env,
         XDG_RUNTIME_DIR: runtimeDirectory,
-        OMB_SMOKE_WAYLAND: lane.wayland ? "1" : "0",
-        OMB_SMOKE_HARD_DEATH: lane.hardDeath ? "1" : "0",
+        MB_SMOKE_WAYLAND: lane.wayland ? "1" : "0",
+        MB_SMOKE_HARD_DEATH: lane.hardDeath ? "1" : "0",
       },
       stdio: "inherit",
     },

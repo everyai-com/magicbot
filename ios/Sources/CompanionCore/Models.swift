@@ -562,7 +562,7 @@ public struct RoutineInput: Encodable, Sendable {
     public var durationMinutes: Int
 
     public init(
-        name: String, prompt: String, botId: String, runOn: String = "maus",
+        name: String, prompt: String, botId: String, runOn: String = "bot",
         enabled: Bool? = nil, schedule: RoutineSchedule, durationMinutes: Int = 30
     ) {
         self.name = name
@@ -576,7 +576,7 @@ public struct RoutineInput: Encodable, Sendable {
 }
 
 public enum RoutineRunLocation: String, CaseIterable, Codable, Hashable, Sendable {
-    case maus
+    case bot
     case cloud
 }
 
@@ -598,13 +598,13 @@ public struct RoutineRunAvailability: Equatable, Sendable {
     public var cloudReady: Bool { cloudConfigured && cloudInstanceAvailable }
 
     public func canSelect(_ location: RoutineRunLocation, preserving current: RoutineRunLocation) -> Bool {
-        location == .maus || cloudReady || current == .cloud
+        location == .bot || cloudReady || current == .cloud
     }
 }
 
 public extension Routine {
     var runLocation: RoutineRunLocation {
-        RoutineRunLocation(rawValue: runOn) ?? .maus
+        RoutineRunLocation(rawValue: runOn) ?? .bot
     }
 
     /// Mirrors the desktop `canToggleRoutine` policy. A one-time routine has

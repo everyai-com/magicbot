@@ -1,4 +1,4 @@
-// Config + data dirs. One file, ~/.openmausbot/config.json, env fallbacks:
+// Config + data dirs. One file, ~/.magicbots/config.json, env fallbacks:
 //   { "xai": {"key":"xai-…"}, "composio": {"apiKey":"ak_…"}, "box": {"token":"…"},
 //     "instances": { "<instanceId>": {"driver":"grok", …} } }
 import { readFileSync, mkdirSync, existsSync, renameSync } from "node:fs";
@@ -155,20 +155,24 @@ export function skillRecorderEnabled(cfg: AppConfig): boolean {
   return cfg.features?.skillRecorder === true;
 }
 
-// OMB_DATA_DIR isolates test/soak rigs from the user's real fleet.
-export const DATA_DIR = process.env.OMB_DATA_DIR ?? join(homedir(), ".openmausbot");
-const LEGACY_DATA_DIR = join(homedir(), ".opengrokbot");
+// MB_DATA_DIR isolates test/soak rigs from the user's real fleet.
+export const DATA_DIR = process.env.MB_DATA_DIR ?? join(homedir(), ".magicbots");
+const LEGACY_DATA_DIRS = [join(homedir(), ".openmausbot"), join(homedir(), ".opengrokbot")];
 export const EVENTS_DIR = join(DATA_DIR, "events");
 export const NATIVE_DIR = join(DATA_DIR, "native");
 
 export function ensureDirs() {
-  // one-time migration from the pre-rename data dir — bots, transcripts,
+  // one-time migration from a pre-rename data dir — bots, transcripts,
   // config and keys all carry over
-  if (!existsSync(DATA_DIR) && existsSync(LEGACY_DATA_DIR)) {
-    try {
-      renameSync(LEGACY_DATA_DIR, DATA_DIR);
-    } catch {
-      /* cross-device or busy — fall through to a fresh dir */
+  if (!existsSync(DATA_DIR)) {
+    for (const legacy of LEGACY_DATA_DIRS) {
+      if (!existsSync(legacy)) continue;
+      try {
+        renameSync(legacy, DATA_DIR);
+      } catch {
+        /* cross-device or busy — fall through to a fresh dir */
+      }
+      break;
     }
   }
   for (const dir of [DATA_DIR, EVENTS_DIR, NATIVE_DIR]) mkdirSync(dir, { recursive: true });
@@ -195,12 +199,12 @@ export function loadConfig(): AppConfig {
   cfg.box = { ...cfg.box };
   if (process.env.BOX_TOKEN !== undefined) cfg.box.token = process.env.BOX_TOKEN;
   cfg.cfComputer = { ...cfg.cfComputer };
-  if (process.env.OMB_CF_COMPUTER_URL !== undefined) cfg.cfComputer.url = process.env.OMB_CF_COMPUTER_URL;
-  if (process.env.OMB_CF_COMPUTER_TOKEN !== undefined) cfg.cfComputer.token = process.env.OMB_CF_COMPUTER_TOKEN;
+  if (process.env.MB_CF_COMPUTER_URL !== undefined) cfg.cfComputer.url = process.env.MB_CF_COMPUTER_URL;
+  if (process.env.MB_CF_COMPUTER_TOKEN !== undefined) cfg.cfComputer.token = process.env.MB_CF_COMPUTER_TOKEN;
   // This fork previously stored its Cloudflare connection under ~/.magicbot.
   // Read only that section as a compatibility fallback so the upstream data
   // migration does not make an already-configured cloud computer disappear.
-  if (!process.env.OMB_DATA_DIR && (!cfg.cfComputer.url || !cfg.cfComputer.token)) {
+  if (!process.env.MB_DATA_DIR && (!cfg.cfComputer.url || !cfg.cfComputer.token)) {
     try {
       const legacy = parseJson(readFileSync(join(homedir(), ".magicbot", "config.json"), "utf8"));
       if (legacy && typeof legacy === "object" && !Array.isArray(legacy)) {
@@ -214,9 +218,9 @@ export function loadConfig(): AppConfig {
   cfg.opencodeGo = { ...cfg.opencodeGo };
   if (process.env.OPENCODE_API_KEY !== undefined) cfg.opencodeGo.apiKey = process.env.OPENCODE_API_KEY;
   cfg.tts = { ...cfg.tts };
-  if (process.env.OMB_TTS_KEY !== undefined) cfg.tts.key = process.env.OMB_TTS_KEY;
+  if (process.env.MB_TTS_KEY !== undefined) cfg.tts.key = process.env.MB_TTS_KEY;
   cfg.imageGen = { ...cfg.imageGen };
-  if (process.env.OMB_OPENAI_IMAGE_KEY !== undefined) cfg.imageGen.key = process.env.OMB_OPENAI_IMAGE_KEY;
+  if (process.env.MB_OPENAI_IMAGE_KEY !== undefined) cfg.imageGen.key = process.env.MB_OPENAI_IMAGE_KEY;
   return cfg;
 }
 
@@ -232,10 +236,10 @@ export function syncCredentialEnv(patch: Partial<AppConfig>): void {
     [patch.xai?.key, "XAI_API_KEY"],
     [patch.composio?.apiKey, "COMPOSIO_API_KEY"],
     [patch.box?.token, "BOX_TOKEN"],
-    [patch.cfComputer?.token, "OMB_CF_COMPUTER_TOKEN"],
+    [patch.cfComputer?.token, "MB_CF_COMPUTER_TOKEN"],
     [patch.opencodeGo?.apiKey, "OPENCODE_API_KEY"],
-    [patch.tts?.key, "OMB_TTS_KEY"],
-    [patch.imageGen?.key, "OMB_OPENAI_IMAGE_KEY"],
+    [patch.tts?.key, "MB_TTS_KEY"],
+    [patch.imageGen?.key, "MB_OPENAI_IMAGE_KEY"],
   ];
   for (const [value, name] of secrets) {
     if (value === undefined) continue;
@@ -252,12 +256,12 @@ export function syncCredentialEnv(patch: Partial<AppConfig>): void {
 export const WORKSPACE_CREDENTIAL_ENV = [
   "XAI_API_KEY",
   "BOX_TOKEN",
-  "OMB_CF_COMPUTER_TOKEN",
+  "MB_CF_COMPUTER_TOKEN",
   "OPENCODE_API_KEY",
-  "OMB_TTS_KEY",
-  "OMB_OPENAI_IMAGE_KEY",
+  "MB_TTS_KEY",
+  "MB_OPENAI_IMAGE_KEY",
   "COMPOSIO_API_KEY",
-  "OMB_COMPOSIO_BROKER_TOKEN",
+  "MB_COMPOSIO_BROKER_TOKEN",
 ] as const;
 
 /** Drop every workspace credential from a child-process env (in place). */
@@ -284,7 +288,7 @@ export const PROVIDER_CREDENTIAL_ENV = [
   "CURSOR_AUTH_TOKEN",
 ] as const;
 
-/** Merge a partial config into ~/.openmausbot/config.json (secrets never
+/** Merge a partial config into ~/.magicbots/config.json (secrets never
  * echoed back — callers report configured-or-not booleans only). */
 export function saveConfig(patch: Partial<AppConfig>): void {
   const p = join(DATA_DIR, "config.json");

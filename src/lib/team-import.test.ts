@@ -5,7 +5,7 @@ import { teamImportPreview } from "./team-import";
 describe("team import preview", () => {
   it.each([1, 2])("previews version %s team files", (version) => {
     const preview = teamImportPreview({
-      format: "openmaus.team",
+      format: "magicbots.team",
       version,
       team: {
         name: " Engineering ",
@@ -25,9 +25,18 @@ describe("team import preview", () => {
   });
 
   it("rejects unsupported and empty files", () => {
-    expect(() => teamImportPreview({ format: "openmaus.team", version: 3, team: {} })).toThrow("not supported");
+    expect(() => teamImportPreview({ format: "magicbots.team", version: 3, team: {} })).toThrow("not supported");
     expect(() =>
-      teamImportPreview({ format: "openmaus.team", version: 2, team: { name: "Empty", members: [] } }),
+      teamImportPreview({ format: "magicbots.team", version: 2, team: { name: "Empty", members: [] } }),
     ).toThrow("no members");
+  });
+
+  it("previews pre-rename files", () => {
+    const preview = teamImportPreview({
+      format: "openmaus.team",
+      version: 2,
+      team: { name: "Legacy", members: [{ name: "Ada" }] },
+    });
+    expect(preview.name).toBe("Legacy");
   });
 });

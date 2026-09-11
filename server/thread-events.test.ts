@@ -7,7 +7,7 @@ import { readThreadEvents } from "./thread-events.ts";
 
 const dirs: string[] = [];
 function tmp() {
-  const d = mkdtempSync(join(tmpdir(), "omb-thread-events-"));
+  const d = mkdtempSync(join(tmpdir(), "mb-thread-events-"));
   dirs.push(d);
   return d;
 }

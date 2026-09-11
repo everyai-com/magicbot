@@ -11,7 +11,9 @@ export function teamImportPreview(manifest: unknown): PendingTeamImport {
     throw new Error("This file does not contain a team.");
   }
   const root = manifest as Record<string, unknown>;
-  if (root.format !== "openmaus.team") throw new Error("This is not an OpenMaus team file.");
+  if (root.format !== "magicbots.team" && root.format !== "openmaus.team") {
+    throw new Error("This is not a MagicBots team file.");
+  }
   if (root.version !== 1 && root.version !== 2) {
     throw new Error(`Team file version ${String(root.version)} is not supported.`);
   }

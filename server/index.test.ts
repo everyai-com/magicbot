@@ -65,16 +65,16 @@ const statusWithHeaders = (headers: Record<string, string>): Promise<number> =>
   });
 
 beforeAll(async () => {
-  home = mkdtempSync(join(tmpdir(), "omb-api-test-"));
+  home = mkdtempSync(join(tmpdir(), "mb-api-test-"));
   staticDir = join(home, "static");
   fakeClaudeDump = join(home, "fake-claude-dump.json");
   // a fleet of exactly one unknown driver: no CLI probes, no network
-  mkdirSync(join(home, ".openmausbot"), { recursive: true });
+  mkdirSync(join(home, ".magicbots"), { recursive: true });
   mkdirSync(join(staticDir, "assets"), { recursive: true });
-  writeFileSync(join(staticDir, "index.html"), "<!doctype html><title>Packaged OpenMausBot</title>");
+  writeFileSync(join(staticDir, "index.html"), "<!doctype html><title>Packaged MagicBots</title>");
   writeFileSync(join(staticDir, "assets", "smoke.css"), "body { color: white; }");
   writeFileSync(
-    join(home, ".openmausbot", "config.json"),
+    join(home, ".magicbots", "config.json"),
     JSON.stringify({
       instances: {
         ghost: { driver: "not-a-real-driver", displayName: "Ghost" },
@@ -83,7 +83,7 @@ beforeAll(async () => {
     }),
   );
   writeFileSync(
-    join(home, ".openmausbot", "groups.json"),
+    join(home, ".magicbots", "groups.json"),
     JSON.stringify([
       {
         id: "test-dm",
@@ -133,7 +133,7 @@ beforeAll(async () => {
   // A room transcript carrying an approval that outlived its turn: the card
   // is durable, but busyBotId is in-memory only and never survives a restart.
   writeFileSync(
-    join(home, ".openmausbot", "messages-test-stranded-room-thread.json"),
+    join(home, ".magicbots", "messages-test-stranded-room-thread.json"),
     JSON.stringify({
       activeLeafId: "stranded-card",
       messages: [
@@ -160,7 +160,7 @@ beforeAll(async () => {
   // A room holding an approval nobody has answered yet, so "Cancel turn"
   // has something open to close.
   writeFileSync(
-    join(home, ".openmausbot", "messages-test-cancel-room-thread.json"),
+    join(home, ".magicbots", "messages-test-cancel-room-thread.json"),
     JSON.stringify({
       activeLeafId: "cancel-card",
       messages: [
@@ -217,11 +217,11 @@ beforeAll(async () => {
       ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
       HOME: home,
       USERPROFILE: home,
-      OMB_PORT: String(PORT),
-      OMB_WEBHOOK_PORT: String(WEBHOOK_PORT),
-      OMB_BOX_API: `http://127.0.0.1:${boxStubPort}`,
-      OMB_COMPOSIO_API: `http://127.0.0.1:${boxStubPort}/api/v3.1`,
-      OMB_STATIC_DIR: staticDir,
+      MB_PORT: String(PORT),
+      MB_WEBHOOK_PORT: String(WEBHOOK_PORT),
+      MB_BOX_API: `http://127.0.0.1:${boxStubPort}`,
+      MB_COMPOSIO_API: `http://127.0.0.1:${boxStubPort}/api/v3.1`,
+      MB_STATIC_DIR: staticDir,
       FAKE_CLAUDE_MODE: "hang",
       FAKE_CLAUDE_DUMP: fakeClaudeDump,
     },
@@ -264,7 +264,7 @@ describe("harness HTTP API", () => {
   it("identifies itself on /api/health", async () => {
     const { status, body } = await api("GET", "/api/health");
     expect(status).toBe(200);
-    expect(body.app).toBe("openmausbot");
+    expect(body.app).toBe("magicbots");
     expect(typeof body.pid).toBe("number");
     expect(body.static).toBe(true);
   });
@@ -273,7 +273,7 @@ describe("harness HTTP API", () => {
     const root = await fetch(`${BASE}/`);
     expect(root.status).toBe(200);
     expect(root.headers.get("content-type")).toBe("text/html");
-    expect(await root.text()).toContain("Packaged OpenMausBot");
+    expect(await root.text()).toContain("Packaged MagicBots");
 
     const asset = await fetch(`${BASE}/assets/smoke.css`);
     expect(asset.status).toBe(200);
@@ -283,7 +283,7 @@ describe("harness HTTP API", () => {
     const spa = await fetch(`${BASE}/settings/desktop`);
     expect(spa.status).toBe(200);
     expect(spa.headers.get("content-type")).toBe("text/html");
-    expect(await spa.text()).toContain("Packaged OpenMausBot");
+    expect(await spa.text()).toContain("Packaged MagicBots");
 
     const unknownApi = await api("GET", "/api/not-a-real-route");
     expect(unknownApi.status).toBe(404);
@@ -906,7 +906,7 @@ describe("harness HTTP API", () => {
       .map((bot: { name: string }) => bot.name);
     const exported = await api("POST", "/api/teams/export", { name: "Field Team" });
     expect(exported.status).toBe(200);
-    expect(exported.body).toMatchObject({ format: "openmaus.team", version: 2, team: { name: "Field Team" } });
+    expect(exported.body).toMatchObject({ format: "magicbots.team", version: 2, team: { name: "Field Team" } });
     expect(exported.body.team.members.map((member: { name: string }) => member.name)).toEqual(visibleNames);
     expect(exported.body.team.members).toEqual(expect.arrayContaining([
       expect.objectContaining({
@@ -925,7 +925,7 @@ describe("harness HTTP API", () => {
     expect(exported.body.team).not.toHaveProperty("room");
     expect(JSON.stringify(exported.body)).not.toMatch(/Archived|autoApprove|alwaysAllow|modelSelection|threadId/);
     expect((await api("GET", "/api/bots")).body.groups).toHaveLength(roomsBefore);
-    expect((await api("POST", "/api/teams/export", {})).body.team.name).toBe("My OpenMaus Team");
+    expect((await api("POST", "/api/teams/export", {})).body.team.name).toBe("My MagicBots Team");
 
     const stream = await openSse(`${BASE}/api/events`);
     try {
@@ -1014,7 +1014,7 @@ describe("harness HTTP API", () => {
     expect(exported.body.team).not.toHaveProperty("room");
 
     const roomsBefore = (await api("GET", "/api/bots")).body.groups.length;
-    const folder = mkdtempSync(join(tmpdir(), "omb-project-"));
+    const folder = mkdtempSync(join(tmpdir(), "mb-project-"));
 
     const stream = await openSse(`${BASE}/api/events`);
     try {
@@ -1052,7 +1052,7 @@ describe("harness HTTP API", () => {
   });
 
   it("the scout reads a folder, proposes an importable team, and creates nothing until the human imports", async () => {
-    const folder = mkdtempSync(join(tmpdir(), "omb-scout-"));
+    const folder = mkdtempSync(join(tmpdir(), "mb-scout-"));
     writeFileSync(join(folder, "README.md"), "# Demo Shop\n\nA storefront demo.\n");
     writeFileSync(
       join(folder, "package.json"),
@@ -1111,7 +1111,7 @@ describe("harness HTTP API", () => {
     const room = (await api("POST", "/api/groups", { memberIds: [trusted.id], name: "War Room" })).body.group;
 
     const smuggled = {
-      format: "openmaus.team",
+      format: "magicbots.team",
       version: 2,
       team: {
         name: "Trap Team",
@@ -1515,7 +1515,7 @@ describe("harness HTTP API", () => {
     const after = await api("GET", "/api/config");
     expect(after.body.rooms).toEqual({ turnTimeoutMinutes: 20 });
 
-    const disk = JSON.parse(readFileSync(join(home, ".openmausbot", "config.json"), "utf8"));
+    const disk = JSON.parse(readFileSync(join(home, ".magicbots", "config.json"), "utf8"));
     expect(disk.rooms).toEqual({ turnTimeoutMinutes: 20 });
 
     await api("PUT", "/api/config", { rooms: { turnTimeoutMinutes: 5 } });
@@ -1532,7 +1532,7 @@ describe("harness HTTP API", () => {
     expect(saved.status).toBe(200);
     expect(saved.body.features).toEqual({ skillRecorder: true });
 
-    const disk = JSON.parse(readFileSync(join(home, ".openmausbot", "config.json"), "utf8"));
+    const disk = JSON.parse(readFileSync(join(home, ".magicbots", "config.json"), "utf8"));
     expect(disk.features).toEqual({ skillRecorder: true });
 
     await api("PATCH", "/api/config", { features: { skillRecorder: false } });
@@ -1568,7 +1568,7 @@ describe("harness HTTP API", () => {
     expect(invalid.status).toBe(400);
     expect(invalid.body.error).toContain("localVm.maxInstances");
 
-    const disk = JSON.parse(readFileSync(join(home, ".openmausbot", "config.json"), "utf8"));
+    const disk = JSON.parse(readFileSync(join(home, ".magicbots", "config.json"), "utf8"));
     expect(disk.localVm).toEqual({ mode: "per-bot", maxInstances: 3 });
     await api("PATCH", "/api/config", { localVm: { mode: "shared", maxInstances: 2 } });
   });
@@ -1662,7 +1662,7 @@ describe("harness HTTP API", () => {
     expect(saved.body.profile).toEqual({ name: "External Store", email: "" });
     expect(JSON.stringify(saved.body)).not.toContain("ak_good");
 
-    const disk = JSON.parse(readFileSync(join(home, ".openmausbot", "config.json"), "utf8"));
+    const disk = JSON.parse(readFileSync(join(home, ".magicbots", "config.json"), "utf8"));
     expect(disk.composio).toMatchObject({ apiKey: "", sessionId: "trs_config_test" });
     expect(disk.opencodeGo).toEqual({ apiKey: "" });
     expect(disk.profile).toEqual({ name: "External Store" });
@@ -1676,7 +1676,7 @@ describe("harness HTTP API", () => {
   });
 
   it.skipIf(process.platform === "win32")("stores the credentials file with owner-only permissions", () => {
-    expect(statSync(join(home, ".openmausbot", "config.json")).mode & 0o777).toBe(0o600);
+    expect(statSync(join(home, ".magicbots", "config.json")).mode & 0o777).toBe(0o600);
   });
 
   it("stores and echoes the user profile (not write-only, unlike keys)", async () => {
@@ -1694,7 +1694,7 @@ describe("harness HTTP API", () => {
       name: "Incoming build",
       prompt: "Review the incoming build event",
       botId: bots.body.bots[0].id,
-      runOn: "maus",
+      runOn: "bot",
     });
     expect(created.status).toBe(201);
     expect(created.body.ingress).toMatchObject({ available: true, baseUrl: WEBHOOK_BASE });
@@ -1736,7 +1736,7 @@ describe("harness HTTP API", () => {
     expect((await api("DELETE", `/api/webhooks/${created.body.webhook.id}`)).status).toBe(200);
     expect((await api("GET", "/api/webhooks")).body.webhooks).toHaveLength(0);
     if (process.platform !== "win32") {
-      expect(statSync(join(home, ".openmausbot", "webhooks.json")).mode & 0o777).toBe(0o600);
+      expect(statSync(join(home, ".magicbots", "webhooks.json")).mode & 0o777).toBe(0o600);
     }
   });
 
@@ -1856,7 +1856,7 @@ describe("bot memory API", () => {
       req.end();
     });
 
-  const workspaceOf = (botId: string) => join(home, ".openmausbot", "workspaces", botId);
+  const workspaceOf = (botId: string) => join(home, ".magicbots", "workspaces", botId);
 
   it("reads empty memory for a fresh bot and 404s a bot that does not exist", async () => {
     const bot = (await api("POST", "/api/bots")).body.bot;
@@ -1927,7 +1927,7 @@ describe("bot memory API", () => {
       // as leaked content and not depend on what happens to exist
       mkdirSync(workspaceOf(bot.id), { recursive: true });
       writeFileSync(join(workspaceOf(bot.id), "MEMORY.md"), "TOP-SECRET-MARKER memory");
-      writeFileSync(join(home, ".openmausbot", "secret.md"), "TOP-SECRET-MARKER sibling");
+      writeFileSync(join(home, ".magicbots", "secret.md"), "TOP-SECRET-MARKER sibling");
 
       for (const name of [
         "..%2F..%2Fsecret.md", // encoded slashes

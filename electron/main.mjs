@@ -33,7 +33,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // 127.0.0.1 explicitly — vite binds IPv4; a bare "localhost" here can
 // resolve to ::1 and paint a black window
 const DEV_URL = process.env.ELECTRON_START_URL ?? "http://127.0.0.1:5199";
-const DEFAULT_COMPOSIO_BROKER_URL = "https://openmausbot-composio.milindsoni201.workers.dev";
+const DEFAULT_COMPOSIO_BROKER_URL = "https://magicbot-composio.milindsoni201.workers.dev";
 let SERVER_PORT = 8799;
 const APP_ICON = path.join(__dirname, "resources/app-icon.png");
 let desktopViewerWindow = null;
@@ -42,13 +42,13 @@ let desktopViewerContextId = null;
 
 // GNOME groups the window with its installed desktop entry only when both
 // identities match. This must run before Electron becomes ready.
-if (process.platform === "linux") app.setDesktopName("com.openmausbot.app.desktop");
+if (process.platform === "linux") app.setDesktopName("com.magicbots.app.desktop");
 
 // One instance per user: without this lock a second launch forks a second
 // harness server on a fallback port and splits data dirs in two. The loser
 // exits before any child or window exists; the winner surfaces itself.
 if (!app.requestSingleInstanceLock()) {
-  console.log("[desktop] OpenMausBot is already running — focusing that window");
+  console.log("[desktop] MagicBots is already running — focusing that window");
   process.exit(0);
 }
 app.on("second-instance", () => {
@@ -90,7 +90,7 @@ async function saveSecureCredentials(credentials) {
 }
 
 async function secureComposioConfig() {
-  const dataDir = process.env.OMB_DATA_DIR || path.join(app.getPath("home"), ".openmausbot");
+  const dataDir = process.env.MB_DATA_DIR || path.join(app.getPath("home"), ".magicbots");
   const configPath = path.join(dataDir, "config.json");
   try {
     const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
@@ -132,7 +132,7 @@ async function secureComposioConfig() {
 // migrates plaintext left by older versions or direct development clients.
 // See workspace-credentials.mjs for the exact rules.
 async function secureWorkspaceConfig() {
-  const dataDir = process.env.OMB_DATA_DIR || path.join(app.getPath("home"), ".openmausbot");
+  const dataDir = process.env.MB_DATA_DIR || path.join(app.getPath("home"), ".magicbots");
   const configPath = path.join(dataDir, "config.json");
   try {
     const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
@@ -152,7 +152,7 @@ async function secureWorkspaceConfig() {
 }
 
 function composioBrokerUrl() {
-  const configured = process.env.OMB_COMPOSIO_BROKER_URL?.trim();
+  const configured = process.env.MB_COMPOSIO_BROKER_URL?.trim();
   return configured || (app.isPackaged ? DEFAULT_COMPOSIO_BROKER_URL : "");
 }
 
@@ -200,8 +200,8 @@ async function ensureManagedComposioCredentials() {
 }
 
 // The packaged app has no terminal: everything about the server child's life
-// goes to server.log in the OS log dir (~/Library/Logs/OpenMausBot on macOS,
-// Console.app-visible; %APPDATA%\OpenMausBot\logs on Windows), which is also
+// goes to server.log in the OS log dir (~/Library/Logs/MagicBots on macOS,
+// Console.app-visible; %APPDATA%\MagicBots\logs on Windows), which is also
 // why stdio is piped, not inherited — under a Finder/Explorer launch the
 // parent's stdio leads nowhere and a failed boot is otherwise undiagnosable.
 const LOG_DIR = app.getPath("logs");
@@ -282,11 +282,11 @@ async function startServerOn(port) {
   const proc = utilityProcess.fork(entry, [], {
     env: {
       ...process.env,
-      OMB_STATIC_DIR: path.join(process.resourcesPath, "ui"),
-      OMB_RESOURCES_PATH: process.resourcesPath,
-      OMB_SKILLS_DIR: path.join(process.resourcesPath, "skills"),
-      OMB_PORT: String(port),
-      OMB_USER_DATA: app.getPath("userData"),
+      MB_STATIC_DIR: path.join(process.resourcesPath, "ui"),
+      MB_RESOURCES_PATH: process.resourcesPath,
+      MB_SKILLS_DIR: path.join(process.resourcesPath, "skills"),
+      MB_PORT: String(port),
+      MB_USER_DATA: app.getPath("userData"),
       ...(secureCredentials.composioApiKey
         ? { COMPOSIO_API_KEY: secureCredentials.composioApiKey }
         : {}),
@@ -298,8 +298,8 @@ async function startServerOn(port) {
       // managed Composio project. Clearing it returns to the default service.
       ...(!secureCredentials.composioApiKey && composioBrokerUrl() && secureCredentials.composioBrokerToken
         ? {
-            OMB_COMPOSIO_BROKER_URL: composioBrokerUrl(),
-            OMB_COMPOSIO_BROKER_TOKEN: secureCredentials.composioBrokerToken,
+            MB_COMPOSIO_BROKER_URL: composioBrokerUrl(),
+            MB_COMPOSIO_BROKER_TOKEN: secureCredentials.composioBrokerToken,
           }
         : {}),
     },
@@ -323,7 +323,7 @@ async function startServerOn(port) {
       const res = await fetch(`http://127.0.0.1:${port}/api/health`);
       if (res.ok) {
         const body = await res.json().catch(() => null);
-        if (body?.app === "openmausbot" && body.pid === proc.pid && body.static) return proc;
+        if (body?.app === "magicbots" && body.pid === proc.pid && body.static) return proc;
         break; // someone else owns this port — try the next one
       }
     } catch {
@@ -357,7 +357,7 @@ async function startServerPackaged() {
 const ERROR_PAGE =
   "data:text/html;charset=utf-8," +
   encodeURIComponent(
-    `<body style="margin:0;display:flex;align-items:center;justify-content:center;height:100vh;background:#070707;color:#fcfcfc;font:15px -apple-system,system-ui"><div style="text-align:center;max-width:360px"><div style="font-size:40px">🐭</div><h2 style="font-weight:600;margin:12px 0 6px">Couldn't start the bot server</h2><p style="color:#fcfcfc99;line-height:1.5">Something else is using its ports. Quit and reopen OpenMausBot — if it keeps happening, restart your computer.</p></div></body>`,
+    `<body style="margin:0;display:flex;align-items:center;justify-content:center;height:100vh;background:#070707;color:#fcfcfc;font:15px -apple-system,system-ui"><div style="text-align:center;max-width:360px"><div style="font-size:40px">🐭</div><h2 style="font-weight:600;margin:12px 0 6px">Couldn't start the bot server</h2><p style="color:#fcfcfc99;line-height:1.5">Something else is using its ports. Quit and reopen MagicBots — if it keeps happening, restart your computer.</p></div></body>`,
   );
 
 let cuaReady = Promise.resolve({ mode: "unavailable", reason: "not-started" });
@@ -407,7 +407,7 @@ function desktopViewerErrorPage(message, retryUrl) {
 }
 
 function openDesktopViewer(owner, rawUrl, rawTitle, contextId) {
-  if (!owner || owner.isDestroyed()) throw new Error("The OpenMausBot window is unavailable");
+  if (!owner || owner.isDestroyed()) throw new Error("The MagicBots window is unavailable");
   const url = desktopViewerUrl(rawUrl);
   const titleCandidate = Object.prototype.toString.call(rawTitle) === "[object String]" ? rawTitle.trim() : "";
   const title = titleCandidate ? titleCandidate.slice(0, 80) : "Live desktop";
@@ -437,7 +437,7 @@ function openDesktopViewer(owner, rawUrl, rawTitle, contextId) {
       sandbox: true,
       // Keep provider cookies away from the app renderer and discard them on
       // app exit. The secret-bearing URL is sufficient to authenticate.
-      partition: "openmausbot-desktop-viewer",
+      partition: "magicbots-desktop-viewer",
     },
   });
   desktopViewerWindow = viewer;
@@ -534,14 +534,14 @@ function createWindow() {
   // Packaged CI smoke hook. It validates the real renderer/preload bridge and
   // same-origin embedded server, then follows the normal window-close path.
   // No debugging port or sandbox override is needed.
-  if (process.env.OMB_SMOKE_TEST === "1") {
+  if (process.env.MB_SMOKE_TEST === "1") {
     win.webContents.once("did-finish-load", async () => {
       try {
         const result = await win.webContents.executeJavaScript(`
           (async () => {
             if (!window.ogb?.getCapabilities) throw new Error("desktop preload bridge is unavailable");
             let crashPromise = null;
-            if (${JSON.stringify(process.env.OMB_SMOKE_CUA === "1")}) {
+            if (${JSON.stringify(process.env.MB_SMOKE_CUA === "1")}) {
               crashPromise = new Promise((resolve, reject) => {
                 const timeout = setTimeout(() => {
                   unsubscribe?.();
@@ -591,7 +591,7 @@ function createWindow() {
             `unexpected packaged renderer URL: ${result.location} (expected ${expectedLocation})`,
           );
         }
-        if (process.env.OMB_SMOKE_BUNDLED_CUA === "1") {
+        if (process.env.MB_SMOKE_BUNDLED_CUA === "1") {
           const connection = await cuaReady;
           const expectedDriver = path.join(
             process.resourcesPath,
@@ -628,7 +628,7 @@ function createWindow() {
       } catch (error) {
         console.error(`[smoke] renderer-failed ${error?.stack ?? error}`);
       } finally {
-        if (process.env.OMB_SMOKE_KEEP_OPEN !== "1") win.close();
+        if (process.env.MB_SMOKE_KEEP_OPEN !== "1") win.close();
       }
     });
   }
@@ -735,7 +735,7 @@ ipcMain.handle("desktop:open-external", async (_event, rawUrl) => {
 
 // The Box VNC viewer must be a top-level page for its token exchange. A
 // sandboxed modal BrowserWindow satisfies that requirement while keeping the
-// live desktop inside OpenMausBot instead of sending the person to a browser.
+// live desktop inside MagicBots instead of sending the person to a browser.
 ipcMain.handle("desktop-viewer:open", (event, rawUrl, title, contextId) => {
   const owner = BrowserWindow.fromWebContents(event.sender);
   return openDesktopViewer(owner, rawUrl, title, contextId);

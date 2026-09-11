@@ -6,17 +6,17 @@ import { imageAttachmentFromFile } from "@/lib/composer-attachments";
 import { cn } from "@/lib/cn";
 import {
   PICKABLE_EXPRESSIONS,
-  MAUS_COLORS,
-  MAUS_COLOR_NAMES,
-  type MausMotion,
-  type MausState,
+  MASCOT_COLORS,
+  MASCOT_COLOR_NAMES,
+  type MascotMotion,
+  type MascotState,
 } from "@/lib/mascot";
 import {
   BOT_AVATAR_CROPS,
   botAvatarUrlFromStoredPath,
   type BotAvatarCrop,
 } from "../../shared/bot-avatar";
-import { BotAvatar, MausAvatar } from "./Avatar";
+import { BotAvatar, MascotAvatar } from "./Avatar";
 import {
   automaticBotAppearance,
   BOT_PERSONALITIES,
@@ -41,8 +41,8 @@ export function BotProfileAvatarCard({
   onPatch,
 }: {
   bot: Bot;
-  activeState: MausState;
-  mascotMotion: { kind: Exclude<MausMotion, "none">; nonce: number } | null;
+  activeState: MascotState;
+  mascotMotion: { kind: Exclude<MascotMotion, "none">; nonce: number } | null;
   onPatch: (patch: AvatarPatch) => void;
 }) {
   const { state, dispatch, flushBotPatches } = useStore();
@@ -252,7 +252,7 @@ export function BotProfileAvatarCard({
                   title={label}
                   aria-label={`Use ${label.toLowerCase()} expression`}
                 >
-                  <MausAvatar color={bot.color} state={expression} size={40} animated={false} />
+                  <MascotAvatar color={bot.color} state={expression} size={40} animated={false} />
                   <span className="max-w-full truncate text-[10px] font-medium text-ink-secondary">{label}</span>
                 </button>
               ))}
@@ -262,7 +262,7 @@ export function BotProfileAvatarCard({
               Color
             </div>
             <div className="flex flex-wrap gap-2.5">
-              {MAUS_COLOR_NAMES.map((color) => (
+              {MASCOT_COLOR_NAMES.map((color) => (
                 <button
                   key={color}
                   type="button"
@@ -272,7 +272,7 @@ export function BotProfileAvatarCard({
                     "size-10 rounded-full border-2 border-transparent transition-transform hover:scale-110",
                     bot.color === color && "ring-2 ring-accent-border ring-offset-2 ring-offset-card",
                   )}
-                  style={{ backgroundColor: MAUS_COLORS[color] }}
+                  style={{ backgroundColor: MASCOT_COLORS[color] }}
                   title={color}
                   aria-label={`Use ${color} mascot color`}
                 />

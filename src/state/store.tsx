@@ -14,7 +14,7 @@ import {
   type ReactNode,
 } from "react";
 import type { CloudBackend, EffortLevel } from "../../server/contracts.ts";
-import type { MausColor, MausMotion } from "@/lib/mascot";
+import type { MascotColor, MascotMotion } from "@/lib/mascot";
 import type { BotPersonality } from "../../shared/bot-personality";
 import type { BotAvatarCrop } from "../../shared/bot-avatar";
 import type { Routine, RoutineInput, RoutineRun } from "@/lib/routines";
@@ -25,7 +25,7 @@ import { speaker } from "@/lib/tts";
 import { createBotPatchQueue, type BotUpdatePatch } from "./bot-patch-queue";
 import { skillRecorderEnabled } from "@/lib/feature-flags";
 
-export type { MausColor } from "@/lib/mascot";
+export type { MascotColor } from "@/lib/mascot";
 
 export interface OptionCardData {
   title: string;
@@ -76,11 +76,11 @@ export interface Message {
    * share a parentId with the version they replace — that's a fork. */
   parentId?: string | null;
   /** rooms: which member said this (sender attribution). */
-  from?: { botId: string; name: string; color: MausColor };
+  from?: { botId: string; name: string; color: MascotColor };
   /** emoji reactions; by = "user" or a member botId. */
   reactions?: Array<{ emoji: string; by: string }>;
   /** comm chips: "Messaged @X" linking to the bot⇄bot channel. */
-  comm?: { groupId: string; withBotId: string; withName: string; withColor: MausColor };
+  comm?: { groupId: string; withBotId: string; withName: string; withColor: MascotColor };
   /** sent while the bot was mid-turn; auto-sends when the turn settles.
    * Rendered only while the bot is busy, so a flag stranded by a server
    * restart never shows a promise nothing will keep. */
@@ -161,7 +161,7 @@ export interface Bot {
   title: string;
   description: string;
   notifications: boolean;
-  color: MausColor;
+  color: MascotColor;
   mascotExpression?: string | null;
   /** Motion DNA: changes cadence and gesture without changing the mascot family. */
   personality?: BotPersonality;
@@ -391,7 +391,7 @@ export interface AppState {
   mascotMotion: {
     botId: string;
     nonce: number;
-    kind: Exclude<MausMotion, "none">;
+    kind: Exclude<MascotMotion, "none">;
   } | null;
   /** 1:1 queue-fallback lines waiting for drain; keyed by threadId.
    * Each entry is identified by the server queueId, not by text. */
@@ -535,7 +535,7 @@ function updateBot(state: AppState, botId: string, fn: (b: Bot) => Bot): AppStat
 function withMascotMotion(
   state: AppState,
   botId: string,
-  kind: Exclude<MausMotion, "none">,
+  kind: Exclude<MascotMotion, "none">,
 ): AppState {
   return {
     ...state,

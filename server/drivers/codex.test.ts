@@ -49,7 +49,7 @@ describe("CodexDriver turns (fake app-server)", () => {
 
   beforeEach(() => {
     chmodSync(FAKE_CLI, 0o755);
-    scratch = mkdtempSync(join(tmpdir(), "omb-codex-test-"));
+    scratch = mkdtempSync(join(tmpdir(), "mb-codex-test-"));
   });
 
   afterEach(async () => {
@@ -61,7 +61,7 @@ describe("CodexDriver turns (fake app-server)", () => {
     delete process.env.FAKE_CODEX_RETRY_SCALE;
     delete process.env.OPENAI_API_KEY;
     delete process.env.BOX_TOKEN;
-    delete process.env.OMB_TTS_KEY;
+    delete process.env.MB_TTS_KEY;
     recorder?.stop();
     await instance?.dispose();
     await removeTempDir(scratch);
@@ -75,7 +75,7 @@ describe("CodexDriver turns (fake app-server)", () => {
     // workspace credentials the harness may hold (env-injected at boot by
     // the desktop shell) must never ride into the CLI child
     process.env.BOX_TOKEN = "box-should-not-leak";
-    process.env.OMB_TTS_KEY = "tts-should-not-leak";
+    process.env.MB_TTS_KEY = "tts-should-not-leak";
 
     const { turnId } = await instance.adapter.sendTurn({
       threadId: "t-happy",
@@ -90,7 +90,7 @@ describe("CodexDriver turns (fake app-server)", () => {
       "turn.started",
       "session.started",
       "item.started", // commandExecution ls -la
-      "item.started", // webSearch OpenMausBot
+      "item.started", // webSearch MagicBots
       "item.completed", // commandExecution done
       "item.completed", // webSearch done
       "content.delta",
@@ -118,7 +118,7 @@ describe("CodexDriver turns (fake app-server)", () => {
     const seen = JSON.parse(readFileSync(dump, "utf8"));
     expect(seen.env.OPENAI_API_KEY).toBeUndefined();
     expect(seen.env.BOX_TOKEN).toBeUndefined();
-    expect(seen.env.OMB_TTS_KEY).toBeUndefined();
+    expect(seen.env.MB_TTS_KEY).toBeUndefined();
     const methods = seen.calls.map((c: { method: string }) => c.method);
     expect(methods).toEqual(["initialize", "initialized", "thread/start", "turn/start"]);
     // persona rides in front of the prompt text — codex has no system slot
@@ -175,18 +175,18 @@ describe("CodexDriver turns (fake app-server)", () => {
           command: process.execPath,
           args: ["/tmp/connector-proxy.js"],
           env: {
-            OMB_CONNECTOR_UPSTREAM_URL: "http://127.0.0.1:8799/api/internal/connectors/mcp",
-            OMB_COMMS_TOKEN: "per-boot-token",
+            MB_CONNECTOR_UPSTREAM_URL: "http://127.0.0.1:8799/api/internal/connectors/mcp",
+            MB_COMMS_TOKEN: "per-boot-token",
           },
         },
       },
     });
     await recorder.until((event) => event.type === "turn.completed");
     const seen = JSON.parse(readFileSync(dump, "utf8"));
-    expect(seen.argv.join(" ")).toContain("mcp_servers.openmausbot_connectors.command");
-    expect(seen.argv.join(" ")).toContain("OMB_COMMS_TOKEN");
+    expect(seen.argv.join(" ")).toContain("mcp_servers.magicbots_connectors.command");
+    expect(seen.argv.join(" ")).toContain("MB_COMMS_TOKEN");
     expect(seen.argv.join(" ")).not.toContain("per-boot-token");
-    expect(seen.env.OMB_COMMS_TOKEN).toBe("per-boot-token");
+    expect(seen.env.MB_COMMS_TOKEN).toBe("per-boot-token");
   });
 
   it("mounts peer-agent comms without placing the comms token in argv", async () => {
@@ -203,11 +203,11 @@ describe("CodexDriver turns (fake app-server)", () => {
           args: ["/tmp/agents-proxy.js"],
           env: {
             ELECTRON_RUN_AS_NODE: "1",
-            OMB_HARNESS_URL: "http://127.0.0.1:8799",
-            OMB_BOT_ID: "captain",
-            OMB_THREAD_ID: "t-agents",
-            OMB_COMMS_TOKEN: "peer-comms-secret",
-            OMB_TURN_DEPTH: "0",
+            MB_HARNESS_URL: "http://127.0.0.1:8799",
+            MB_BOT_ID: "captain",
+            MB_THREAD_ID: "t-agents",
+            MB_COMMS_TOKEN: "peer-comms-secret",
+            MB_TURN_DEPTH: "0",
           },
         },
       },
@@ -217,9 +217,9 @@ describe("CodexDriver turns (fake app-server)", () => {
     const seen = JSON.parse(readFileSync(dump, "utf8"));
     expect(seen.argv.join(" ")).toContain("mcp_servers.agents.command");
     expect(seen.argv.join(" ")).toContain("/tmp/agents-proxy.js");
-    expect(seen.argv.join(" ")).toContain("OMB_COMMS_TOKEN");
+    expect(seen.argv.join(" ")).toContain("MB_COMMS_TOKEN");
     expect(seen.argv.join(" ")).not.toContain("peer-comms-secret");
-    expect(seen.env.OMB_COMMS_TOKEN).toBe("peer-comms-secret");
+    expect(seen.env.MB_COMMS_TOKEN).toBe("peer-comms-secret");
     expect(instance.adapter.capabilities.agentsMcp).toBe(true);
   });
 
@@ -235,8 +235,8 @@ describe("CodexDriver turns (fake app-server)", () => {
       integrations: {
         localComputer: {
           command: process.execPath,
-          args: ["/tmp/container-mcp.js", "podman", "openmausbot-computer", "/run/cua.sock"],
-          env: { ELECTRON_RUN_AS_NODE: "1", OMB_VM_TOKEN: "vm-secret" },
+          args: ["/tmp/container-mcp.js", "podman", "magicbots-computer", "/run/cua.sock"],
+          env: { ELECTRON_RUN_AS_NODE: "1", MB_VM_TOKEN: "vm-secret" },
         },
       },
     });
@@ -245,9 +245,9 @@ describe("CodexDriver turns (fake app-server)", () => {
     const seen = JSON.parse(readFileSync(dump, "utf8"));
     expect(seen.argv.join(" ")).toContain("mcp_servers.computer.command");
     expect(seen.argv.join(" ")).toContain("/tmp/container-mcp.js");
-    expect(seen.argv.join(" ")).toContain("OMB_VM_TOKEN");
+    expect(seen.argv.join(" ")).toContain("MB_VM_TOKEN");
     expect(seen.argv.join(" ")).not.toContain("vm-secret");
-    expect(seen.env.OMB_VM_TOKEN).toBe("vm-secret");
+    expect(seen.env.MB_VM_TOKEN).toBe("vm-secret");
   });
 
   it("mounts the remote computer proxy without placing its token in argv", async () => {
@@ -291,7 +291,7 @@ describe("CodexDriver turns (fake app-server)", () => {
     const seen = JSON.parse(readFileSync(dump, "utf8"));
     expect(seen.argv).toContain("model_providers.unsloth.base_url=\"http://127.0.0.1:8888/v1\"");
     expect(JSON.stringify(seen.argv)).not.toContain("unsloth-secret");
-    expect(seen.env.OPENMAUSBOT_LOCAL_UNSLOTH_API_KEY).toBe("unsloth-secret");
+    expect(seen.env.MAGICBOTS_LOCAL_UNSLOTH_API_KEY).toBe("unsloth-secret");
   });
 
   it("streams agentMessage deltas without re-emitting the settled text", async () => {

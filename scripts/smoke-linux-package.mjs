@@ -13,31 +13,31 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const wayland = process.env.OMB_SMOKE_WAYLAND === "1";
-const hardDeath = process.env.OMB_SMOKE_HARD_DEATH === "1";
-const bundled = process.env.OMB_SMOKE_BUNDLED_CUA === "1";
+const wayland = process.env.MB_SMOKE_WAYLAND === "1";
+const hardDeath = process.env.MB_SMOKE_HARD_DEATH === "1";
+const bundled = process.env.MB_SMOKE_BUNDLED_CUA === "1";
 if (hardDeath && bundled) throw new Error("hard-death and bundled smoke modes are mutually exclusive");
 const executable = path.resolve(
-  process.env.OMB_SMOKE_EXECUTABLE ?? path.join(root, "release", "linux-unpacked", "openmausbot"),
+  process.env.MB_SMOKE_EXECUTABLE ?? path.join(root, "release", "linux-unpacked", "magicbots"),
 );
 if (!existsSync(executable)) throw new Error(`[smoke-linux-package] missing executable: ${executable}`);
 
-const sandbox = mkdtempSync(path.join(tmpdir(), "omb-linux-smoke-"));
+const sandbox = mkdtempSync(path.join(tmpdir(), "mb-linux-smoke-"));
 const home = path.join(sandbox, "home");
 const xdgConfig = path.join(sandbox, "config");
 const xdgRuntime = path.join(sandbox, "runtime");
 const marker = path.join(sandbox, "cua-invocations.ndjson");
 const fakeState = path.join(sandbox, "cua-serve-count");
 const sentinel = path.join(sandbox, "cua-driver");
-mkdirSync(path.join(home, ".openmausbot"), { recursive: true });
+mkdirSync(path.join(home, ".magicbots"), { recursive: true });
 mkdirSync(xdgConfig, { recursive: true });
 mkdirSync(xdgRuntime, { recursive: true, mode: 0o700 });
 chmodSync(xdgRuntime, 0o700);
 writeFileSync(
-  path.join(home, ".openmausbot", "config.json"),
+  path.join(home, ".magicbots", "config.json"),
   JSON.stringify({ instances: { ghost: { driver: "not-a-real-driver", displayName: "Ghost" } } }),
 );
-for (const appName of ["openmausbot", "OpenMausBot"]) {
+for (const appName of ["magicbots", "MagicBots"]) {
   const userData = path.join(xdgConfig, appName);
   mkdirSync(userData, { recursive: true, mode: 0o700 });
   chmodSync(userData, 0o700);
@@ -107,7 +107,7 @@ const metadata = {
   mcp_protocol_version: "2025-06-18",
   pid: process.pid,
   embedded: true,
-  host_bundle_id: "com.openmausbot.app",
+  host_bundle_id: "com.magicbots.app",
 };
 const tools = ["click", "get_window_state", "list_apps", "type_text"].map((name) => ({ name }));
 const toolManifest = { schema_version: "1", capability_version: "1", tools };
@@ -162,10 +162,10 @@ const desktopEnv = {
   XDG_SESSION_TYPE: wayland ? "wayland" : "x11",
   XDG_CURRENT_DESKTOP: "GNOME",
   CUA_DRIVER_PATH: sentinel,
-  OMB_SMOKE_TEST: "1",
-  OMB_SMOKE_CUA: hardDeath || bundled ? "0" : "1",
-  OMB_SMOKE_BUNDLED_CUA: bundled ? "1" : "0",
-  ...(hardDeath ? { OMB_SMOKE_KEEP_OPEN: "1" } : {}),
+  MB_SMOKE_TEST: "1",
+  MB_SMOKE_CUA: hardDeath || bundled ? "0" : "1",
+  MB_SMOKE_BUNDLED_CUA: bundled ? "1" : "0",
+  ...(hardDeath ? { MB_SMOKE_KEEP_OPEN: "1" } : {}),
 };
 if (bundled) delete desktopEnv.CUA_DRIVER_PATH;
 if (wayland) desktopEnv.WAYLAND_DISPLAY = "wayland-smoke";
@@ -250,7 +250,7 @@ try {
     location,
     title,
   } = result;
-  if (health?.app !== "openmausbot" || health.static !== true) {
+  if (health?.app !== "magicbots" || health.static !== true) {
     throw new Error(`unexpected embedded health response: ${JSON.stringify(health)}`);
   }
   if (!String(title).includes("MagicTeams")) throw new Error(`unexpected renderer title: ${title}`);
@@ -387,7 +387,7 @@ try {
       await delay(50);
     }
     if (staleHealth?.ok) throw new Error("embedded harness survived hard Electron death");
-    const userData = ["openmausbot", "OpenMausBot"]
+    const userData = ["magicbots", "MagicBots"]
       .map((name) => path.join(xdgConfig, name))
       .find((directory) => existsSync(path.join(directory, "cua-connection.json")));
     if (!userData) throw new Error("hard-death smoke could not locate the CUA descriptor");
@@ -403,7 +403,7 @@ try {
     const restart = spawn(executable, wayland ? ["--ozone-platform=x11"] : [], {
       cwd: root,
       detached: true,
-      env: { ...desktopEnv, OMB_SMOKE_KEEP_OPEN: "0" },
+      env: { ...desktopEnv, MB_SMOKE_KEEP_OPEN: "0" },
       stdio: ["ignore", "pipe", "pipe"],
     });
     try {
@@ -498,6 +498,6 @@ try {
   }
 } finally {
   await stopProcess();
-  if (process.env.OMB_KEEP_SMOKE_DIR !== "1") rmSync(sandbox, { recursive: true, force: true });
+  if (process.env.MB_KEEP_SMOKE_DIR !== "1") rmSync(sandbox, { recursive: true, force: true });
   else console.log(`[smoke-linux-package] kept ${sandbox}`);
 }

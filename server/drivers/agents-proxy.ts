@@ -16,17 +16,17 @@
 // Speaks raw JSON-RPC 2.0 over stdio (no MCP SDK — house style, matches
 // computer-proxy / permission-proxy). All state comes from env, injected by
 // the harness when it builds the integration:
-//   OMB_HARNESS_URL  base URL of the harness (http://127.0.0.1:8799)
-//   OMB_BOT_ID       the calling bot's id (excluded from list_bots; sender)
-//   OMB_COMMS_TOKEN  shared secret for the localhost-only internal endpoints
-//   OMB_TURN_DEPTH   this turn's comms depth (the harness refuses recursion)
+//   MB_HARNESS_URL  base URL of the harness (http://127.0.0.1:8799)
+//   MB_BOT_ID       the calling bot's id (excluded from list_bots; sender)
+//   MB_COMMS_TOKEN  shared secret for the localhost-only internal endpoints
+//   MB_TURN_DEPTH   this turn's comms depth (the harness refuses recursion)
 import readline from "node:readline";
 
-const HARNESS = process.env.OMB_HARNESS_URL ?? "http://127.0.0.1:8799";
-const BOT_ID = process.env.OMB_BOT_ID ?? "";
-const THREAD_ID = process.env.OMB_THREAD_ID ?? "";
-const TOKEN = process.env.OMB_COMMS_TOKEN ?? "";
-const DEPTH = Number(process.env.OMB_TURN_DEPTH ?? "0") || 0;
+const HARNESS = process.env.MB_HARNESS_URL ?? "http://127.0.0.1:8799";
+const BOT_ID = process.env.MB_BOT_ID ?? "";
+const THREAD_ID = process.env.MB_THREAD_ID ?? "";
+const TOKEN = process.env.MB_COMMS_TOKEN ?? "";
+const DEPTH = Number(process.env.MB_TURN_DEPTH ?? "0") || 0;
 const MAX_CREATED_PER_TURN = 4;
 let createdThisTurn = 0;
 
@@ -34,7 +34,7 @@ const TOOLS = [
   {
     name: "list_bots",
     description:
-      "List the other bots (agents) in your OpenMausBot section you can message, with their model and whether they're busy. Call this before ask_bot to discover who's available.",
+      "List the other bots (agents) in your MagicBots section you can message, with their model and whether they're busy. Call this before ask_bot to discover who's available.",
     inputSchema: { type: "object", properties: {} },
   },
   {
@@ -178,7 +178,7 @@ async function handle(msg: Json) {
       ok(id, {
         protocolVersion: (params.protocolVersion as string) ?? "2024-11-05",
         capabilities: { tools: {} },
-        serverInfo: { name: "opengrokbot-agents", version: "0.1.0" },
+        serverInfo: { name: "magicbots-agents", version: "0.1.0" },
       });
       return;
     case "notifications/initialized":

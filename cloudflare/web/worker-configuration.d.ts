@@ -8,7 +8,7 @@ interface __BaseEnv_Env {
 	AI: Ai;
 	ASSETS: Fetcher;
 	COMPUTER: Service /* entrypoint WebComputer from magicbot-cf-computer */;
-	CONNECTORS: Service /* entrypoint WebConnectors from openmausbot-composio */;
+	CONNECTORS: Service /* entrypoint WebConnectors from magicbot-composio */;
 }
 declare namespace Cloudflare {
 	interface GlobalProps {

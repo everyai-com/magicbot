@@ -88,7 +88,7 @@ interface Routine {
   name: string;
   prompt: string;
   botId: string;
-  runOn: "maus" | "cloud";
+  runOn: "bot" | "cloud";
   enabled: boolean;
   schedule: { type: "once"; at: number } | { type: "daily"; time: string; weekdays: number[] };
   durationMinutes: number;
@@ -104,7 +104,7 @@ interface RoutineRun {
   routineName: string;
   prompt: string;
   botId: string;
-  runOn: "maus" | "cloud";
+  runOn: "bot" | "cloud";
   scheduledFor: number;
   status: "completed" | "failed" | "cancelled";
   manual: boolean;
@@ -124,7 +124,7 @@ interface WebhookRecord {
   name: string;
   prompt: string;
   botId: string;
-  runOn: "maus" | "cloud";
+  runOn: "bot" | "cloud";
   enabled: boolean;
   createdAt: number;
   updatedAt: number;
@@ -1230,8 +1230,8 @@ const CURATED_CONNECTORS = [
   ["stripe", "Stripe", "Payments and customers", "stripe.com"],
 ] as const;
 
-const TEAM_LIBRARY_REPOSITORY = "https://github.com/milind-soni/openmausbot-teams";
-const TEAM_LIBRARY_RAW = "https://raw.githubusercontent.com/milind-soni/openmausbot-teams/main";
+const TEAM_LIBRARY_REPOSITORY = "https://github.com/everyai-com/magicbots-teams";
+const TEAM_LIBRARY_RAW = "https://raw.githubusercontent.com/everyai-com/magicbots-teams/main";
 
 async function fetchJsonLimited(url: string, maxBytes = 1_000_000): Promise<unknown> {
   const response = await fetch(url, { headers: { accept: "application/json" }, redirect: "manual", signal: AbortSignal.timeout(12_000) });
@@ -1250,7 +1250,7 @@ function githubTeamUrls(input: string): string[] {
   const parts = url.pathname.split("/").filter(Boolean).map(decodeURIComponent);
   if (!parts.every((part) => /^[A-Za-z0-9._-]+$/.test(part) && part !== "." && part !== "..")) throw new Error("That GitHub path is not supported");
   if ((url.hostname === "github.com" || url.hostname === "www.github.com") && parts.length === 2) {
-    return [`https://raw.githubusercontent.com/${parts[0]}/${parts[1]}/main/team.mausteam.json`, `https://raw.githubusercontent.com/${parts[0]}/${parts[1]}/master/team.mausteam.json`];
+    return [`https://raw.githubusercontent.com/${parts[0]}/${parts[1]}/main/team.magicbots.json`, `https://raw.githubusercontent.com/${parts[0]}/${parts[1]}/master/team.magicbots.json`, `https://raw.githubusercontent.com/${parts[0]}/${parts[1]}/main/team.mausteam.json`, `https://raw.githubusercontent.com/${parts[0]}/${parts[1]}/master/team.mausteam.json`];
   }
   if ((url.hostname === "github.com" || url.hostname === "www.github.com") && parts.length >= 5 && ["blob", "raw"].includes(parts[2])) {
     return [`https://raw.githubusercontent.com/${parts[0]}/${parts[1]}/${parts[3]}/${parts.slice(4).join("/")}`];
@@ -1590,7 +1590,7 @@ async function api(request: Request, env: Env, user: User, path: string): Promis
     const createdAt = Date.now();
     const routine: Routine = {
       id: crypto.randomUUID(), name: body.name.trim().slice(0, 120), prompt: body.prompt.trim().slice(0, 20_000),
-      botId: body.botId, runOn: body.runOn === "maus" ? "maus" : "cloud", enabled: body.enabled !== false,
+      botId: body.botId, runOn: body.runOn === "bot" ? "bot" : "cloud", enabled: body.enabled !== false,
       schedule: body.schedule, durationMinutes: Math.min(Math.max(Number(body.durationMinutes) || 30, 5), 240),
       nextRunAt: nextRun(body.schedule, createdAt), createdAt, updatedAt: createdAt,
     };
@@ -1649,7 +1649,7 @@ async function api(request: Request, env: Env, user: User, path: string): Promis
     const webhook: WebhookRecord = {
       id: crypto.randomUUID(), endpointId: randomToken(12), name: body.name?.trim().slice(0, 120) || "MagicTeams webhook",
       prompt: body.prompt?.trim().slice(0, 20_000) || "Handle this webhook event and report the result.",
-      botId: body.botId, runOn: body.runOn === "maus" ? "maus" : "cloud", enabled: body.enabled !== false,
+      botId: body.botId, runOn: body.runOn === "bot" ? "bot" : "cloud", enabled: body.enabled !== false,
       createdAt, updatedAt: createdAt, deliveryCount: 0, verificationPending: body.verificationPending === true,
       eventTypes: Array.isArray(body.eventTypes) ? body.eventTypes.map(String).slice(0, 50) : [],
     };
@@ -1952,7 +1952,7 @@ async function api(request: Request, env: Env, user: User, path: string): Promis
       used.add(key);
       return [{ key, name: bot.name, title: bot.title, description: bot.description, appearance: { color: bot.color, ...(bot.mascotExpression ? { mascotExpression: bot.mascotExpression } : {}), ...(bot.personality ? { personality: bot.personality } : {}) } }];
     });
-    return json({ format: "openmaus.team", version: 2, team: { name: teamName, members } });
+    return json({ format: "magicbots.team", version: 2, team: { name: teamName, members } });
   }
   if (path === "/api/teams/import" && request.method === "POST") {
     const manifest = await request.json<{ team?: { name?: string; members?: Array<{ name?: string; title?: string; description?: string; appearance?: { color?: string; mascotExpression?: string; personality?: Bot["personality"] } }> } }>();
@@ -2030,7 +2030,7 @@ async function api(request: Request, env: Env, user: User, path: string): Promis
       profile: { name: project, summary: `A browser-managed project at ${target}`, stacks: ["Cloudflare", "TypeScript", "Web"] },
       suggestion: {
         roomName: `${project} team`,
-        manifest: { format: "openmaus.team", version: 2, team: { name: `${project} team`, members: [
+        manifest: { format: "magicbots.team", version: 2, team: { name: `${project} team`, members: [
           { key: "lead", name: "Project Lead", title: "Plans and coordinates delivery", description: `Own the plan and decisions for ${project}.`, appearance: { color: "purple" } },
           { key: "builder", name: "Builder", title: "Implements the project", description: `Build and test ${project} using its Cloudflare computer.`, appearance: { color: "cyan" } },
           { key: "reviewer", name: "Reviewer", title: "Checks quality and security", description: `Review changes for correctness, usability, and security.`, appearance: { color: "green" } },

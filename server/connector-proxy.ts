@@ -2,7 +2,7 @@
 //
 // Provider CLIs only see this stdio server. Ordinary MCP traffic is relayed
 // to the configured Composio Session, but connection requests are converted
-// into first-class OpenMausBot chat cards. The agent never authors an auth
+// into first-class MagicBots chat cards. The agent never authors an auth
 // URL and credentials never pass through its transcript.
 //
 // stdout is the MCP transport. Never log there.
@@ -11,16 +11,16 @@ import { randomUUID } from "node:crypto";
 
 type Json = Record<string, unknown>;
 
-const UPSTREAM = process.env.OMB_CONNECTOR_UPSTREAM_URL ?? "";
-const HARNESS = process.env.OMB_HARNESS_URL ?? "http://127.0.0.1:8799";
-const BOT_ID = process.env.OMB_BOT_ID ?? "";
-const THREAD_ID = process.env.OMB_THREAD_ID ?? "";
-const TOKEN = process.env.OMB_COMMS_TOKEN ?? "";
+const UPSTREAM = process.env.MB_CONNECTOR_UPSTREAM_URL ?? "";
+const HARNESS = process.env.MB_HARNESS_URL ?? "http://127.0.0.1:8799";
+const BOT_ID = process.env.MB_BOT_ID ?? "";
+const THREAD_ID = process.env.MB_THREAD_ID ?? "";
+const TOKEN = process.env.MB_COMMS_TOKEN ?? "";
 const MAX_RESPONSE_BYTES = 20 * 1024 * 1024;
 
 function parsedHeaders(): Record<string, string> {
   try {
-    const value: unknown = JSON.parse(process.env.OMB_CONNECTOR_UPSTREAM_HEADERS ?? "{}");
+    const value: unknown = JSON.parse(process.env.MB_CONNECTOR_UPSTREAM_HEADERS ?? "{}");
     if (!value || typeof value !== "object" || Array.isArray(value)) return {};
     return Object.fromEntries(
       Object.entries(value).filter((entry): entry is [string, string] => typeof entry[1] === "string"),
@@ -135,12 +135,12 @@ async function handle(message: Json): Promise<void> {
       await showConnectorCards(slugs);
       send(textResult(
         id,
-        `OpenMausBot showed the user a secure connection card for ${slugs.join(", ")}. End this turn now. The app will continue the task automatically after the connection finishes.`,
+        `MagicBots showed the user a secure connection card for ${slugs.join(", ")}. End this turn now. The app will continue the task automatically after the connection finishes.`,
       ));
       return;
     }
     if (/WAIT_FOR_CONNECTIONS$/i.test(name)) {
-      send(textResult(id, "OpenMausBot is handling connection completion and will continue the task automatically."));
+      send(textResult(id, "MagicBots is handling connection completion and will continue the task automatically."));
       return;
     }
   }

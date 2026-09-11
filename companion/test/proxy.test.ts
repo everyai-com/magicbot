@@ -67,7 +67,7 @@ let SIDECAR_PORT = 0;
 let HARNESS = "";
 let SIDECAR = "";
 
-const TOKEN = "omb_test_token";
+const TOKEN = "mb_test_token";
 let harness: ChildProcess;
 let sidecar: Server;
 let home: string;
@@ -127,9 +127,9 @@ beforeAll(async () => {
   SIDECAR = `http://127.0.0.1:${SIDECAR_PORT}`;
 
   home = mkdtempSync(join(tmpdir(), "companion-test-"));
-  mkdirSync(join(home, ".openmausbot"), { recursive: true });
+  mkdirSync(join(home, ".magicbots"), { recursive: true });
   writeFileSync(
-    join(home, ".openmausbot", "config.json"),
+    join(home, ".magicbots", "config.json"),
     JSON.stringify({ instances: { ghost: { driver: "not-a-real-driver", displayName: "Ghost" } } }),
   );
 
@@ -140,7 +140,7 @@ beforeAll(async () => {
       ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
       HOME: home,
       USERPROFILE: home,
-      OMB_PORT: String(HARNESS_PORT),
+      MB_PORT: String(HARNESS_PORT),
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -231,7 +231,7 @@ describe("the sidecar in front of an unmodified harness", () => {
 
   it("requires a paired token", async () => {
     expect((await device("GET", "/api/bots", { token: null })).status).toBe(401);
-    expect((await device("GET", "/api/bots", { token: "omb_wrong" })).status).toBe(401);
+    expect((await device("GET", "/api/bots", { token: "mb_wrong" })).status).toBe(401);
     expect((await device("GET", "/api/bots")).status).toBe(200);
   });
 
@@ -551,7 +551,7 @@ describe("pairing, end to end", () => {
         authenticate: (t) => registry.authenticate(t ?? undefined),
         redeem: (code, deviceName) => registry.redeem(code, deviceName),
         serverName: () => "Ada's computer",
-        hosts: () => ["macbook.tail1234.ts.net", "192.168.1.42", "openmausbot-abcd1234.local"],
+        hosts: () => ["macbook.tail1234.ts.net", "192.168.1.42", "magicbots-abcd1234.local"],
       }),
     );
     await new Promise<void>((r) => paired.listen(0, "127.0.0.1", r));
@@ -559,7 +559,7 @@ describe("pairing, end to end", () => {
     const control = createControlServer({
       devices: registry,
       companionPort: port,
-      discovery: () => ({ advertising: false, name: "OpenMausBot" }),
+      discovery: () => ({ advertising: false, name: "MagicBots" }),
     });
     await new Promise<void>((r) => control.listen(0, "127.0.0.1", r));
     // SAFETY: address() is AddressInfo — an object with a port — for any
@@ -580,7 +580,7 @@ describe("pairing, end to end", () => {
         token: string;
       };
       expect(opened.code).toMatch(/^\d{6}$/);
-      expect(opened.token).toMatch(/^omb_pair_[A-Za-z0-9_-]{43}$/);
+      expect(opened.token).toMatch(/^mb_pair_[A-Za-z0-9_-]{43}$/);
 
       // a wrong code is refused, and does not burn the window
       const wrong = await fetch(`${base}/api/pair`, {
@@ -601,10 +601,10 @@ describe("pairing, end to end", () => {
       // sidecar's own contract, pinned by the expects that follow.
       const body = (await res.json()) as { token: string; serverName: string; hosts: string[] };
       expect(body.serverName).toBe("Ada's computer");
-      expect(body.token).toMatch(/^omb_/);
+      expect(body.token).toMatch(/^mb_/);
       // The fallback list rides on the redeem response so a phone that paired
       // by typed address learns the other ways to reach this computer too.
-      expect(body.hosts).toEqual(["macbook.tail1234.ts.net", "192.168.1.42", "openmausbot-abcd1234.local"]);
+      expect(body.hosts).toEqual(["macbook.tail1234.ts.net", "192.168.1.42", "magicbots-abcd1234.local"]);
 
       // and the token works on the real API, through the real proxy
       const bots = await fetch(`${base}/api/bots`, { headers: { authorization: `Bearer ${body.token}` } });
@@ -637,7 +637,7 @@ describe("pairing, end to end", () => {
     const control = createControlServer({
       devices: new DeviceRegistry(),
       companionPort: 8800,
-      discovery: () => ({ advertising: false, name: "OpenMausBot" }),
+      discovery: () => ({ advertising: false, name: "MagicBots" }),
     });
     await new Promise<void>((r) => control.listen(0, "127.0.0.1", r));
     // SAFETY: address() is AddressInfo — an object with a port — for any
@@ -668,7 +668,7 @@ describe("pairing, end to end", () => {
     const control = createControlServer({
       devices: new DeviceRegistry(),
       companionPort: 8800,
-      discovery: () => ({ advertising: false, name: "OpenMausBot" }),
+      discovery: () => ({ advertising: false, name: "MagicBots" }),
     });
     await new Promise<void>((r) => control.listen(0, "127.0.0.1", r));
     // SAFETY: address() is AddressInfo — an object with a port — for any
@@ -702,7 +702,7 @@ describe("pairing, end to end", () => {
     const control = createControlServer({
       devices: registry,
       companionPort: 8800,
-      discovery: () => ({ advertising: false, name: "OpenMausBot" }),
+      discovery: () => ({ advertising: false, name: "MagicBots" }),
     });
     await new Promise<void>((r) => control.listen(0, "127.0.0.1", r));
     // SAFETY: address() is AddressInfo — an object with a port — for any
@@ -751,7 +751,7 @@ describe("pairing, end to end", () => {
     const control = createControlServer({
       devices: registry,
       companionPort: 8800,
-      discovery: () => ({ advertising: false, name: "OpenMausBot" }),
+      discovery: () => ({ advertising: false, name: "MagicBots" }),
     });
     await new Promise<void>((r) => control.listen(0, "127.0.0.1", r));
     // SAFETY: address() is AddressInfo — an object with a port — for any

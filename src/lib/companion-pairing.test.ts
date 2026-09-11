@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { companionPairingLink } from "./companion-pairing";
 
 describe("companionPairingLink", () => {
-  const token = `omb_pair_${"a".repeat(43)}`;
+  const token = `mb_pair_${"a".repeat(43)}`;
 
   it("carries the dialable address, one-time token, fallback code, and display name", () => {
     const link = companionPairingLink({
@@ -14,7 +14,7 @@ describe("companionPairingLink", () => {
     });
 
     const url = new URL(link!);
-    expect(url.protocol).toBe("openmausbot:");
+    expect(url.protocol).toBe("magicbots:");
     expect(url.host).toBe("pair");
     expect(url.searchParams.get("address")).toBe("macbook.tail1234.ts.net:8810");
     expect(url.searchParams.get("token")).toBe(token);
@@ -40,10 +40,10 @@ describe("companionPairingLink", () => {
       port: 8810,
       code: "004209",
       token,
-      hosts: ["macbook.tail1234.ts.net", "192.168.1.42", "openmausbot-abcd1234.local"],
+      hosts: ["macbook.tail1234.ts.net", "192.168.1.42", "magicbots-abcd1234.local"],
     });
     expect(new URL(link!).searchParams.get("hosts")).toBe(
-      "macbook.tail1234.ts.net,192.168.1.42,openmausbot-abcd1234.local",
+      "macbook.tail1234.ts.net,192.168.1.42,magicbots-abcd1234.local",
     );
   });
 

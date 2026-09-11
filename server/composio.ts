@@ -8,11 +8,11 @@ import { SPAWNED_PROXIES } from "./proxy-paths.ts";
 const DEFAULT_BACKEND_ORIGIN = "https://backend.composio.dev";
 
 function apiBase() {
-  return (process.env.OMB_COMPOSIO_API ?? `${DEFAULT_BACKEND_ORIGIN}/api/v3.1`).replace(/\/$/, "");
+  return (process.env.MB_COMPOSIO_API ?? `${DEFAULT_BACKEND_ORIGIN}/api/v3.1`).replace(/\/$/, "");
 }
 
 function toolkitBase() {
-  return (process.env.OMB_COMPOSIO_TOOLKITS_API ?? `${DEFAULT_BACKEND_ORIGIN}/api/v3`).replace(/\/$/, "");
+  return (process.env.MB_COMPOSIO_TOOLKITS_API ?? `${DEFAULT_BACKEND_ORIGIN}/api/v3`).replace(/\/$/, "");
 }
 
 const sessionResponseSchema = z.object({
@@ -114,8 +114,8 @@ interface IntegrationContext {
 }
 
 function brokerAccess(): { url: string; token: string } | null {
-  const url = process.env.OMB_COMPOSIO_BROKER_URL?.trim().replace(/\/$/, "");
-  const token = process.env.OMB_COMPOSIO_BROKER_TOKEN?.trim();
+  const url = process.env.MB_COMPOSIO_BROKER_URL?.trim().replace(/\/$/, "");
+  const token = process.env.MB_COMPOSIO_BROKER_TOKEN?.trim();
   if (!url || !token) return null;
   const parsed = new URL(url);
   if (parsed.protocol !== "https:" && parsed.hostname !== "127.0.0.1" && parsed.hostname !== "localhost") {
@@ -243,7 +243,7 @@ export async function prepareProjectSession(
     if (existing && supportsMultiAccount(existing)) {
       return {
         apiKey: trimmed,
-        userId: existing.config?.user_id ?? current.userId ?? `openmausbot_${randomUUID()}`,
+        userId: existing.config?.user_id ?? current.userId ?? `magicbots_${randomUUID()}`,
         sessionId: existing.session_id,
       };
     }
@@ -253,7 +253,7 @@ export async function prepareProjectSession(
     priorUserId = existing?.config?.user_id ?? priorUserId;
   }
 
-  const userId = priorUserId ?? `openmausbot_${randomUUID()}`;
+  const userId = priorUserId ?? `magicbots_${randomUUID()}`;
   const res = await fetch(`${apiBase()}/tool_router/session`, {
     method: "POST",
     headers: projectHeaders(trimmed, true),
@@ -307,12 +307,12 @@ export async function mcpIntegration(
       // The provider-facing bridge receives only this boot's loopback token.
       // Project/broker credentials stay in the harness process, so a coding
       // agent that prints its environment cannot export a durable secret.
-      OMB_CONNECTOR_UPSTREAM_URL: `${context.harnessUrl}/api/internal/connectors/mcp`,
-      OMB_CONNECTOR_UPSTREAM_HEADERS: JSON.stringify({ authorization: `Bearer ${context.commsToken}` }),
-      OMB_HARNESS_URL: context.harnessUrl,
-      OMB_COMMS_TOKEN: context.commsToken,
-      OMB_BOT_ID: context.botId,
-      OMB_THREAD_ID: context.threadId,
+      MB_CONNECTOR_UPSTREAM_URL: `${context.harnessUrl}/api/internal/connectors/mcp`,
+      MB_CONNECTOR_UPSTREAM_HEADERS: JSON.stringify({ authorization: `Bearer ${context.commsToken}` }),
+      MB_HARNESS_URL: context.harnessUrl,
+      MB_COMMS_TOKEN: context.commsToken,
+      MB_BOT_ID: context.botId,
+      MB_THREAD_ID: context.threadId,
     },
   };
 }

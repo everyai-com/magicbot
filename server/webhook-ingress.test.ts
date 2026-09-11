@@ -14,7 +14,7 @@ let manager: WebhookManager;
 const queued: Array<Record<string, unknown>> = [];
 
 beforeAll(async () => {
-  dir = mkdtempSync(join(tmpdir(), "omb-webhook-ingress-"));
+  dir = mkdtempSync(join(tmpdir(), "mb-webhook-ingress-"));
   manager = new WebhookManager({
     file: join(dir, "webhooks.json"),
     botState: () => "ready",
@@ -23,7 +23,7 @@ beforeAll(async () => {
       return { id: `run-${queued.length}` };
     },
   });
-  const created = manager.create({ name: "Build event", prompt: "Review the build", botId: "maus-1" });
+  const created = manager.create({ name: "Build event", prompt: "Review the build", botId: "bot-1" });
   endpointId = created.webhook.endpointId;
   secret = created.secret;
   ingress = await listenWebhookIngress(manager, { port: 0 });
@@ -35,10 +35,10 @@ afterAll(async () => {
 });
 
 describe("webhook-only ingress", () => {
-  it("exposes health but nothing from the main OpenMausBot API", async () => {
+  it("exposes health but nothing from the main MagicBots API", async () => {
     const health = await fetch(`${ingress.baseUrl}/health`);
     expect(health.status).toBe(200);
-    expect(await health.json()).toEqual({ app: "openmausbot-webhooks", ready: true });
+    expect(await health.json()).toEqual({ app: "magicbots-webhooks", ready: true });
     expect((await fetch(`${ingress.baseUrl}/api/bots`)).status).toBe(404);
   });
 
@@ -83,7 +83,7 @@ describe("webhook-only ingress", () => {
   });
 
   it("captures a verification event without queueing work", async () => {
-    const created = manager.create({ name: "Verify", prompt: "", botId: "maus-1", enabled: false, verificationPending: true });
+    const created = manager.create({ name: "Verify", prompt: "", botId: "bot-1", enabled: false, verificationPending: true });
     const before = queued.length;
     const response = await fetch(webhookCredential(ingress.baseUrl, created.webhook.endpointId, created.secret).url, {
       method: "POST",

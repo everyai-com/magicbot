@@ -19,13 +19,13 @@ const FAKE_CLI = join(dirname(fileURLToPath(import.meta.url)), "..", "testing", 
 
 describe("readAntigravityModelCatalog", () => {
   it("returns the official list when settings are missing", () => {
-    expect(readAntigravityModelCatalog({ HOME: join(tmpdir(), "omb-agy-missing-home") })).toEqual(
+    expect(readAntigravityModelCatalog({ HOME: join(tmpdir(), "mb-agy-missing-home") })).toEqual(
       STATIC_ANTIGRAVITY_MODELS,
     );
   });
 
   it("tags extra settings models as custom", () => {
-    const home = mkdtempSync(join(tmpdir(), "omb-agy-catalog-"));
+    const home = mkdtempSync(join(tmpdir(), "mb-agy-catalog-"));
     mkdirSync(join(home, ".gemini", "antigravity-cli"), { recursive: true });
     writeFileSync(
       join(home, ".gemini", "antigravity-cli", "settings.json"),
@@ -168,9 +168,9 @@ describe("Antigravity snapshot", () => {
   });
 
   it("strips workspace credentials from snapshot and helper children", async () => {
-    const scratch = mkdtempSync(join(tmpdir(), "omb-agy-env-"));
+    const scratch = mkdtempSync(join(tmpdir(), "mb-agy-env-"));
     const dump = join(scratch, "dump.json");
-    const names = ["XAI_API_KEY", "COMPOSIO_API_KEY", "BOX_TOKEN", "OPENCODE_API_KEY", "OMB_TTS_KEY"] as const;
+    const names = ["XAI_API_KEY", "COMPOSIO_API_KEY", "BOX_TOKEN", "OPENCODE_API_KEY", "MB_TTS_KEY"] as const;
     const previous = Object.fromEntries(names.map((name) => [name, process.env[name]]));
     process.env.FAKE_AGY_DUMP = dump;
     for (const name of names) process.env[name] = `${name}-must-not-leak`;

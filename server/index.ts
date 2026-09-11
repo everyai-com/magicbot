@@ -1,4 +1,4 @@
-// OpenMausBot server — the harness host. Clients hold no transports
+// MagicBots server — the harness host. Clients hold no transports
 // (upstream rule): the React app dispatches typed commands over HTTP and
 // folds one SSE event stream; every provider process runs here.
 import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
@@ -125,9 +125,9 @@ import { SPAWNED_PROXIES } from "./proxy-paths.ts";
 import { loadBundledSkills, loadUserSkills, mergeSkills, renderSkillInstructions, selectBundledSkills } from "./skill-library.ts";
 import { shouldMountLocalComputer } from "./local-routing.ts";
 
-const PORT = Number(process.env.OMB_PORT || process.env.OGB_PORT || 8799);
-const WEBHOOK_PORT = Number(process.env.OMB_WEBHOOK_PORT || PORT + 1);
-const STATIC_DIR = process.env.OMB_STATIC_DIR || null;
+const PORT = Number(process.env.MB_PORT || process.env.OGB_PORT || 8799);
+const WEBHOOK_PORT = Number(process.env.MB_WEBHOOK_PORT || PORT + 1);
+const STATIC_DIR = process.env.MB_STATIC_DIR || null;
 const MIME: Record<string, string> = {
   ".html": "text/html",
   ".js": "text/javascript",
@@ -182,19 +182,19 @@ function agentsIntegration(botId: string, threadId: string, depth: number) {
     args: [agentsProxyPath],
     env: {
       ...AGENTS_NODE_FLAG,
-      OMB_HARNESS_URL: `http://127.0.0.1:${PORT}`,
-      OMB_BOT_ID: botId,
-      OMB_THREAD_ID: threadId,
-      OMB_COMMS_TOKEN: COMMS_TOKEN,
-      OMB_TURN_DEPTH: String(depth),
+      MB_HARNESS_URL: `http://127.0.0.1:${PORT}`,
+      MB_BOT_ID: botId,
+      MB_THREAD_ID: threadId,
+      MB_COMMS_TOKEN: COMMS_TOKEN,
+      MB_TURN_DEPTH: String(depth),
     },
   };
 }
 
 function phoneIntegration() {
   const env: Record<string, string> = { ...AGENTS_NODE_FLAG };
-  if (process.env.OMB_ADB_PATH) env.OMB_ADB_PATH = process.env.OMB_ADB_PATH;
-  if (process.env.OMB_RESOURCES_PATH) env.OMB_RESOURCES_PATH = process.env.OMB_RESOURCES_PATH;
+  if (process.env.MB_ADB_PATH) env.MB_ADB_PATH = process.env.MB_ADB_PATH;
+  if (process.env.MB_RESOURCES_PATH) env.MB_RESOURCES_PATH = process.env.MB_RESOURCES_PATH;
   if (process.env.PH_ANDROID_SERIAL) env.PH_ANDROID_SERIAL = process.env.PH_ANDROID_SERIAL;
   return { command: process.execPath, args: [phoneProxyPath], env };
 }
@@ -587,7 +587,7 @@ const repeats = new RepeatDetector({ thresholds: [5, 10, 20], maxKeysPerThread: 
 // left its bot busy forever. The watchdog stops a turn whose thread has emitted NOTHING for stallMs —
 // activity-based, so an hour-long turn that keeps streaming is never
 // touched, and turns parked on a human approval are exempt.
-const TURN_STALL_MS = Math.max(60_000, Number(process.env.OMB_TURN_STALL_MS) || 20 * 60_000);
+const TURN_STALL_MS = Math.max(60_000, Number(process.env.MB_TURN_STALL_MS) || 20 * 60_000);
 const roomStallCompletions = new RoomTurnStallRegistry();
 const watchdog = new TurnWatchdog({
   stallMs: TURN_STALL_MS,
@@ -1414,7 +1414,7 @@ async function startTurn(
   });
 
   const persona = [
-    `You are ${bot.name}, a personal bot in OpenMausBot.`,
+    `You are ${bot.name}, a personal bot in MagicBots.`,
     bot.title && `Role: ${bot.title}.`,
     bot.description && `About: ${bot.description}`,
   ]
@@ -1473,7 +1473,7 @@ async function startTurn(
       // tools that would fail on every call or spawn an unnecessary proxy.
       const dwebUrl = process.env.DWEB_URL?.trim();
       if (dwebUrl) integrations.dweb = { url: dwebUrl };
-      const wants = opts?.runOn === "cloud" ? "cloud" : bot.computer; // cloud routine overrides the MAUS default
+      const wants = opts?.runOn === "cloud" ? "cloud" : bot.computer; // cloud routine overrides the bot default
       // A cloud routine explicitly targets Cloudflare. Ordinary turns use
       // the bot's selected backend, with Cloudflare as the product default.
       const cloudBackend = opts?.runOn === "cloud" ? "cloudflare" : (bot.cloudBackend ?? "cloudflare");
@@ -1521,7 +1521,7 @@ async function startTurn(
           throw new Error("this model engine cannot control this computer — choose Claude or an ACP engine, or select another destination");
         }
         const cua = readCuaConnection();
-        if (!cua) throw new Error("CUA Driver is not ready for this computer — check permissions and restart OpenMausBot");
+        if (!cua) throw new Error("CUA Driver is not ready for this computer — check permissions and restart MagicBots");
         integrations.localComputer = cua;
         computerKind = "local";
       }
@@ -1543,7 +1543,7 @@ async function startTurn(
             const vpsControl = controlIntegration(bot.id);
             integrations.localComputer = {
               ...vpsMcp,
-              env: { ...vpsMcp.env, OMB_CONTROL_URL: vpsControl.url, OMB_CONTROL_TOKEN: vpsControl.token },
+              env: { ...vpsMcp.env, MB_CONTROL_URL: vpsControl.url, MB_CONTROL_TOKEN: vpsControl.token },
             };
             computerKind = "vps";
             previewCapture = () => vps.vpsComputerScreenshot(targetCfg, bot.id);
@@ -1783,7 +1783,7 @@ routines.start();
 
 // Webhook definitions are independent from calendar schedules, but every
 // delivery joins the same RoutineManager queue. That keeps unattended work
-// ordered behind a busy MAUS and gives webhook runs the same durable receipts.
+// ordered behind a busy bot and gives webhook runs the same durable receipts.
 const webhooks = new WebhookManager({
   emit: broadcast,
   botState: (botId) => {
@@ -1799,10 +1799,10 @@ let webhookIngress: WebhookIngress | null = null;
 let webhookIngressError: string | null = null;
 try {
   webhookIngress = await listenWebhookIngress(webhooks, { port: WEBHOOK_PORT });
-  console.log(`openmausbot webhook receiver on ${webhookIngress.baseUrl}`);
+  console.log(`magicbots webhook receiver on ${webhookIngress.baseUrl}`);
 } catch (error) {
   webhookIngressError = error instanceof Error ? error.message : String(error);
-  console.error(`openmausbot webhook receiver unavailable: ${webhookIngressError}`);
+  console.error(`magicbots webhook receiver unavailable: ${webhookIngressError}`);
 }
 
 const webhookIngressStatus = () => ({
@@ -1932,7 +1932,7 @@ async function runGroupMemberTurn(
     .map((b) => `@${b.name}${b.title ? ` (${b.title})` : ""}`)
     .join(", ");
   const system = [
-    `You are ${bot.name}, a bot in the room "${group.name}" in OpenMausBot.`,
+    `You are ${bot.name}, a bot in the room "${group.name}" in MagicBots.`,
     bot.title && `Role: ${bot.title}.`,
     bot.description && `About: ${bot.description}`,
     `Room members: ${roster}, and ${userName} (the human).`,
@@ -2167,7 +2167,7 @@ function dispatchConnectorResume(entry: { botId: string; threadId: string; resum
   const owner = connectorThread(entry.botId, entry.threadId);
   if (!owner) return;
   const names = entry.labels.join(", ");
-  const prompt = `OpenMausBot connection update: the user securely connected ${names}. Continue the task that paused for this connection. Do not ask them to connect it again.`;
+  const prompt = `MagicBots connection update: the user securely connected ${names}. Continue the task that paused for this connection. Do not ask them to connect it again.`;
   if (owner.bot.busy) {
     pendingConnectorResumes.set(`${entry.threadId}:${entry.resumeKey}`, entry);
     return;
@@ -2279,9 +2279,9 @@ function cliProbeEnvironment(): NodeJS.ProcessEnv {
     "BOX_TOKEN",
     "OPENCODE_API_KEY",
     "COMPOSIO_API_KEY",
-    "OMB_COMPOSIO_BROKER_TOKEN",
-    "OMB_TTS_KEY",
-    "OMB_OPENAI_IMAGE_KEY",
+    "MB_COMPOSIO_BROKER_TOKEN",
+    "MB_TTS_KEY",
+    "MB_OPENAI_IMAGE_KEY",
     "ANTHROPIC_API_KEY",
     "OPENAI_API_KEY",
   ]) {
@@ -2587,7 +2587,7 @@ const server = createServer(async (req, res) => {
         }
         const channel = getOrCreateChannel(store, currentFrom, currentTarget);
         mirrorExchange(commsBus, currentFrom, currentTarget, message, channel, fromThreadId);
-        const prefixed = `[Message from @${currentFrom.name}, another bot in this OpenMausBot workspace. Reply to them.]\n\n${message}`;
+        const prefixed = `[Message from @${currentFrom.name}, another bot in this MagicBots workspace. Reply to them.]\n\n${message}`;
         const reply = await askBotAndWait(toBotId, prefixed, depth, fromBotId);
         mirrorReply(commsBus, currentTarget, reply, channel);
         return json(res, 200, { botName: currentTarget.name, text: reply });
@@ -2828,7 +2828,7 @@ const server = createServer(async (req, res) => {
     // ── independent webhook triggers ────────────────────────────────────
     // Management stays on the app-only server. Actual deliveries land on a
     // second, webhook-only loopback listener so Funnel or a future hosted
-    // relay never has to expose the rest of OpenMausBot's control surface.
+    // relay never has to expose the rest of MagicBots's control surface.
     if (path === "/api/webhooks" && method === "GET") {
       return json(res, 200, { webhooks: webhooks.list(), attempts: webhooks.listAttempts(), ingress: webhookIngressStatus() });
     }
@@ -3183,7 +3183,7 @@ const server = createServer(async (req, res) => {
           ? body.name.trim()
           : profileName
             ? `${profileName}'s Team`
-            : "My OpenMaus Team";
+            : "My MagicBots Team";
       const memberIds = store.bots.filter((bot) => !bot.hidden).map((bot) => bot.id);
       if (memberIds.length === 0) return json(res, 400, { error: "Create a bot before exporting your team" });
       try {
@@ -4202,7 +4202,7 @@ const server = createServer(async (req, res) => {
     // child proves it is OURS by echoing its pid (a stray dev server has
     // the same API shape but a different pid)
     if (method === "GET" && path === "/api/health") {
-      return json(res, 200, { app: "openmausbot", pid: process.pid, static: Boolean(STATIC_DIR) });
+      return json(res, 200, { app: "magicbots", pid: process.pid, static: Boolean(STATIC_DIR) });
     }
 
     // ── inspector: a thread's runtime events + native protocol tee ──
@@ -4650,7 +4650,7 @@ const server = createServer(async (req, res) => {
     }
 
     // packaged app: the server serves the built UI too (window → :8799 for
-    // everything, no dev proxy to die). OMB_STATIC_DIR is set by Electron.
+    // everything, no dev proxy to die). MB_STATIC_DIR is set by Electron.
     if (method === "GET" && !path.startsWith("/api/") && STATIC_DIR) {
       const safe = path === "/" ? "/index.html" : path.replace(/\.\./g, "");
       const file = join(STATIC_DIR, safe);
@@ -4678,7 +4678,7 @@ const server = createServer(async (req, res) => {
 });
 
 server.listen(PORT, "127.0.0.1", () => {
-  console.log(`openmausbot server on http://127.0.0.1:${PORT}`);
+  console.log(`magicbots server on http://127.0.0.1:${PORT}`);
 });
 
 for (const signal of ["SIGINT", "SIGTERM"] as const) {

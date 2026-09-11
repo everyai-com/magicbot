@@ -11,13 +11,14 @@ dist-server
 .DS_Store
 *.tsbuildinfo
 electron/resources/speech-helper
-electron/resources/OpenMausBot Speech.app
-electron/resources/OpenMausBot Recorder.app
+electron/resources/MagicBots Speech.app
+electron/resources/MagicBots Recorder.app
 release
-.omb-scratch
+.mb-scratch
 .wrangler/
 .dev.vars
 .dev.vars.*
+wrangler.deploy.jsonc
 cloudflare/composio-broker/worker-configuration.d.ts
 .claude/worktrees/
 .vercel/

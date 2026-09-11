@@ -15,7 +15,7 @@ import { useSpeech } from "@/lib/tts/useSpeech";
 import { usePushToTalk } from "@/lib/push-to-talk";
 import { useStore, type Bot, type Group, type Message } from "@/state/store";
 import { cn } from "@/lib/cn";
-import { MausAvatar } from "./Avatar";
+import { MascotAvatar } from "./Avatar";
 import { CallTargetButton } from "./CallView";
 import { pendingApprovals } from "./PendingApproval";
 import { speechInput } from "@/lib/speech-input";
@@ -427,7 +427,7 @@ function GroupCall({ group, members }: { group: Group; members: Bot[] }) {
                   focused ? "scale-105 bg-raised/70 shadow-lg" : "opacity-75",
                 )}
               >
-                <MausAvatar
+                <MascotAvatar
                   color={member.color}
                   state={state}
                   personality={member.personality}

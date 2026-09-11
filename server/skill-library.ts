@@ -63,7 +63,7 @@ function loadSkillDirectory(directory: string): BundledSkill | null {
   return { manifest, instructions, directory };
 }
 
-export function loadBundledSkills(root = process.env.OMB_SKILLS_DIR || join(process.cwd(), "skills")): BundledSkill[] {
+export function loadBundledSkills(root = process.env.MB_SKILLS_DIR || join(process.cwd(), "skills")): BundledSkill[] {
   if (!existsSync(root)) return [];
   const skills: BundledSkill[] = [];
   for (const name of readdirSync(root).sort()) {
@@ -135,6 +135,6 @@ export function renderSkillInstructions(
 ): string {
   if (!selected.length) return "";
   return selected.map(({ manifest, instructions, directory }) =>
-    `\n\n<openmaus-skill id=${JSON.stringify(manifest.id)} version=${JSON.stringify(manifest.version)}${includeRoot ? ` root=${JSON.stringify(directory)}` : ""}>\n${instructions}\n</openmaus-skill>`,
+    `\n\n<magicbots-skill id=${JSON.stringify(manifest.id)} version=${JSON.stringify(manifest.version)}${includeRoot ? ` root=${JSON.stringify(directory)}` : ""}>\n${instructions}\n</magicbots-skill>`,
   ).join("");
 }

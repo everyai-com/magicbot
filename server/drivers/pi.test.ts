@@ -88,7 +88,7 @@ describe("PiDriver catalog (fake CLI)", () => {
   });
 
   it("probes the live catalog and flags every option custom", async () => {
-    const catalog = await fetchPiModels(FAKE_CLI, { PATH: process.env.PATH ?? "", HOME: join(tmpdir(), "omb-pi-no-settings") });
+    const catalog = await fetchPiModels(FAKE_CLI, { PATH: process.env.PATH ?? "", HOME: join(tmpdir(), "mb-pi-no-settings") });
     expect(catalog.options).toEqual([
       { id: "ollama-cloud/glm-5.2", label: "glm-5.2", custom: true },
       { id: "openai/gpt-4o", label: "gpt-4o", custom: true },
@@ -100,7 +100,7 @@ describe("PiDriver catalog (fake CLI)", () => {
   it("keeps an empty catalog when the probe reports no models", async () => {
     const catalog = await fetchPiModels(FAKE_CLI, {
       PATH: process.env.PATH ?? "",
-      HOME: join(tmpdir(), "omb-pi-empty"),
+      HOME: join(tmpdir(), "mb-pi-empty"),
       FAKE_PI_MODE: "no-models",
     });
     expect(catalog.options).toEqual([]);
@@ -195,7 +195,7 @@ describe("PiDriver turns (fake CLI)", () => {
   });
 
   it("scrubs provider and workspace credentials from every pi child env", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "omb-pi-dump-"));
+    const dir = mkdtempSync(join(tmpdir(), "mb-pi-dump-"));
     const dump = join(dir, "dump.jsonl");
     // Plant a workspace credential on the harness process itself — the leak
     // path is `...process.env`, not just input.environment.

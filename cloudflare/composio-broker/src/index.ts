@@ -275,7 +275,7 @@ async function register(request: Request, env: Env) {
   const now = Date.now();
   await env.DB.prepare(
     "INSERT INTO installations (id, token_hash, composio_user_id, created_at, last_seen_at) VALUES (?, ?, ?, ?, ?)",
-  ).bind(installationId, await sha256(token), `omb_${installationId.replaceAll("-", "")}`, now, now).run();
+  ).bind(installationId, await sha256(token), `mb_${installationId.replaceAll("-", "")}`, now, now).run();
   console.log(JSON.stringify({ message: "installation registered", installationId }));
   return json({ installationId, token }, 201);
 }
@@ -601,7 +601,7 @@ async function requestAlias(request: Request) {
 
 async function route(request: Request, env: Env, ctx: ExecutionContext) {
   const url = new URL(request.url);
-  if (request.method === "GET" && url.pathname === "/health") return json({ service: "openmausbot-composio", ready: Boolean(env.COMPOSIO_API_KEY) });
+  if (request.method === "GET" && url.pathname === "/health") return json({ service: "magicbot-composio", ready: Boolean(env.COMPOSIO_API_KEY) });
   if (request.method === "POST" && url.pathname === "/v1/installations") return register(request, env);
   if (!url.pathname.startsWith("/v1/")) return json({ error: "not found" }, 404);
   const installation = await authenticate(request, env);
@@ -629,7 +629,7 @@ async function webInstallation(userId: string, env: Env): Promise<InstallationRo
   ).bind(id).first<InstallationRow>();
   if (existing) return existing;
   const now = Date.now();
-  const composioUserId = `omb_web_${digest}`;
+  const composioUserId = `mb_web_${digest}`;
   await env.DB.prepare(
     "INSERT INTO installations (id, token_hash, composio_user_id, created_at, last_seen_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING",
   ).bind(id, await sha256(`service:${digest}`), composioUserId, now, now).run();

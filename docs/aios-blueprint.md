@@ -1,6 +1,6 @@
 # MagicBots — AIOS Blueprint
 
-MagicBots keeps OpenMausBot's **UI concept** (a Telegram-style roster where every
+MagicBots keeps MagicBots's **UI concept** (a Telegram-style roster where every
 chat is a real agent) and its clean **TS driver/event core**, but rebuilds the
 *substance* on the AIOS blueprint. Decided 2026-08-12.
 
@@ -8,8 +8,8 @@ chat is a real agent) and its clean **TS driver/event core**, but rebuilds the
 
 | Layer | Source | Direction |
 |---|---|---|
-| React chat UI (sidebar, chat view, model picker, approval cards) | OpenMausBot | **Keep** — the concept we're borrowing |
-| TS driver SPI + canonical `RuntimeEvent` bus | OpenMausBot | **Keep** — good bones; adding a provider stays one file |
+| React chat UI (sidebar, chat view, model picker, approval cards) | MagicBots | **Keep** — the concept we're borrowing |
+| TS driver SPI + canonical `RuntimeEvent` bus | MagicBots | **Keep** — good bones; adding a provider stays one file |
 | Providers on the user's own subscriptions (claude/codex/pi CLIs) | Both | **Keep + extend** — no API keys; pi driver next |
 | The "organs" below | AIOS Desktop | **Transplant** — this is the rebuild |
 
@@ -22,7 +22,7 @@ chat is a real agent) and its clean **TS driver/event core**, but rebuilds the
 2. **Routines** ✅ — per-bot recurring scheduled tasks (`server/organs/routines.ts`).
    An in-harness scheduler tick fires due routines through `startTurn` (the same
    dispatch as a user message); REST CRUD + a UI section in ComputerPanel. Fills
-   OpenMausBot's placeholder. Hosted: the tick becomes a Durable Object alarm,
+   MagicBots's placeholder. Hosted: the tick becomes a Durable Object alarm,
    record shape unchanged.
 3. **Cost receipt** — surface the `cost` already on `turn.completed` as a per-run
    receipt (outcome-per-credit), per AIOS token-economics direction.

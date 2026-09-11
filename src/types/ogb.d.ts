@@ -152,7 +152,7 @@ type SkillRecordingPayload = {
       openInstallTerminal?(command: string): Promise<boolean>;
       /** Opens an http(s) link in the user's default browser. */
       openExternal?(url: string): Promise<boolean>;
-      /** Opens a live desktop as a sandboxed modal owned by OpenMausBot. */
+      /** Opens a live desktop as a sandboxed modal owned by MagicBots. */
       desktopViewer?: {
         open(url: string, title: string, contextId: string): Promise<boolean>;
         onState(cb: (state: { open: boolean; contextId: string | null }) => void): () => void;

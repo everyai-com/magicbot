@@ -72,7 +72,9 @@ function header(req: IncomingMessage, name: string): string | undefined {
 function bearerSecret(req: IncomingMessage): string {
   const authorization = header(req, "authorization") ?? "";
   const match = authorization.match(/^Bearer\s+(.+)$/i);
-  return match?.[1]?.trim() || header(req, "x-openmaus-secret")?.trim() || "";
+  return (
+    match?.[1]?.trim() || header(req, "x-magicbots-secret")?.trim() || header(req, "x-openmaus-secret")?.trim() || ""
+  );
 }
 
 function deliveryId(req: IncomingMessage): string | undefined {
@@ -97,7 +99,7 @@ export function createWebhookIngressHandler(manager: WebhookManager) {
   return async (req: IncomingMessage, res: ServerResponse) => {
     const url = new URL(req.url ?? "/", "http://localhost");
     if (req.method === "GET" && url.pathname === "/health") {
-      return json(res, 200, { app: "openmausbot-webhooks", ready: true });
+      return json(res, 200, { app: "magicbots-webhooks", ready: true });
     }
     const match = url.pathname.match(/^\/hooks\/(wh_[A-Za-z0-9_-]+)(?:\/([^/]+))?$/);
     if (!match) return json(res, 404, { error: "Unknown webhook endpoint" });

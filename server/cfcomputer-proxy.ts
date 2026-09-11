@@ -5,9 +5,9 @@
 // bot) as headless tools — shell, code, and durable files.
 //
 // stdout is the MCP channel — never console.log here.
-const base = (process.env.OMB_CF_COMPUTER_URL ?? "").replace(/\/+$/, "");
-const token = process.env.OMB_CF_COMPUTER_TOKEN ?? "";
-const botId = process.env.OMB_CF_COMPUTER_BOT ?? "";
+const base = (process.env.MB_CF_COMPUTER_URL ?? "").replace(/\/+$/, "");
+const token = process.env.MB_CF_COMPUTER_TOKEN ?? "";
+const botId = process.env.MB_CF_COMPUTER_BOT ?? "";
 
 async function callWorker(action: string, body: unknown, timeoutMs = 120_000): Promise<any> {
   const res = await fetch(`${base}/computer/${botId}/${action}`, {

@@ -10,7 +10,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createProxyHandler } from "../src/proxy.ts";
 import { scrub } from "../src/wire.ts";
 
-const TOKEN = "omb_test_token";
+const TOKEN = "mb_test_token";
 
 /** Nested past any plausible stack, so `scrub`'s recursion gives out while
  * JSON.parse does not. The payload is what the scrubber is meant to remove. */
@@ -68,7 +68,7 @@ describe("preparing a harness response for a device", () => {
     try {
       const { status, text } = await device("/api/bots/b1/computer/join", "POST");
       expect(status).toBe(403);
-      expect(text).toContain("enable it in OpenMausBot");
+      expect(text).toContain("enable it in MagicBots");
     } finally {
       cloudDesktopAccess = true;
     }
