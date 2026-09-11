@@ -182,7 +182,7 @@ public struct PairingInvite: Equatable, Sendable {
     private static func credential(from values: [String: String]) -> String? {
         if let token = values["token"] {
             guard token.hasPrefix("mb_pair_"),
-                  token.utf8.count == 52,
+                  token.utf8.count == "mb_pair_".count + 43,
                   token.dropFirst("mb_pair_".count).utf8.allSatisfy({
                       (48...57).contains($0) || (65...90).contains($0) ||
                       (97...122).contains($0) || $0 == 45 || $0 == 95
