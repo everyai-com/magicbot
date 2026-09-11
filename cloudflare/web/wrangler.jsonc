@@ -41,7 +41,7 @@
     },
     {
       "binding": "CONNECTORS",
-      "service": "openmausbot-composio",
+      "service": "magicbot-composio",
       "entrypoint": "WebConnectors"
     }
   ],

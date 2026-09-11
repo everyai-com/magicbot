@@ -16,7 +16,7 @@ import { redactSecretsInText } from "./redact.ts";
 import { botAvatarProfile, type BotAvatarCrop } from "../shared/bot-avatar.ts";
 import { automaticBotAppearance, type BotPersonality } from "../shared/bot-personality.ts";
 
-export type MausColor =
+export type MascotColor =
   | "green"
   | "blue"
   | "red"
@@ -33,7 +33,7 @@ export type MausColor =
  * string rather than a union: bots saved under the app's earlier ten-face
  * vocabulary still carry those names, and the client resolves both on read.
  */
-export type MausExpression = string;
+export type MascotExpression = string;
 
 export interface OptionCardData {
   title: string;
@@ -259,8 +259,8 @@ export interface BotRecord {
   title: string;
   description: string;
   notifications: boolean;
-  color: MausColor;
-  mascotExpression?: MausExpression | null;
+  color: MascotColor;
+  mascotExpression?: MascotExpression | null;
   /** Shared mascot engine profile; defaults to friendly for older bots. */
   personality?: BotPersonality;
   /** App-owned attachment served as this bot's custom profile image. */
@@ -331,7 +331,7 @@ const BOTS_FILE = join(DATA_DIR, "bots.json");
 const GROUPS_FILE = join(DATA_DIR, "groups.json");
 const messagesFile = (threadId: string) => join(DATA_DIR, `messages-${threadId}.json`);
 
-const COLORS: MausColor[] = [
+const COLORS: MascotColor[] = [
   "green",
   "blue",
   "red",

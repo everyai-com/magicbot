@@ -246,7 +246,7 @@ describe("credential env narrowing", () => {
 });
 
 describe("credential env preference", () => {
-  const VARS = ["XAI_API_KEY", "BOX_TOKEN", "OPENCODE_API_KEY", "OMB_TTS_KEY", "OMB_OPENAI_IMAGE_KEY", "COMPOSIO_API_KEY"] as const;
+  const VARS = ["XAI_API_KEY", "BOX_TOKEN", "OPENCODE_API_KEY", "MB_TTS_KEY", "MB_OPENAI_IMAGE_KEY", "COMPOSIO_API_KEY"] as const;
   let saved: Record<string, string | undefined>;
 
   beforeEach(() => {
@@ -280,8 +280,8 @@ describe("credential env preference", () => {
     process.env.XAI_API_KEY = "env-xai";
     process.env.BOX_TOKEN = "env-box";
     process.env.OPENCODE_API_KEY = "env-ocg";
-    process.env.OMB_TTS_KEY = "env-tts";
-    process.env.OMB_OPENAI_IMAGE_KEY = "env-image";
+    process.env.MB_TTS_KEY = "env-tts";
+    process.env.MB_OPENAI_IMAGE_KEY = "env-image";
     const cfg = loadConfig();
     expect(cfg.xai).toEqual({ key: "env-xai", url: "https://api.example.test/v1" });
     expect(cfg.box).toEqual({ token: "env-box" });
@@ -324,7 +324,7 @@ describe("credential env preference", () => {
     expect(process.env.XAI_API_KEY).toBe("just-saved");
     expect(process.env.COMPOSIO_API_KEY).toBe("ak_just_saved");
     expect(process.env.BOX_TOKEN).toBeUndefined();
-    expect(process.env.OMB_TTS_KEY).toBeUndefined();
+    expect(process.env.MB_TTS_KEY).toBeUndefined();
   });
 });
 
@@ -343,7 +343,7 @@ describe("workspace credential env strip", () => {
     // these two have no per-driver ACP allowlist entry anywhere — they are
     // consumed in-process (Computer driver / voice module), never by a CLI
     expect(WORKSPACE_CREDENTIAL_ENV).toContain("BOX_TOKEN");
-    expect(WORKSPACE_CREDENTIAL_ENV).toContain("OMB_TTS_KEY");
-    expect(WORKSPACE_CREDENTIAL_ENV).toContain("OMB_OPENAI_IMAGE_KEY");
+    expect(WORKSPACE_CREDENTIAL_ENV).toContain("MB_TTS_KEY");
+    expect(WORKSPACE_CREDENTIAL_ENV).toContain("MB_OPENAI_IMAGE_KEY");
   });
 });

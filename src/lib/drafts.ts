@@ -5,8 +5,8 @@
 import { useCallback, useState, type SetStateAction } from "react";
 import { isAttachment, type Attachment } from "./composer-attachments.js";
 
-const KEY = "omb-drafts";
-const ATTACHMENTS_KEY = "omb-draft-attachments";
+const KEY = "mb-drafts";
+const ATTACHMENTS_KEY = "mb-draft-attachments";
 
 type Values = Record<string, unknown>;
 type Store = Pick<Storage, "getItem" | "setItem"> | undefined;

@@ -4,7 +4,7 @@ One workflow builds everything: **Actions → Release → Run workflow**. It
 builds macOS (arm64 + x64, signed, notarized, stapled), Windows, and Ubuntu
 from a single pinned commit, verifies every artifact the way a user would
 receive it, assembles a complete draft on
-[openmausbot-releases](https://github.com/milind-soni/openmausbot-releases),
+[magicbot-releases](https://github.com/everyai-com/magicbot-releases),
 and — if you ticked **publish** — flips it live. Leave publish unticked to
 review the draft notes first, then publish from the GitHub UI.
 
@@ -22,18 +22,24 @@ stapling silently invalidating every published hash, and a finished release
 sitting invisible as a draft. Don't remove a gate without reading the comment
 above it.
 
-## One-time setup: four secrets
+## One-time setup
 
-Set these in **OpenMausBot → Settings → Secrets and variables → Actions**.
+### 0. Create the releases repo
+
+Create a **public**, empty repo named `magicbot-releases` under `everyai-com`
+(no README, no license — the workflow creates and publishes releases there).
+It must be public: the desktop auto-updater reads its release feed from
+users' machines with no token.
 
 ### 1. `MAC_CERT_P12_BASE64` + `MAC_CERT_PASSWORD`
 
+Set these in **magicbot → Settings → Secrets and variables → Actions**.
 The Developer ID Application certificate, exported from the Mac that
-currently signs releases:
+currently signs releases (requires an Apple Developer Program membership):
 
 ```sh
-# Keychain Access → My Certificates → "Developer ID Application: Milind Soni
-# (993D98NH4J)" → right-click → Export… → .p12 with a strong password, then:
+# Keychain Access → My Certificates → "Developer ID Application: <name>
+# (<TEAM_ID>)" → right-click → Export… → .p12 with a strong password, then:
 base64 -i DeveloperID.p12 | pbcopy   # → MAC_CERT_P12_BASE64
 # the export password             → MAC_CERT_PASSWORD
 ```
@@ -55,9 +61,16 @@ base64 -i AuthKey_XXXXXXXX.p8 | pbcopy   # → APPLE_API_KEY_P8_BASE64
 
 A fine-grained personal access token that lets the workflow write to the
 separate releases repo: **GitHub → Settings → Developer settings →
-Fine-grained tokens** → repository access: only `openmausbot-releases` →
+Fine-grained tokens** → repository access: only `magicbot-releases` →
 permissions: **Contents: Read and write**. Set a long expiry and a calendar
 reminder.
+
+### 4. `VITE_POSTHOG_KEY` (optional)
+
+Your PostHog project's write-only `phc_…` key. Official builds bake it in
+at package time; without it the shipped app simply never initializes
+analytics. Forks should set their own key or leave it unset — never reuse
+another project's key.
 
 ### Local fallback
 

@@ -283,7 +283,7 @@ final class DecodingTests: XCTestCase {
 
     func testDecodesThePairResponse() throws {
         let paired = try decode(PairResponse.self, "pair-response")
-        XCTAssertTrue(paired.token.hasPrefix("omb_"))
+        XCTAssertTrue(paired.token.hasPrefix("mb_"))
         XCTAssertEqual(paired.device.name, "Ada's iPhone")
         XCTAssertFalse(paired.serverName.isEmpty)
     }

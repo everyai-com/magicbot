@@ -1,64 +1,100 @@
-> ⚠️ **No affiliation with any cryptocurrency.** OpenMausBot has no token. Any coin using the OpenMausBot, Maus, or SupaMaus name is not created, endorsed, or affiliated with this project or its maintainer. I have received no tokens, payment, or allocation from anyone, and I will not be endorsing any token.
-
 <div align="center">
 
-# OpenMausBot
+# MagicBots
 
 **Your own team of AI bots, in a chat app.**
 
-<sub>An open-source version of **Grok Bot** — bring-your-own-agent, local-first, on the models you already have.</sub>
-
 Every bot in the sidebar is a real agent — Claude or Codex running locally under the hood — with its own
-personality, its own model, its own cloud computer, and its own connected apps.
+personality, its own model, its own computer, and its own connected apps.
 Talk to them like contacts. Watch them work. Approve what matters.
 
 ![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6?logo=typescript&logoColor=white)
 ![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)
 ![Electron](https://img.shields.io/badge/Electron-macOS%20%C2%B7%20Windows%20%C2%B7%20Ubuntu-2B2E3A?logo=electron&logoColor=9FEAF9)
-![Agents](https://img.shields.io/badge/agents-Claude%20·%20Codex-d97757)
+![Agents](https://img.shields.io/badge/agents-Claude%20%C2%B7%20Codex-d97757)
 ![PRs](https://img.shields.io/badge/PRs-welcome-38d591)
 
 <br>
 
-<a href="https://github.com/milind-soni/openmausbot-releases/releases/latest/download/OpenMausBot.dmg">
-  <img src="https://img.shields.io/github/v/release/milind-soni/openmausbot-releases?style=for-the-badge&label=%E2%AC%87%EF%B8%8F%20%20Download%20for%20Mac%20%28Apple%20silicon%29&labelColor=070707&color=1084fe&cacheSeconds=300" alt="Download the latest OpenMausBot for Mac with Apple silicon (.dmg)" height="40">
+<a href="https://github.com/everyai-com/magicbot-releases/releases/latest/download/MagicBots.dmg">
+  <img src="https://img.shields.io/github/v/release/everyai-com/magicbot-releases?style=for-the-badge&label=%E2%AC%87%EF%B8%8F%20%20Download%20for%20Mac%20%28Apple%20silicon%29&labelColor=070707&color=1084fe&cacheSeconds=300" alt="Download the latest MagicBots for Mac with Apple silicon (.dmg)" height="40">
 </a>
 &nbsp;
-<a href="https://github.com/milind-soni/openmausbot-releases/releases/latest/download/OpenMausBot-intel.dmg">
-  <img src="https://img.shields.io/github/v/release/milind-soni/openmausbot-releases?style=for-the-badge&label=%E2%AC%87%EF%B8%8F%20%20Download%20for%20Mac%20%28Intel%29&labelColor=070707&color=2a9d8f&cacheSeconds=300" alt="Download the latest OpenMausBot for Intel Macs (.dmg)" height="40">
+<a href="https://github.com/everyai-com/magicbot-releases/releases/latest/download/MagicBots-intel.dmg">
+  <img src="https://img.shields.io/github/v/release/everyai-com/magicbot-releases?style=for-the-badge&label=%E2%AC%87%EF%B8%8F%20%20Download%20for%20Mac%20%28Intel%29&labelColor=070707&color=2a9d8f&cacheSeconds=300" alt="Download the latest MagicBots for Intel Macs (.dmg)" height="40">
 </a>
 &nbsp;
-<a href="https://github.com/milind-soni/openmausbot-releases/releases/latest/download/OpenMausBot-setup.exe">
-  <img src="https://img.shields.io/github/v/release/milind-soni/openmausbot-releases?style=for-the-badge&label=%E2%AC%87%EF%B8%8F%20%20Download%20for%20Windows&labelColor=070707&color=4cc2ff&cacheSeconds=300" alt="Download the latest OpenMausBot for Windows (.exe)" height="40">
+<a href="https://github.com/everyai-com/magicbot-releases/releases/latest/download/MagicBots-setup.exe">
+  <img src="https://img.shields.io/github/v/release/everyai-com/magicbot-releases?style=for-the-badge&label=%E2%AC%87%EF%B8%8F%20%20Download%20for%20Windows&labelColor=070707&color=4cc2ff&cacheSeconds=300" alt="Download the latest MagicBots for Windows (.exe)" height="40">
 </a>
 &nbsp;
-<a href="https://github.com/milind-soni/openmausbot-releases/releases/latest/download/OpenMausBot-amd64.deb">
-  <img src="https://img.shields.io/github/v/release/milind-soni/openmausbot-releases?style=for-the-badge&label=%E2%AC%87%EF%B8%8F%20%20Download%20for%20Ubuntu&labelColor=070707&color=e95420&cacheSeconds=300" alt="Download the latest OpenMausBot for Ubuntu (.deb)" height="40">
+<a href="https://github.com/everyai-com/magicbot-releases/releases/latest/download/MagicBots-amd64.deb">
+  <img src="https://img.shields.io/github/v/release/everyai-com/magicbot-releases?style=for-the-badge&label=%E2%AC%87%EF%B8%8F%20%20Download%20for%20Ubuntu&labelColor=070707&color=e95420&cacheSeconds=300" alt="Download the latest MagicBots for Ubuntu (.deb)" height="40">
 </a>
 
-<sub>macOS: Apple silicon & Intel · signed & notarized .dmg &nbsp;·&nbsp; Windows: x64 installer &nbsp;·&nbsp; Ubuntu 24.04 x64: .deb or AppImage beta &nbsp;·&nbsp; [all releases](https://github.com/milind-soni/openmausbot-releases/releases)</sub>
+<sub>macOS: Apple silicon & Intel · signed & notarized .dmg &nbsp;·&nbsp; Windows: x64 installer &nbsp;·&nbsp; Ubuntu 24.04 x64: .deb or AppImage beta &nbsp;·&nbsp; [all releases](https://github.com/everyai-com/magicbot-releases/releases)</sub>
 
 <br>
 <br>
 
-<img src="docs/screenshots/hero.png" alt="OpenMausBot — a Telegram-style chat app where every chat is a real AI agent" width="900">
+<img src="docs/screenshots/hero.png" alt="MagicBots — a Telegram-style chat app where every chat is a real AI agent" width="900">
 
 </div>
 
 ---
 
+## Quick start — pick one
+
+**1. Desktop app (easiest).** Download above, open it, done. The harness server
+is embedded, so there is nothing else to install — just have
+[`claude`](https://claude.com/claude-code), [`codex`](https://github.com/openai/codex),
+or [`grok`](https://x.ai/cli) installed and logged in. They appear in the model
+picker automatically.
+
+| | Download | Install |
+|---|---|---|
+| **macOS** (Apple silicon) | [MagicBots.dmg](https://github.com/everyai-com/magicbot-releases/releases/latest/download/MagicBots.dmg) | Drag it to Applications, open it. Signed & notarized. |
+| **macOS** (Intel) | [MagicBots-intel.dmg](https://github.com/everyai-com/magicbot-releases/releases/latest/download/MagicBots-intel.dmg) | Same app, built for Intel Macs. Signed & notarized. |
+| **Windows** (x64) | [MagicBots-setup.exe](https://github.com/everyai-com/magicbot-releases/releases/latest/download/MagicBots-setup.exe) | Run it — one-click, per-user, no admin rights. The installer isn't code-signed yet, so SmartScreen shows "unknown publisher": **More info → Run anyway**. |
+| **Ubuntu 24.04** (x64) | [MagicBots-amd64.deb](https://github.com/everyai-com/magicbot-releases/releases/latest/download/MagicBots-amd64.deb) · [MagicBots.AppImage](https://github.com/everyai-com/magicbot-releases/releases/latest/download/MagicBots.AppImage) | Install the `.deb` with APT (recommended), or make the AppImage executable and run it. Beta; GNOME is the supported desktop. |
+
+See the [Ubuntu Desktop guide](docs/linux-desktop.md) for installation, capabilities, and troubleshooting.
+
+**2. Local, from source — one line.** Clones, installs, and starts everything
+(harness on `:8799`, app on `:5199`). Needs Node 24+, git, and an agent CLI:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/everyai-com/magicbot/main/scripts/install.sh | bash
+```
+
+Prefer steps? `git clone https://github.com/everyai-com/magicbot && cd magicbot`,
+`pnpm install`, then `pnpm dev:server`, `pnpm dev`, and optionally
+`pnpm dev:desktop` for the Electron shell.
+
+**3. Hosted, on your own Cloudflare account — one command.** Deploys the web
+app, the Composio broker, and a cloud computer per bot to *your* Cloudflare
+account (free tier fits, except containers need a paid Workers plan):
+
+```sh
+git clone https://github.com/everyai-com/magicbot && cd magicbot
+pnpm install
+wrangler login
+pnpm deploy:cloud
+```
+
+Details, costs, and teardown: [Hosted deploy guide](docs/cloudflare-deploy.md).
+
 ## Why
 
-One assistant in one box is the wrong shape for agents. OpenMausBot is an open-source take on **Grok Bot** —
-it keeps the idea (AI as a *messaging app*: a roster of bots you chat with, each with its own personality,
-memory of its thread, model, computer, and apps) and rebuilds it open, local-first, and on the agents you
-already have:
+One assistant in one box is the wrong shape for agents. MagicBots treats AI as
+a *messaging app*: a roster of bots you chat with, each with its own personality,
+memory of its thread, model, computer, and apps:
 
 - **Bring your own agents.** Bots run on the `claude`, `codex`, and `grok` CLIs installed on your own machine
   — your existing logins and subscriptions, no new accounts, no proxy in the middle. Point any engine at a
   custom CLI binary (a versioned build or wrapper) in **Settings → Engines**.
 - **Local first.** One small harness server on `127.0.0.1` owns every agent process. Transcripts, keys, and
-  events live in `~/.openmausbot`, not a cloud.
+  events live in `~/.magicbots`, not a cloud.
 - **Agents with hands.** Each bot can use a cloud Linux desktop, an isolated Local VM, or your own computer,
   plus 500+ apps through Composio. Host control is available on macOS and as an explicit Ubuntu GNOME beta.
 
@@ -136,20 +172,16 @@ Secrets are write-only: the UI only ever sees "configured" flags.
 ### #️⃣ Channels for every context
 
 Keep Work, Personal, and each project in separate channels without cloning your bots. Every channel has
-its own transcript, shared instructions, working folder, responder rules, and editable bot roster. File a
-channel and its bots under a named context, then rename it or change its members whenever the team changes.
+its own transcript, shared instructions, working folder, responder rules, and editable bot roster.
 
 ### 🎧 Bots that talk back
 
-Press the speaker on any reply, or switch a bot to read its answers out as they land — so you can listen
-to what ran overnight while you make breakfast. Hit **call** and it's a conversation: it hears you, tells
-you what it's doing while it works, and asks for approvals out loud.
-
-Bring your own ElevenLabs key — paste it once in App Settings, pick a voice, and every bot can talk.
-Give a bot its own voice and a channel stops sounding like one person.
+Press the speaker on any reply, or switch a bot to read its answers out as they land. Hit **call** and
+it's a conversation: it hears you, tells you what it's doing while it works, and asks for approvals out
+loud. Bring your own ElevenLabs key — paste it once in App Settings, pick a voice, and every bot can talk.
 
 **Also in the box:** streaming replies with tool-run activity chips · native macOS dictation from the
-composer mic (on-device Apple speech recognition — desktop app) · SupaMaus cursor mascots with role-aware
+composer mic (on-device Apple speech recognition — desktop app) · SupaBot cursor mascots with role-aware
 expressions · screenshots of the bot's work folded into the transcript.
 
 ## How it works
@@ -188,42 +220,7 @@ flowchart LR
 | Voice | `server/tts/` | ElevenLabs, bring your own key. Runs on the harness so the key never reaches the UI; markdown is rewritten into something worth hearing before it is spoken. |
 | App | `src/` | The chat shell. Server-backed store, one reducer, zero client-side transports. |
 | Desktop | `electron/` | macOS, Windows, and Ubuntu shells with an embedded harness and platform capabilities; Apple speech stays macOS-only, while a release-pinned bundled CUA runtime enables guarded Ubuntu GNOME local control. |
-
-## Quick start
-
-**Released builds:** the harness server is embedded, so no separate server setup is required.
-
-| | Download | Install |
-|---|---|---|
-| **macOS** (Apple silicon) | [OpenMausBot.dmg](https://github.com/milind-soni/openmausbot-releases/releases/latest/download/OpenMausBot.dmg) | Drag it to Applications, open it. Signed & notarized. |
-| **macOS** (Intel) | [OpenMausBot-intel.dmg](https://github.com/milind-soni/openmausbot-releases/releases/latest/download/OpenMausBot-intel.dmg) | Same app, built for Intel Macs. Signed & notarized. |
-| **Windows** (x64) | [OpenMausBot-setup.exe](https://github.com/milind-soni/openmausbot-releases/releases/latest/download/OpenMausBot-setup.exe) | Run it — one-click, per-user, no admin rights. The installer isn't code-signed yet, so SmartScreen shows "unknown publisher": **More info → Run anyway**. |
-| **Ubuntu 24.04** (x64) | [OpenMausBot-amd64.deb](https://github.com/milind-soni/openmausbot-releases/releases/latest/download/OpenMausBot-amd64.deb) · [OpenMausBot.AppImage](https://github.com/milind-soni/openmausbot-releases/releases/latest/download/OpenMausBot.AppImage) | Install the `.deb` with APT (recommended), or make the AppImage executable and run it. Beta; GNOME is the supported desktop. |
-
-See the [Ubuntu Desktop guide](docs/linux-desktop.md) for installation, capabilities, and troubleshooting.
-
-**From source:**
-
-```sh
-git clone https://github.com/milind-soni/OpenMausBot && cd OpenMausBot
-pnpm install
-
-pnpm dev:server    # harness server → 127.0.0.1:8799
-pnpm dev           # app → http://127.0.0.1:5199
-pnpm dev:desktop   # Electron shell; keep the two commands above running
-```
-
-Requirements: **macOS, Windows, or Ubuntu 24.04 x64**, **Node 24+**, **pnpm**, and at least one agent CLI — [`claude`](https://claude.com/claude-code),
-[`codex`](https://github.com/openai/codex), or [`grok`](https://x.ai/cli) — installed and logged in. They appear
-in the model picker automatically.
-
-Package the desktop application:
-
-```sh
-pnpm package:mac      # macOS: DMG + ZIP; requires Swift/Xcode tools
-pnpm package:win      # Windows: installer + ZIP
-pnpm package:linux    # Ubuntu x64: .deb + AppImage + verified CUA runtime
-```
+| Hosted | `cloudflare/` | The same app as Workers: web UI on static assets + D1/R2, Composio broker, and container computers. Deploy with `pnpm deploy:cloud`. |
 
 ### Desktop capability status
 
@@ -232,31 +229,20 @@ pnpm package:linux    # Ubuntu x64: .deb + AppImage + verified CUA runtime
 | Packaged app, embedded harness, local agent CLIs | Supported | Beta | Beta |
 | Composio and Cloudflare computers | Supported | Beta | Beta |
 | Explicit preview-only local screen capture | Supported | Beta | Beta |
-| Bot control of this computer | Supported | Beta: opt-in, bundled Cua 0.19.3 | Beta: GNOME only, opt-in, bundled Cua 0.19.3; separately installed WinRects v8 helper |
+| Bot control of this computer | Supported | Beta: opt-in, bundled CUA runtime | Beta: GNOME only, opt-in; separately installed WinRects helper |
 | Native on-device dictation | Supported | Planned | Planned |
 
 The Linux preview is user-initiated and never enables local bot control or Auto routing. Packaged Linux builds ship
-the exact Cua Driver 0.19.3 runtime outside ASAR; control still requires explicit app opt-in and an explicit per-bot
-**This computer** selection, and every local action asks for approval. GNOME/Wayland additionally requires the
-versioned WinRects v8 helper and a
-passing prompt-free AT-SPI/capture/portal health report. Other Wayland compositors fail closed without blocking
-chat or cloud features. See the [Ubuntu Desktop guide](docs/linux-desktop.md) and
-tracking issues [#29](https://github.com/milind-soni/OpenMausBot/issues/29) and
-[#79](https://github.com/milind-soni/OpenMausBot/issues/79) / [#109](https://github.com/milind-soni/OpenMausBot/issues/109) / [#113](https://github.com/milind-soni/OpenMausBot/issues/113).
-
-The Linux packager downloads only the tag-pinned upstream archive during the build, verifies its size, SHA-256,
-complete member allowlist, and inner executable hashes, then packages only the CLI and cursor-theme sidecar. The
-installed app never downloads or self-updates native automation code. Cua's MIT notice, Inter's SIL OFL, a generated
-third-party license report, and a CycloneDX inventory ship with the runtime. See
-[`third_party/cua-driver/`](third_party/cua-driver/) for the reviewed provenance record.
+a pinned, hash-verified CUA runtime outside ASAR; control still requires explicit app opt-in and an explicit per-bot
+**This computer** selection, and every local action asks for approval. See the [Ubuntu Desktop guide](docs/linux-desktop.md).
 
 These credentials are optional — local chat works without them. Paste a key once in **App Settings** (gear
 in the sidebar footer) when you want to enable its integration:
 
 | Credential | What it enables | Where to get it |
 |---|---|---|
-| Composio project key (`ak_…`) | Connect Gmail, GitHub, Slack, Notion, and other apps to your bots | [OpenMausBot Composio setup](docs/composio.md) |
-| Cloudflare Worker URL + bearer token | Give every bot a persistent isolated Linux computer with shell, code, and files | [Cloudflare computer setup](cf-computer/README.md) |
+| Composio project key (`ak_…`) | Connect Gmail, GitHub, Slack, Notion, and other apps to your bots | [MagicBots Composio setup](docs/composio.md) |
+| Cloudflare Worker URL + Bearer [REDACTED] | Give every bot a persistent isolated Linux computer with shell, code, and files | [Cloudflare computer setup](cf-computer/README.md) |
 | ElevenLabs key | Read replies aloud, and call your bots | [ElevenLabs API keys](https://elevenlabs.io/app/settings/api-keys) |
 
 Composio and Cloudflare are third-party services with their own accounts and terms. Cloudflare Sandbox
@@ -267,22 +253,23 @@ pnpm typecheck     # app + server
 pnpm test          # unit, driver, API, and desktop capability tests
 pnpm build         # typecheck + production build
 pnpm check:electron # syntax-check Electron main/preload files
+pnpm package:mac   # macOS DMG + ZIP → release/
 pnpm package:win   # Windows installer + zip → release/
 pnpm package:linux # Ubuntu x64 .deb + AppImage → release/
 ```
 
 ### Routines and webhook triggers
 
-Routines can run once or on selected weekdays, using either a MAUS's configured model/computer or the
+Routines can run once or on selected weekdays, using either a bot's configured model/computer or the
 Cloud VM runner. Webhook triggers are independent from schedules but reuse the same queued task executor
 and calendar receipts.
 
-OpenMausBot starts a webhook-only receiver on `127.0.0.1:8800` by default (or one port above `OMB_PORT`).
-Set `OMB_WEBHOOK_PORT` to choose another port. A webhook secret is shown once when the trigger is created
-or rotated. Bearer authentication is recommended so the secret stays out of request URLs and most access
+MagicBots starts a webhook-only receiver on `127.0.0.1:8800` by default (or one port above `MB_PORT`).
+Set `MB_WEBHOOK_PORT` to choose another port. A webhook secret is shown once when the trigger is created
+or rotated. Bearer [REDACTED] is recommended so the secret stays out of request URLs and most access
 logs; a single capability URL remains available for senders that cannot configure headers. The receiver
 exposes only `/health` and secret `/hooks/...` endpoints; it never exposes the app's broader API.
-OpenMausBot must remain running to accept a delivery. For public internet delivery, proxy only this
+MagicBots must remain running to accept a delivery. For public internet delivery, proxy only this
 dedicated receiver through a hosted relay or a tool such as Tailscale Funnel.
 
 ## Status
@@ -296,15 +283,15 @@ the composer mic) — see [`docs/voice-mode.md`](docs/voice-mode.md) for the des
 
 Contributions welcome — the driver SPI in [`server/contracts.ts`](server/contracts.ts) is deliberately
 small; adding a provider is one file in [`server/drivers/`](server/drivers/) plus a one-line registration.
+See [CONTRIBUTING.md](CONTRIBUTING.md) to get started.
+
+MagicBots is a fork of [OpenMausBot](https://github.com/milind-soni/OpenMausBot) by Milind Soni,
+used under the Apache License 2.0 — see [NOTICE](NOTICE).
 
 ## License
 
-[Apache License 2.0](LICENSE) © 2026 Milind Soni and OpenMausBot contributors.
+[Apache License 2.0](LICENSE) © 2026 EveryAI and MagicBots contributors.
 
-Packaged Cua Driver components retain their upstream MIT, SIL OFL 1.1, MPL-2.0, and other dependency terms;
+Packaged CUA Driver components retain their upstream MIT, SIL OFL 1.1, MPL-2.0, and other dependency terms;
 the corresponding notices, license texts, source locations, and SBOM are in
 [`third_party/cua-driver/`](third_party/cua-driver/) and ship beside the native runtime.
-
-OpenMausBot is an independent, open-source project inspired by Grok Bot. It is
-not affiliated with, endorsed by, or associated with xAI; "Grok" is a trademark
-of its respective owner.

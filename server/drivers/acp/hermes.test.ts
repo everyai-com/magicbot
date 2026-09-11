@@ -13,7 +13,7 @@ describe("hermesConfiguredModel", () => {
   });
 
   const home = (env: string, cfg?: string) => {
-    const root = mkdtempSync(join(tmpdir(), "omb-hermes-"));
+    const root = mkdtempSync(join(tmpdir(), "mb-hermes-"));
     dirs.push(root);
     const h = join(root, ".hermes");
     mkdirSync(h, { recursive: true });
@@ -49,7 +49,7 @@ describe("hermesConfiguredModel", () => {
   });
 
   it("returns null when there is no .env at all, leaving local-only setups unchanged", () => {
-    const root = mkdtempSync(join(tmpdir(), "omb-hermes-bare-"));
+    const root = mkdtempSync(join(tmpdir(), "mb-hermes-bare-"));
     dirs.push(root);
     expect(hermesConfiguredModel({ HERMES_HOME: join(root, ".hermes") })).toBeNull();
   });

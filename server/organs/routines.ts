@@ -1,6 +1,6 @@
 // AIOS organ #2 — routines (scheduled recurring bot tasks).
 //
-// Fills OpenMausBot's "Routines are a placeholder" gap. A routine is a saved
+// Fills MagicBots's "Routines are a placeholder" gap. A routine is a saved
 // prompt a bot runs on an interval. The scheduler is a single in-harness tick
 // (the local Mac app's harness is a long-lived process); when this same core
 // runs hosted in a Cloudflare Durable Object later, the tick is replaced by a

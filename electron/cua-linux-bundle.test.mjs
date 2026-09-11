@@ -21,7 +21,7 @@ afterEach(() => {
 });
 
 function fixture() {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "omb-appimage-bundle-test-"));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "mb-appimage-bundle-test-"));
   temporaryDirectories.push(root);
   const resourcesPath = path.join(root, "resources");
   const source = path.join(resourcesPath, "cua-linux-x64");
@@ -54,7 +54,7 @@ describe.skipIf(process.platform === "win32")("AppImage CUA private staging", ()
     expect(() => stageAppImageCuaBundle({ resourcesPath, temporaryRoot: root })).toThrow(
       "failed integrity validation",
     );
-    expect(fs.readdirSync(root).filter((name) => name.startsWith("openmausbot-cua"))).toEqual([]);
+    expect(fs.readdirSync(root).filter((name) => name.startsWith("magicbots-cua"))).toEqual([]);
   });
 
   it("refuses cleanup outside its exact private stage namespace", () => {

@@ -14,7 +14,7 @@ import type { AppConfig } from "./config.ts";
 import { ensureRemoteCuaCommand, remoteComputerBootstrapCommand } from "./remote-computer.ts";
 
 // overridable so tests can point at a stub instead of the live provider
-const BOX_API = process.env.OMB_BOX_API || "https://ascii.dev/api/box/v1";
+const BOX_API = process.env.MB_BOX_API || "https://ascii.dev/api/box/v1";
 const READY = new Set(["idle", "ready", "running"]);
 
 function boxFetch(cfg: AppConfig, path: string, opts: RequestInit = {}) {
@@ -188,7 +188,7 @@ export async function boxStatus(cfg: AppConfig, botId: string) {
  */
 export async function provisionBox(cfg: AppConfig, botId: string, botName: string) {
   if (!boxConfigured(cfg)) {
-    throw new Error('box provider not enabled — add {"box":{"token":"…"}} to ~/.openmausbot/config.json');
+    throw new Error('box provider not enabled — add {"box":{"token":"…"}} to ~/.magicbots/config.json');
   }
   const vmName = await boxNameFor(botId);
   let box = await findBox(cfg, botId);

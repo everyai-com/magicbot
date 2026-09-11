@@ -1,6 +1,6 @@
 {
   "$schema": "../../node_modules/wrangler/config-schema.json",
-  "name": "openmausbot-composio",
+  "name": "magicbot-composio",
   "main": "src/index.ts",
   "compatibility_date": "2026-08-18",
   "compatibility_flags": ["nodejs_compat"],
@@ -13,7 +13,7 @@
   "d1_databases": [
     {
       "binding": "DB",
-      "database_name": "openmausbot-composio",
+      "database_name": "magicbot-composio",
       "database_id": "3aac4ec3-1a7a-4d56-80dc-0a2388ca23fc",
       "migrations_dir": "migrations"
     }

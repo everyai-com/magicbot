@@ -219,7 +219,7 @@ describe("hosted chat turns", () => {
     const bot = {
       id: "hosted-bot",
       threadId: "hosted-thread",
-      name: "SupaMaus",
+      name: "SupaBot",
       title: "Cloud AI assistant",
       description: "",
       notifications: true,
@@ -269,7 +269,7 @@ describe("hosted chat turns", () => {
     const bot = {
       id: "early-hosted-bot",
       threadId: "early-hosted-thread",
-      name: "SupaMaus",
+      name: "SupaBot",
       title: "Cloud AI assistant",
       description: "",
       notifications: true,

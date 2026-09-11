@@ -13,12 +13,12 @@ function downloadManifest(manifest: ExportedTeam): { name: string; members: numb
       .trim()
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-|-$/g, "") || "openmaus-team";
+      .replace(/^-|-$/g, "") || "magicbots-team";
   const blob = new Blob([`${JSON.stringify(manifest, null, 2)}\n`], { type: "application/json" });
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
-  link.download = `${slug}.mausteam.json`;
+  link.download = `${slug}.magicbots.json`;
   document.body.appendChild(link);
   link.click();
   link.remove();

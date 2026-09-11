@@ -69,23 +69,23 @@ jobs:
           test "$(stat -c '%U:%G %a' release/linux-unpacked/chrome-sandbox)" = "root:root 4755"
       - name: Launch packaged app and verify lifecycle
         env:
-          OMB_KEEP_SMOKE_DIR: "1"
+          MB_KEEP_SMOKE_DIR: "1"
         run: pnpm smoke:linux-package
       - name: Upload smoke diagnostics on failure
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: failure()
         with:
-          name: openmausbot-ubuntu-smoke-diagnostics
+          name: magicbots-ubuntu-smoke-diagnostics
           path: |
-            ${{ runner.temp }}/omb-linux-smoke-*
-            ${{ runner.temp }}/omb-linux-smoke-runtime-*
+            ${{ runner.temp }}/mb-linux-smoke-*
+            ${{ runner.temp }}/mb-linux-smoke-runtime-*
           if-no-files-found: warn
           include-hidden-files: true
           retention-days: 7
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
-          name: openmausbot-ubuntu-x64
+          name: magicbots-ubuntu-x64
           path: |
             release/*.deb
             release/*.AppImage
@@ -108,8 +108,8 @@ jobs:
         run: |
           cd ios
           xcodebuild \
-            -project OpenMausCompanion.xcodeproj \
-            -scheme OpenMausCompanion \
+            -project MagicBotsCompanion.xcodeproj \
+            -scheme MagicBotsCompanion \
             -sdk iphonesimulator \
             -destination 'generic/platform=iOS Simulator' \
             CODE_SIGNING_ALLOWED=NO \

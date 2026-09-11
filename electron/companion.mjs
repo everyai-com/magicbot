@@ -49,7 +49,7 @@ const entryPoint = (resourcesPath) =>
 // stayed closed until the user rediscovered the switch. The position of the
 // toggle is state worth keeping, and it lives in the app's own userData —
 // like cua-connection.json — because the app owns the toggle. Not in the
-// sidecar's ~/.openmausbot-companion, which is the child process's directory,
+// sidecar's ~/.magicbots-companion, which is the child process's directory,
 // and not in the harness's config.json, which is somebody else's data layout.
 
 const settingsFile = () => path.join(app.getPath("userData"), "companion-settings.json");
@@ -153,9 +153,9 @@ async function start({ resourcesPath, harnessPort, log }) {
   const child = utilityProcess.fork(resolved.entry, [], {
     env: {
       ...process.env,
-      OMB_PORT: String(harnessPort),
-      OMB_COMPANION_PORT: String(COMPANION_PORT),
-      OMB_CONTROL_PORT: String(CONTROL_PORT),
+      MB_PORT: String(harnessPort),
+      MB_COMPANION_PORT: String(COMPANION_PORT),
+      MB_CONTROL_PORT: String(CONTROL_PORT),
     },
     // how the TS-source fallback gets --experimental-strip-types; empty for
     // compiled entries

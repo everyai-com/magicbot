@@ -1,10 +1,12 @@
 import { z } from "zod";
 
 import { schemaIssue, type JsonValue } from "./schema.ts";
-import type { MausColor } from "./store.ts";
+import type { MascotColor } from "./store.ts";
 import { BOT_PERSONALITIES, type BotPersonality } from "../shared/bot-personality.ts";
 
-export const TEAM_MANIFEST_FORMAT = "openmaus.team" as const;
+export const TEAM_MANIFEST_FORMAT = "magicbots.team" as const;
+/** Files exported before the MagicBots rename still import; new exports use the format above. */
+export const LEGACY_TEAM_MANIFEST_FORMAT = "openmaus.team" as const;
 export const TEAM_MANIFEST_VERSION = 2 as const;
 export const LEGACY_TEAM_MANIFEST_VERSION = 1 as const;
 export const MAX_TEAM_MEMBERS = 200;
@@ -20,7 +22,7 @@ const COLORS = [
   "yellow",
   "teal",
   "coral",
-] as const satisfies readonly MausColor[];
+] as const satisfies readonly MascotColor[];
 
 const requiredText = (max: number) =>
   z.string({ error: "must be text" }).trim().min(1, { message: "is required" }).max(max, { message: "is too long" });
@@ -57,9 +59,13 @@ const membersSchema = z
   .min(1, { message: "A team needs at least one member" })
   .max(MAX_TEAM_MEMBERS, { message: `A team can have at most ${MAX_TEAM_MEMBERS} members` });
 
+const formatSchema = z.enum([TEAM_MANIFEST_FORMAT, LEGACY_TEAM_MANIFEST_FORMAT], {
+  error: "This is not a MagicBots team file",
+});
+
 const manifestSchema = z.discriminatedUnion("version", [
   z.object({
-    format: z.literal(TEAM_MANIFEST_FORMAT, { error: "This is not an OpenMaus team file" }),
+    format: formatSchema,
     version: z.literal(LEGACY_TEAM_MANIFEST_VERSION),
     team: z.object({
       name: requiredText(100),
@@ -73,7 +79,7 @@ const manifestSchema = z.discriminatedUnion("version", [
     }),
   }),
   z.object({
-    format: z.literal(TEAM_MANIFEST_FORMAT, { error: "This is not an OpenMaus team file" }),
+    format: formatSchema,
     version: z.literal(TEAM_MANIFEST_VERSION),
     team: z.object({
       name: requiredText(100),
@@ -89,7 +95,7 @@ export interface TeamManifestMember {
   title: string;
   description: string;
   appearance: {
-    color: MausColor;
+    color: MascotColor;
     mascotExpression?: string;
     personality?: BotPersonality;
   };
@@ -135,7 +141,7 @@ interface ExportableBot {
   name: string;
   title: string;
   description: string;
-  color: MausColor;
+  color: MascotColor;
   mascotExpression?: string | null;
   personality?: BotPersonality;
 }
@@ -204,7 +210,7 @@ export interface ImportedMemberProfile {
   name: string;
   title: string;
   description: string;
-  color: MausColor;
+  color: MascotColor;
   mascotExpression?: string;
   personality?: BotPersonality;
 }

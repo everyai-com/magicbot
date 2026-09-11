@@ -1,19 +1,19 @@
 {
-  "name": "openmausbot",
+  "name": "magicbots",
   "private": true,
   "version": "0.1.32",
   "description": "A local-first chat app for running a team of AI agents.",
-  "homepage": "https://github.com/milind-soni/OpenMausBot",
+  "homepage": "https://github.com/everyai-com/magicbot",
   "repository": {
     "type": "git",
-    "url": "https://github.com/milind-soni/OpenMausBot.git"
+    "url": "https://github.com/everyai-com/magicbot.git"
   },
   "author": {
-    "name": "Milind Soni",
-    "email": "46266943+milind-soni@users.noreply.github.com"
+    "name": "EveryAI",
+    "email": "hello@magicteams.ai"
   },
   "license": "Apache-2.0",
-  "desktopName": "com.openmausbot.app.desktop",
+  "desktopName": "com.magicbots.app.desktop",
   "type": "module",
   "main": "electron/main.mjs",
   "engines": {
@@ -25,9 +25,9 @@
     "lint": "oxlint .",
     "check:contrast": "node scripts/check-contrast.mjs",
     "dev": "vite",
-    "docs:dev": "pnpm --filter @openmausbot/docs dev",
-    "docs:build": "pnpm --filter @openmausbot/docs build",
-    "docs:preview": "pnpm --filter @openmausbot/docs preview",
+    "docs:dev": "pnpm --filter @magicbots/docs dev",
+    "docs:build": "pnpm --filter @magicbots/docs build",
+    "docs:preview": "pnpm --filter @magicbots/docs preview",
     "companion": "node --experimental-strip-types companion/src/index.ts",
     "dev:server": "node --experimental-strip-types server/index.ts",
     "dev:desktop": "electron .",
@@ -65,7 +65,8 @@
     "broker:test": "vitest run --config cloudflare/composio-broker/vitest.config.ts",
     "broker:deploy": "wrangler deploy --config cloudflare/composio-broker/wrangler.jsonc",
     "web:migrate": "wrangler d1 migrations apply magicbot-web --remote --config cloudflare/web/wrangler.jsonc",
-    "web:deploy": "pnpm build && wrangler deploy --config cloudflare/web/wrangler.jsonc"
+    "web:deploy": "pnpm build && wrangler deploy --config cloudflare/web/wrangler.jsonc",
+    "deploy:cloud": "node scripts/deploy-cloudflare.mjs"
   },
   "dependencies": {
     "@opencoredev/loginwithchatgpt-core": "0.2.0",

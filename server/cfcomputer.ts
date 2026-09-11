@@ -20,9 +20,9 @@ export function cfComputerMcp(cfg: AppConfig, botId: string): {
     args: [SPAWNED_PROXIES.cfComputer],
     env: {
       ELECTRON_RUN_AS_NODE: "1",
-      OMB_CF_COMPUTER_URL: cfg.cfComputer!.url!,
-      OMB_CF_COMPUTER_TOKEN: cfg.cfComputer!.token!,
-      OMB_CF_COMPUTER_BOT: botId,
+      MB_CF_COMPUTER_URL: cfg.cfComputer!.url!,
+      MB_CF_COMPUTER_TOKEN: cfg.cfComputer!.token!,
+      MB_CF_COMPUTER_BOT: botId,
     },
   };
 }

@@ -10,7 +10,7 @@ import {
 } from "./team-library.ts";
 
 const manifest = {
-  format: "openmaus.team",
+  format: "magicbots.team",
   version: 2,
   team: {
     name: "Engineering",
@@ -27,7 +27,7 @@ const manifest = {
 };
 
 const catalog = {
-  format: "openmaus.catalog",
+  format: "magicbots.catalog",
   version: 1,
   teams: [
     {
@@ -35,7 +35,7 @@ const catalog = {
       name: "Engineering Team",
       summary: "Plan and ship software.",
       category: "Engineering",
-      manifest: "teams/engineering/team.mausteam.json",
+      manifest: "teams/engineering/team.magicbots.json",
       readme: "teams/engineering/README.md",
       members: 1,
       skills: ["teams/engineering/skills/release/SKILL.md"],
@@ -54,7 +54,7 @@ function response(value: unknown, status = 200): Response {
 describe("team library", () => {
   it("validates catalog paths and adds the trusted repository URL", () => {
     const parsed = parseTeamCatalog(catalog);
-    expect(parsed.repositoryUrl).toBe("https://github.com/milind-soni/openmausbot-teams");
+    expect(parsed.repositoryUrl).toBe("https://github.com/everyai-com/magicbots-teams");
     expect(parsed.teams[0]).toMatchObject({ slug: "engineering", members: 1 });
 
     const unsafe = structuredClone(catalog);
@@ -62,11 +62,23 @@ describe("team library", () => {
     expect(() => parseTeamCatalog(unsafe)).toThrow("safe catalog path");
   });
 
+  it("accepts pre-rename catalogs and manifest paths", () => {
+    const base = structuredClone(catalog);
+    const legacy = {
+      format: "openmaus.catalog",
+      version: base.version,
+      teams: base.teams.map((team) => ({ ...team, manifest: "teams/engineering/team.mausteam.json" })),
+    };
+    const parsed = parseTeamCatalog(legacy);
+    expect(parsed.format).toBe("magicbots.catalog");
+    expect(parsed.teams[0]?.manifest).toBe("teams/engineering/team.mausteam.json");
+  });
+
   it("loads only the manifest selected by the trusted catalog", async () => {
     const fetcher = vi.fn(async (url: string | URL | Request) => {
       const target = String(url);
       if (target === TEAM_LIBRARY_CATALOG_URL) return response(catalog);
-      if (target === `${TEAM_LIBRARY_RAW_ROOT}/teams/engineering/team.mausteam.json`) return response(manifest);
+      if (target === `${TEAM_LIBRARY_RAW_ROOT}/teams/engineering/team.magicbots.json`) return response(manifest);
       return response({}, 404);
     }) as unknown as typeof fetch;
 
@@ -77,6 +89,8 @@ describe("team library", () => {
 
   it("normalizes public GitHub repository, blob, and raw links", () => {
     expect(githubManifestUrls("https://github.com/acme/team")).toEqual([
+      "https://raw.githubusercontent.com/acme/team/main/team.magicbots.json",
+      "https://raw.githubusercontent.com/acme/team/master/team.magicbots.json",
       "https://raw.githubusercontent.com/acme/team/main/team.mausteam.json",
       "https://raw.githubusercontent.com/acme/team/master/team.mausteam.json",
     ]);

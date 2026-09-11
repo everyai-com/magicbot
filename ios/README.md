@@ -1,4 +1,4 @@
-# OpenMausBot companion (iOS)
+# MagicBots companion (iOS)
 
 Your bots keep running on the laptop. This is the phone you watch them from,
 answer their approvals on, and send them the next thing.
@@ -54,9 +54,9 @@ ios/
   App/                           SwiftUI, and everything that needs a device
     CompanionApp.swift           entry; owns when the stream lives and dies
     Session.swift                connection, lifecycle, actions
-    Discovery.swift              NWBrowser for _openmausbot._tcp
+    Discovery.swift              NWBrowser for _magicbots._tcp
     Keychain.swift               the device token
-    MausAvatar.swift             the mascot face, in the desktop's palette
+    MascotAvatar.swift             the mascot face, in the desktop's palette
     PairingView.swift            QR handoff, discovery, address and code fallback
     PairingScanner.swift         native QR camera, permission and recovery UI
     Glass.swift                  the one material the chrome is made of (Liquid Glass on 26+)
@@ -85,7 +85,7 @@ The app needs Xcode. The `.xcodeproj` is generated rather than committed:
 
 ```sh
 brew install xcodegen
-cd ios && xcodegen generate && open OpenMausCompanion.xcodeproj
+cd ios && xcodegen generate && open MagicBotsCompanion.xcodeproj
 ```
 
 **Re-run `xcodegen generate` after pulling any change that adds a file to
@@ -167,7 +167,7 @@ the host computer remain unreachable through the companion.
 - **Messaging-app shape, not settings-list shape.** Mascot faces at roster size,
   the bot's role as a chip beside its name, timestamps that say "Yesterday"
   rather than a date, and a gap-based separator in the transcript instead of a
-  stamp on every message. The palette in `MausAvatar.swift` is copied verbatim
+  stamp on every message. The palette in `MascotAvatar.swift` is copied verbatim
   from `src/lib/mascot.ts`: a bot the user knows as "the orange one" should be
   the same orange on both screens.
 - **Return sends, Shift+Return breaks the line**, via `.onKeyPress`. Returning
@@ -191,5 +191,5 @@ and no hosted relay. Composer dictation is available.
 Task management, SQLite transcript search,
 transcript sharing, reactions, and edit/version controls use narrow companion
 routes and the computer remains the source of truth. Tailscale is supported
-through manual MagicDNS entry; it is not a dependency and OpenMausBot does not
+through manual MagicDNS entry; it is not a dependency and MagicBots does not
 operate a cloud copy of local data.

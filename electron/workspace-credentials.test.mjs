@@ -104,9 +104,9 @@ describe("workspace credential env", () => {
     ).toEqual({
       XAI_API_KEY: "xai-secret",
       BOX_TOKEN: "box-secret",
-      OMB_TTS_KEY: "tts-secret",
+      MB_TTS_KEY: "tts-secret",
       OPENCODE_API_KEY: "ocg-secret",
-      OMB_OPENAI_IMAGE_KEY: "image-secret",
+      MB_OPENAI_IMAGE_KEY: "image-secret",
     });
   });
 

@@ -1,5 +1,8 @@
 // PostHog usage analytics + the email → person identity link.
-// The phc_ token is a write-only public key (safe to ship in the client).
+// The phc_ token is a write-only public key (safe to ship in the client),
+// and it is deliberately NOT hardcoded: whoever ships the app provides
+// VITE_POSTHOG_KEY at build time, so forks never report into each other's
+// dashboards. No key means analytics stay off entirely.
 // Only the named events below are sent — autocapture is OFF on purpose:
 // it would ship the $el_text of clicked elements, and the sidebar/option
 // cards render model output and message previews, so it would leak fragments
@@ -7,14 +10,16 @@
 // identify(), so PostHog's Persons tab doubles as the collected-email list.
 import posthog from "posthog-js";
 
-const TOKEN = "phc_m2hP39w8y2gLPvHgDvSXAu6xcZ3agjf4ruL56rGcMZEe";
+const TOKEN: string | undefined = import.meta.env.VITE_POSTHOG_KEY;
 
 // Analytics are on by default; Settings → General turns them off. The choice
 // lives in localStorage because it has to be readable BEFORE init() runs: an
 // opted-out install must never call posthog.init(), so no request — not even
 // the library's own — leaves the machine. Once running, opting out routes
 // through opt_out_capturing(), which also drops anything already queued.
-const OPT_OUT_KEY = "omb-analytics-opt-out";
+const OPT_OUT_KEY = "mb-analytics-opt-out";
+// Pre-rename installs stored the choice here; it still counts as opted out.
+const LEGACY_OPT_OUT_KEY = "omb-analytics-opt-out";
 
 let ready = false;
 
@@ -29,7 +34,7 @@ let choice: boolean | undefined;
 export function analyticsEnabled(): boolean {
   if (choice !== undefined) return choice;
   try {
-    return localStorage.getItem(OPT_OUT_KEY) !== "1";
+    return localStorage.getItem(OPT_OUT_KEY) !== "1" && localStorage.getItem(LEGACY_OPT_OUT_KEY) !== "1";
   } catch {
     return true; // storage unreadable → behave like a fresh install
   }
@@ -49,6 +54,7 @@ export function setAnalyticsEnabled(enabled: boolean) {
   choice = enabled; // before persisting: the decision must not depend on it
   try {
     localStorage.setItem(OPT_OUT_KEY, enabled ? "0" : "1");
+    if (enabled) localStorage.removeItem(LEGACY_OPT_OUT_KEY);
   } catch {
     /* it will not survive a restart, but it holds for this session */
   }
@@ -68,7 +74,7 @@ export function setAnalyticsEnabled(enabled: boolean) {
 }
 
 export function initAnalytics() {
-  if (ready || !analyticsEnabled()) return;
+  if (ready || !analyticsEnabled() || !TOKEN) return;
   posthog.init(TOKEN, {
     api_host: "https://us.i.posthog.com",
     autocapture: false, // never capture clicked-element text (conversation leak)
@@ -86,8 +92,8 @@ export function initAnalytics() {
   // one-time install marker — app_first_open counts installs (the closest
   // truth to "downloads that mattered"; raw download counts live on the
   // GitHub release assets)
-  if (!localStorage.getItem("omb-installed")) {
-    localStorage.setItem("omb-installed", new Date().toISOString());
+  if (!localStorage.getItem("mb-installed")) {
+    localStorage.setItem("mb-installed", new Date().toISOString());
     posthog.capture("app_first_open", { platform });
   }
   posthog.capture("app_opened", { platform });
@@ -109,7 +115,7 @@ export function identifyEmail(email: string) {
 }
 
 // first-run email gate state
-const GATE_KEY = "omb-email-gate";
+const GATE_KEY = "mb-email-gate";
 export function emailGateDone(): boolean {
   return Boolean(localStorage.getItem(GATE_KEY));
 }

@@ -29,7 +29,7 @@ describe("team manifests", () => {
     );
 
     expect(manifest).toMatchObject({
-      format: "openmaus.team",
+      format: "magicbots.team",
       version: 2,
       team: {
         name: "Launch Crew",
@@ -83,7 +83,7 @@ describe("team manifests", () => {
 
   it("parses room-free version 2 files", () => {
     const manifest = parseTeamManifest({
-      format: "openmaus.team",
+      format: "magicbots.team",
       version: 2,
       team: {
         name: "Engineering",
@@ -104,7 +104,7 @@ describe("team manifests", () => {
   });
 
   it("rejects unsupported versions and dangling member references", () => {
-    expect(() => parseTeamManifest({ format: "openmaus.team", version: 99 })).toThrow("not supported");
+    expect(() => parseTeamManifest({ format: "magicbots.team", version: 99 })).toThrow("not supported");
     expect(() =>
       parseTeamManifest({
         format: "openmaus.team",
@@ -159,9 +159,22 @@ describe("team manifests", () => {
     ).toThrow("appearance.color");
   });
 
-  it("drops privileged fields a hand-edited file smuggles onto a member", () => {
+  it("accepts pre-rename files and normalizes the format", () => {
     const manifest = parseTeamManifest({
       format: "openmaus.team",
+      version: 2,
+      team: {
+        name: "Before",
+        members: [{ key: "lead", name: "Ada", appearance: { color: "purple" } }],
+      },
+    });
+    expect(manifest.format).toBe("magicbots.team");
+    expect(manifest.team.name).toBe("Before");
+  });
+
+  it("drops privileged fields a hand-edited file smuggles onto a member", () => {
+    const manifest = parseTeamManifest({
+      format: "magicbots.team",
       version: 2,
       team: {
         name: "Trap",

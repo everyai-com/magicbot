@@ -1,5 +1,5 @@
 // Bot avatar — a circular, expressive character wrapped in the app's
-// historical MausAvatar API so no call site changes. Per-bot color paints the
+// historical MascotAvatar API so no call site changes. Per-bot color paints the
 // ring while live state drives the eyes, pose, and small ambient effects.
 import {
   forwardRef,
@@ -10,13 +10,13 @@ import {
   useState,
   type PointerEvent as ReactPointerEvent,
 } from "react";
-import { MAUS_COLORS, type MausColor, type MausMotion, type MausState } from "@/lib/mascot";
+import { MASCOT_COLORS, type MascotColor, type MascotMotion, type MascotState } from "@/lib/mascot";
 import { CircleBotAvatar, type CircleBotAvatarHandle } from "./CircleBotAvatar";
 import { botAvatarProfile, type BotAvatarCrop } from "../../shared/bot-avatar";
 import { normalizeBotPersonality, type BotPersonality } from "../../shared/bot-personality";
 
 /**
- * Legacy face-placement knobs from the Maus body era. The cursor mascot
+ * Legacy face-placement knobs from the Bot body era. The cursor mascot
  * places its own face; these remain only so the preview harness's sliders
  * keep compiling — the matching props are accepted and ignored.
  */
@@ -34,7 +34,7 @@ const POINTER_GAZE = { forward: 1, authored: 0.25 };
 
 /** Ambient pointer attention is deliberately low priority. Important product
  * states keep their authored gaze instead of being interrupted by a cursor. */
-const POINTER_ATTENTION_STATES = new Set<MausState>([
+const POINTER_ATTENTION_STATES = new Set<MascotState>([
   "idle",
   "happy",
   "curious",
@@ -51,7 +51,7 @@ const POINTER_ATTENTION_STATES = new Set<MausState>([
  */
 interface MotionFaces
   extends Partial<
-    Record<Exclude<MausMotion, "none">, { state?: MausState; blink?: boolean; spin?: number }>
+    Record<Exclude<MascotMotion, "none">, { state?: MascotState; blink?: boolean; spin?: number }>
   > {}
 
 const MOTION_FACE: MotionFaces = {
@@ -91,22 +91,22 @@ function mix(hex: string, toward: string, t: number): string {
  * shadow), with the same light/dark spread as the pack's default green
  * ["#9FE6B5", "#3FAE6E", "#1C7A4C"].
  */
-const gradientFor = (color: MausColor): [string, string, string] => {
-  const fill = MAUS_COLORS[color] ?? MAUS_COLORS.green;
+const gradientFor = (color: MascotColor): [string, string, string] => {
+  const fill = MASCOT_COLORS[color] ?? MASCOT_COLORS.green;
   return [mix(fill, "#ffffff", 0.55), fill, mix(fill, "#000000", 0.42)];
 };
 
-export type MausAvatarHandle = CircleBotAvatarHandle;
+export type MascotAvatarHandle = CircleBotAvatarHandle;
 
-export type MausAvatarProps = {
-  color: MausColor;
+export type MascotAvatarProps = {
+  color: MascotColor;
   /** Named behaviour — drives the expression pool, its cadence and blinking. */
-  state?: MausState;
+  state?: MascotState;
   /** Pin one of the 25 faces and stop the state's own drift. */
   expression?: number;
   size?: number;
   label?: string;
-  motion?: MausMotion;
+  motion?: MascotMotion;
   motionKey?: number;
   /** Head turn in degrees. */
   turn?: number;
@@ -124,7 +124,7 @@ export type MausAvatarProps = {
   trackPointer?: boolean;
   /** Run the animation. Off renders the state's resting face. */
   animated?: boolean;
-  /** Legacy Maus face-placement knobs — accepted, ignored. */
+  /** Legacy Bot face-placement knobs — accepted, ignored. */
   eyeSpacing?: number;
   faceX?: number;
   faceY?: number;
@@ -132,7 +132,7 @@ export type MausAvatarProps = {
   personality?: BotPersonality;
 };
 
-function MausAvatarComponent(
+function MascotAvatarComponent(
   {
     color,
     state = "idle",
@@ -151,8 +151,8 @@ function MausAvatarComponent(
     trackPointer = true,
     animated = true,
     personality = "friendly",
-  }: MausAvatarProps,
-  ref: React.Ref<MausAvatarHandle>,
+  }: MascotAvatarProps,
+  ref: React.Ref<MascotAvatarHandle>,
 ) {
   const inner = useRef<CircleBotAvatarHandle>(null);
   useImperativeHandle(ref, () => ({
@@ -162,7 +162,7 @@ function MausAvatarComponent(
   }));
 
   // A one-shot motion borrows the state for a moment, then hands it back.
-  const [motionState, setMotionState] = useState<MausState | null>(null);
+  const [motionState, setMotionState] = useState<MascotState | null>(null);
   useEffect(() => {
     if (motion === "none" || !animated) return;
     const beat = MOTION_FACE[motion];
@@ -219,12 +219,12 @@ function MausAvatarComponent(
   );
 }
 
-export const MausAvatar = memo(forwardRef(MausAvatarComponent));
+export const MascotAvatar = memo(forwardRef(MascotAvatarComponent));
 
-export type BotAvatarProps = Omit<MausAvatarProps, "color"> & {
+export type BotAvatarProps = Omit<MascotAvatarProps, "color"> & {
   bot: {
     name?: string;
-    color: MausColor;
+    color: MascotColor;
     avatarUrl?: string | null;
     avatarCrop?: BotAvatarCrop;
     personality?: BotPersonality;
@@ -244,7 +244,7 @@ export function BotAvatar({ bot, size = 44, label, ...mascotProps }: BotAvatarPr
 
   if (profile.avatarCrop === "mascot" || !profile.avatarUrl || imageFailed) {
     return (
-      <MausAvatar
+      <MascotAvatar
         {...mascotProps}
         color={bot.color}
         size={size}

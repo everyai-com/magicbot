@@ -245,8 +245,8 @@ export function CompanionSection() {
         subtitle={
           state.pairing
             ? pairingLink
-              ? "Scan with your phone's Camera, then confirm in OpenMausMobile. You can also use the code manually."
-              : "Open OpenMausMobile, choose this computer, and enter the code."
+              ? "Scan with your phone's Camera, then confirm in MagicBotsMobile. You can also use the code manually."
+              : "Open MagicBotsMobile, choose this computer, and enter the code."
             : state.enabled
               ? "Open a short, single-use pairing window for a trusted phone."
               : "This turns on Companion and opens a short, single-use pairing window in one step."

@@ -122,7 +122,7 @@ async function main(cliArgs = process.argv.slice(2)) {
   // The JSON summary goes to a scratch file, not stdout: the default reporter
   // owns stdout so humans still get the live report, and a file cannot be
   // corrupted by interleaved test output the way a piped stream can.
-  const scratch = mkdtempSync(join(tmpdir(), "omb-test-floor-"));
+  const scratch = mkdtempSync(join(tmpdir(), "mb-test-floor-"));
   const summaryFile = join(scratch, "vitest-summary.json");
 
   const exitCode = await new Promise((resolve, reject) => {

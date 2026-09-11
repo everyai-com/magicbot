@@ -17,7 +17,7 @@
     <g clip-path="url(#tile)">
       <rect width="1024" height="1024" fill="#000000" />
 
-      <!-- SupaMaus body with the face cut out (evenodd). Oversized on purpose:
+      <!-- SupaBot body with the face cut out (evenodd). Oversized on purpose:
            it runs off the left and bottom and is cropped by the tile, but the
            cursor's point is held clear of the top-right corner so that corner
            keeps its gap. Geometry is the brand vector's, rotated 71.1 from its

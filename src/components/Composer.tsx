@@ -4,7 +4,7 @@ import { ArrowUp, Clock, Mic, Paperclip, Square, Users, X } from "lucide-react";
 import { isHostedChatSurface, useStore, visibleMessages, type Bot, type Group } from "@/state/store";
 import { cn } from "@/lib/cn";
 import { useComposerDraft } from "@/lib/drafts";
-import { MausAvatar } from "./Avatar";
+import { MascotAvatar } from "./Avatar";
 import { ComposerAttachments } from "./ComposerAttachments";
 import {
   composeMessage,
@@ -330,7 +330,7 @@ export function Composer({
                 )}
               >
                 {peer.bot ? (
-                  <MausAvatar
+                  <MascotAvatar
                     color={peer.bot.color}
                     state={normalizeState(peer.bot.mascotExpression) ?? "happy"}
                     personality={peer.bot.personality}

@@ -12,12 +12,12 @@
 export const CREDENTIAL_ENV_NAMES = [
   "XAI_API_KEY",
   "BOX_TOKEN",
-  "OMB_CF_COMPUTER_TOKEN",
+  "MB_CF_COMPUTER_TOKEN",
   "OPENCODE_API_KEY",
-  "OMB_TTS_KEY",
-  "OMB_OPENAI_IMAGE_KEY",
+  "MB_TTS_KEY",
+  "MB_OPENAI_IMAGE_KEY",
   "COMPOSIO_API_KEY",
-  "OMB_COMPOSIO_BROKER_TOKEN",
+  "MB_COMPOSIO_BROKER_TOKEN",
 ];
 
 // Credential-shaped tokens (server/redact.ts parity): unmistakable formats
@@ -112,7 +112,7 @@ export function buildDiagnosticsReport({
   now = new Date().toISOString(),
 } = {}) {
   const lines = [];
-  lines.push("OpenMausBot diagnostics");
+  lines.push("MagicBots diagnostics");
   lines.push(`Generated: ${now}`);
   lines.push("");
   lines.push("## App");
@@ -145,7 +145,7 @@ export function buildDiagnosticsReport({
 export function diagnosticsFileName(date = new Date()) {
   const pad = (n) => String(n).padStart(2, "0");
   return (
-    `openmausbot-diagnostics-${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}` +
+    `magicbots-diagnostics-${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}` +
     `-${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}.txt`
   );
 }

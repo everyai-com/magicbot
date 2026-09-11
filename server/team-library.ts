@@ -1,8 +1,8 @@
 import { parseJson, type JsonValue } from "./schema.ts";
 import { parseTeamManifest, type ParsedTeamManifest } from "./team-manifest.ts";
 
-export const TEAM_LIBRARY_REPOSITORY = "https://github.com/milind-soni/openmausbot-teams";
-export const TEAM_LIBRARY_RAW_ROOT = "https://raw.githubusercontent.com/milind-soni/openmausbot-teams/main";
+export const TEAM_LIBRARY_REPOSITORY = "https://github.com/everyai-com/magicbots-teams";
+export const TEAM_LIBRARY_RAW_ROOT = "https://raw.githubusercontent.com/everyai-com/magicbots-teams/main";
 export const TEAM_LIBRARY_CATALOG_URL = `${TEAM_LIBRARY_RAW_ROOT}/catalog.json`;
 
 const MAX_CATALOG_BYTES = 256_000;
@@ -20,8 +20,16 @@ export interface TeamCatalogEntry {
   requires: { apps: string[] };
 }
 
+export const TEAM_CATALOG_FORMAT = "magicbots.catalog" as const;
+/** Catalogs published before the MagicBots rename still load. */
+export const LEGACY_TEAM_CATALOG_FORMAT = "openmaus.catalog" as const;
+
+export const TEAM_MANIFEST_SUFFIX = ".magicbots.json" as const;
+/** Team files shared before the MagicBots rename keep working. */
+export const LEGACY_TEAM_MANIFEST_SUFFIX = ".mausteam.json" as const;
+
 export interface TeamCatalog {
-  format: "openmaus.catalog";
+  format: typeof TEAM_CATALOG_FORMAT;
   version: 1;
   repositoryUrl: typeof TEAM_LIBRARY_REPOSITORY;
   teams: TeamCatalogEntry[];
@@ -39,14 +47,20 @@ function text(value: unknown, field: string, max: number): string {
   return normalized;
 }
 
-function relativeFile(value: unknown, field: string, suffix: string, prefix: string): string {
+function relativeFile(
+  value: unknown,
+  field: string,
+  suffix: string | readonly string[],
+  prefix: string,
+): string {
   const path = text(value, field, 300);
+  const suffixes = Array.isArray(suffix) ? suffix : [suffix];
   if (
     path.startsWith("/") ||
     path.includes("\\") ||
     path.split("/").some((part) => !part || part === "." || part === "..") ||
     !path.startsWith(prefix) ||
-    !path.endsWith(suffix)
+    !suffixes.some((candidate) => path.endsWith(candidate))
   ) {
     throw new Error(`${field} is not a safe catalog path`);
   }
@@ -60,7 +74,11 @@ function stringList(value: unknown, field: string, maxItems: number): string[] {
 
 /** Validate the remotely maintained index before any of it reaches the renderer. */
 export function parseTeamCatalog(value: unknown): TeamCatalog {
-  if (!isRecord(value) || value.format !== "openmaus.catalog" || value.version !== 1) {
+  if (
+    !isRecord(value) ||
+    (value.format !== TEAM_CATALOG_FORMAT && value.format !== LEGACY_TEAM_CATALOG_FORMAT) ||
+    value.version !== 1
+  ) {
     throw new Error("The team library catalog is not supported");
   }
   if (!Array.isArray(value.teams) || value.teams.length > 100) {
@@ -82,7 +100,12 @@ export function parseTeamCatalog(value: unknown): TeamCatalog {
       name: text(raw.name, `${field}.name`, 100),
       summary: text(raw.summary, `${field}.summary`, 300),
       category: text(raw.category, `${field}.category`, 80),
-      manifest: relativeFile(raw.manifest, `${field}.manifest`, ".mausteam.json", prefix),
+      manifest: relativeFile(
+        raw.manifest,
+        `${field}.manifest`,
+        [TEAM_MANIFEST_SUFFIX, LEGACY_TEAM_MANIFEST_SUFFIX],
+        prefix,
+      ),
       readme: relativeFile(raw.readme, `${field}.readme`, "README.md", prefix),
       members:
         typeof raw.members === "number" && Number.isSafeInteger(raw.members) && raw.members > 0 && raw.members <= 200
@@ -97,7 +120,7 @@ export function parseTeamCatalog(value: unknown): TeamCatalog {
     };
   });
   return {
-    format: "openmaus.catalog",
+    format: TEAM_CATALOG_FORMAT,
     version: 1,
     repositoryUrl: TEAM_LIBRARY_REPOSITORY,
     teams,
@@ -160,8 +183,10 @@ export function githubManifestUrls(input: string): string[] {
     if (parts.length === 2) {
       const [owner, repo] = parts;
       return [
-        `https://raw.githubusercontent.com/${owner}/${repo}/main/team.mausteam.json`,
-        `https://raw.githubusercontent.com/${owner}/${repo}/master/team.mausteam.json`,
+        `https://raw.githubusercontent.com/${owner}/${repo}/main/team${TEAM_MANIFEST_SUFFIX}`,
+        `https://raw.githubusercontent.com/${owner}/${repo}/master/team${TEAM_MANIFEST_SUFFIX}`,
+        `https://raw.githubusercontent.com/${owner}/${repo}/main/team${LEGACY_TEAM_MANIFEST_SUFFIX}`,
+        `https://raw.githubusercontent.com/${owner}/${repo}/master/team${LEGACY_TEAM_MANIFEST_SUFFIX}`,
       ];
     }
     if (parts.length >= 5 && (parts[2] === "blob" || parts[2] === "raw")) {
@@ -190,5 +215,5 @@ export async function fetchGithubTeam(input: string, fetcher: Fetcher = fetch): 
       if ((error as { status?: number }).status !== 404) throw error;
     }
   }
-  throw lastError ?? new Error("No team.mausteam.json file was found in that repository");
+  throw lastError ?? new Error(`No team${TEAM_MANIFEST_SUFFIX} file was found in that repository`);
 }
