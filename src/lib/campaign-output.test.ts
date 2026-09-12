@@ -24,3 +24,9 @@ it('retrieves only the selected campaign output for each channel', async () => {
   })).toEqual([{ Result: 'Answered' }]);
   await expect(readCampaignOutput({ ...base, channel: 'SMS' }, async () => ({}))).rejects.toThrow();
 });
+
+it('accepts dollar campaign mentions while preserving existing at mentions', () => {
+  const campaigns = outputCampaigns([{ id: '1', name: 'Summer Sale' }], 'WhatsApp');
+  expect(findOutputCampaign('$Summer Sale', campaigns)).toEqual(campaigns[0]);
+  expect(findOutputCampaign('@Summer Sale', campaigns)).toEqual(campaigns[0]);
+});

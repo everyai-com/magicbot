@@ -22,3 +22,10 @@ describe('chat commands', () => {
     expect(() => campaignDraft('Launch | Buyers | Welcome', [...audiences, ...audiences], templates)).toThrow();
   });
 });
+
+it('treats a leading dollar mention as an output shortcut', () => {
+  expect(parseChatCommand('$')).toEqual({ name: 'output', args: '$' });
+  expect(parseChatCommand('$Summer Sale')).toEqual({ name: 'output', args: '$Summer Sale' });
+  expect(parseChatCommand('/output $Summer Sale')).toEqual({ name: 'output', args: '$Summer Sale' });
+  expect(parseChatCommand('Price is $20')).toBeNull();
+});

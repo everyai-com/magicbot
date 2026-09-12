@@ -2,13 +2,14 @@ export const chatCommands = [
   { name: 'create', description: 'Ask the Chief to create an agent: /create sales assistant' },
   { name: 'attach', description: 'Send files to a bot: /attach @Bot Name instructions' },
   { name: 'campaign', description: 'Save WhatsApp draft: /campaign name | audience | template' },
-  { name: 'output', description: 'Get campaign results: /output @Campaign Name' },
+  { name: 'output', description: 'Get campaign results: /output $Campaign Name' },
   { name: 'summarize', description: 'Summarize this conversation or attached files' },
   { name: 'history', description: 'Open call and campaign history' },
   { name: 'help', description: 'Show available commands' },
 ];
 
 export function parseChatCommand(text: string) {
+  if (text.trimStart().startsWith("$")) return { name: "output", args: text.trim() };
   const match = text.trimStart().match(/^\/(\w+)(?:\s+([\s\S]*))?$/);
   return match ? { name: match[1].toLowerCase(), args: (match[2] ?? '').trim() } : null;
 }

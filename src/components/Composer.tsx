@@ -180,24 +180,27 @@ export function Composer({
   const commandBusy = useRef(false);
   const [commandNotice, setCommandNotice] = useState("");
   const [campaignChoices, setCampaignChoices] = useState<OutputCampaign[]>([]);
+  const [campaignChoicesLoading, setCampaignChoicesLoading] = useState(false);
   const [campaignChoiceError, setCampaignChoiceError] = useState("");
   const [output, setOutput] = useState<{ campaign: OutputCampaign; rows: Record<string, unknown>[] } | null>(null);
   useEffect(() => {
     if (!outputMode) return;
     let alive = true;
+    setCampaignChoicesLoading(true);
     setCampaignChoices([]);
     setCampaignChoiceError("");
     Promise.allSettled(Object.entries(outputRoots).map(async ([channel, root]) =>
       outputCampaigns(await api("/api/campaign-workspace/" + root), channel as OutputCampaign["channel"])
     )).then(results => {
       if (!alive) return;
+      setCampaignChoicesLoading(false);
       setCampaignChoices(results.flatMap(result => result.status === "fulfilled" ? result.value : []));
       const failed = results.flatMap((result, i) => result.status === "rejected" ? [Object.keys(outputRoots)[i]] : []);
       if (failed.length) setCampaignChoiceError("Could not load " + failed.join(", ") + " campaigns. Re-enter /output to retry.");
     });
     return () => { alive = false; };
   }, [outputMode]);
-  const outputQuery = (parseChatCommand(text)?.args ?? "").replace(/^@/, "").toLowerCase();
+  const outputQuery = (parseChatCommand(text)?.args ?? "").replace(/^[@$]/, "").toLowerCase();
   const outputChoices = campaignChoices.filter(row => !outputQuery || row.name.toLowerCase().includes(outputQuery) || (row.channel + ":" + row.id).toLowerCase() === outputQuery).slice(0, 8);
   const slashChoices = /^\/\w*$/.test(text) ? chatCommands.filter(command => command.name.startsWith(text.slice(1).toLowerCase())) : [];
   const send = async () => {
@@ -401,9 +404,11 @@ export function Composer({
         {output.rows.length ? <CampaignOutcomes key={output.campaign.channel + output.campaign.id} rows={output.rows} campaignName={output.campaign.name} resultValues={output.rows.map(row => String(row.Result ?? row.status ?? row.result ?? ""))} onExport={() => {}} /> : <p className="text-sm text-ink-secondary">No outcomes recorded yet. Campaign status: {output.campaign.status || "unknown"}.</p>}
       </section>}
       {outputMode && <div className="mb-2 max-h-44 overflow-auto rounded-xl border border-hairline/40 bg-card p-2" aria-label="Mention a campaign">
+        {campaignChoicesLoading && <p role="status" className="p-2 text-sm text-ink-secondary">Loading campaigns…</p>}
+        {!campaignChoicesLoading && !outputChoices.length && !campaignChoiceError && <p role="status" className="p-2 text-sm text-ink-secondary">No matching campaigns.</p>}
         {campaignChoiceError && <p role="status" className="p-2 text-sm text-ink-secondary">{campaignChoiceError}</p>}
-        {outputChoices.map(campaign => <button type="button" key={campaign.channel + campaign.id} className="block w-full rounded-lg px-3 py-2 text-left text-sm hover:bg-raised" onClick={() => { setText("/output @" + (campaignChoices.filter(row => row.name.toLowerCase() === campaign.name.toLowerCase()).length === 1 ? campaign.name : campaign.channel + ":" + campaign.id)); inputRef.current?.focus(); }}>
-          @{campaign.name} <span className="text-ink-secondary">— {campaign.channel} · {campaign.status}</span>
+        {outputChoices.map(campaign => <button type="button" key={campaign.channel + campaign.id} className="block w-full rounded-lg px-3 py-2 text-left text-sm hover:bg-raised" onClick={() => { setText("/output $" + (campaignChoices.filter(row => row.name.toLowerCase() === campaign.name.toLowerCase()).length === 1 ? campaign.name : campaign.channel + ":" + campaign.id)); inputRef.current?.focus(); }}>
+          ${campaign.name} <span className="text-ink-secondary">— {campaign.channel} · {campaign.status}</span>
         </button>)}
       </div>}
       {commandNotice && <div role="status" className="mb-2 whitespace-pre-wrap text-sm text-ink-secondary">{commandNotice}</div>}
