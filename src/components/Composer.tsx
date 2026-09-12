@@ -1,7 +1,10 @@
+import { findOutputCampaign, outputCampaigns, outputRoots, readCampaignOutput, type OutputCampaign } from "@/lib/campaign-output";
+import { CampaignOutcomes } from "./CampaignOutcomes";
+import { attachmentTarget, campaignDraft, chatCommands, parseChatCommand } from "@/lib/chat-commands";
 import { track } from "@/lib/analytics";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowUp, Clock, Mic, Paperclip, Square, Users, X } from "lucide-react";
-import { isHostedChatSurface, useStore, visibleMessages, type Bot, type Group } from "@/state/store";
+import { api, isHostedChatSurface, useStore, visibleMessages, type Bot, type Group } from "@/state/store";
 import { cn } from "@/lib/cn";
 import { useComposerDraft } from "@/lib/drafts";
 import { MausAvatar } from "./Avatar";
@@ -105,6 +108,11 @@ export function Composer({
         state.instances.find((i) => i.instanceId === candidate.modelSelection.instanceId)?.capabilities?.images,
     );
   const imageTargetsSupport = (message: string) => {
+    const command = parseChatCommand(message);
+    if (command?.name === "attach") {
+      try { return botSupportsImages(attachmentTarget(command.args, state.bots.filter(item => !item.hidden)).bot); }
+      catch { return false; }
+    }
     if (!group) return botSupportsImages(bot);
     const responders = roomRespondersForComposer(message, members ?? [], group);
     return responders.length > 0 && responders.every(botSupportsImages);
@@ -112,7 +120,8 @@ export function Composer({
   const engineSupportsImages = imageTargetsSupport(text);
 
   // ── @mention picker (tag another bot; the agent reaches it via ask_bot) ──
-  const mention = mentionQueryAt(text, caret);
+  const outputMode = parseChatCommand(text)?.name === "output";
+  const mention = outputMode ? null : mentionQueryAt(text, caret);
   const candidates = useMemo(() => {
     if (!mention || mention.start === dismissedAt) return [];
     const pool: MentionChoice[] = group
@@ -121,14 +130,14 @@ export function Composer({
           ...(members ?? []).map((member) => ({ id: member.id, name: member.name, bot: member })),
         ]
       : state.bots
-          .filter((member) => member.id !== bot?.id && !member.hidden)
+          .filter((member) => (member.id !== bot?.id || parseChatCommand(text)?.name === "attach") && !member.hidden)
           .map((member) => ({ id: member.id, name: member.name, bot: member }));
     const q = mention.query.trim().toLowerCase();
     // "@Scout " — the full name plus a space — is a COMPLETED tag, not a
     // search: keep the picker closed so Enter sends instead of re-picking
     if (mention.query.endsWith(" ") && pool.some((b) => b.name.toLowerCase() === q)) return [];
     return pool.filter((b) => !q || b.name.toLowerCase().includes(q)).slice(0, 6);
-  }, [mention, dismissedAt, state.bots, bot?.id, group, members]);
+  }, [mention, dismissedAt, state.bots, bot?.id, group, members, text]);
   const pickerOpen = candidates.length > 0;
 
   useEffect(() => setHighlight(0), [mention?.start, mention?.query]);
@@ -168,13 +177,112 @@ export function Composer({
       : undefined;
   // a chip on its own is a message: the send control has to appear for it
   const hasContent = Boolean(text.trim()) || attachments.length > 0;
-  const send = () => {
-    if (locked) return;
+  const commandBusy = useRef(false);
+  const [commandNotice, setCommandNotice] = useState("");
+  const [campaignChoices, setCampaignChoices] = useState<OutputCampaign[]>([]);
+  const [campaignChoiceError, setCampaignChoiceError] = useState("");
+  const [output, setOutput] = useState<{ campaign: OutputCampaign; rows: Record<string, unknown>[] } | null>(null);
+  useEffect(() => {
+    if (!outputMode) return;
+    let alive = true;
+    setCampaignChoices([]);
+    setCampaignChoiceError("");
+    Promise.allSettled(Object.entries(outputRoots).map(async ([channel, root]) =>
+      outputCampaigns(await api("/api/campaign-workspace/" + root), channel as OutputCampaign["channel"])
+    )).then(results => {
+      if (!alive) return;
+      setCampaignChoices(results.flatMap(result => result.status === "fulfilled" ? result.value : []));
+      const failed = results.flatMap((result, i) => result.status === "rejected" ? [Object.keys(outputRoots)[i]] : []);
+      if (failed.length) setCampaignChoiceError("Could not load " + failed.join(", ") + " campaigns. Re-enter /output to retry.");
+    });
+    return () => { alive = false; };
+  }, [outputMode]);
+  const outputQuery = (parseChatCommand(text)?.args ?? "").replace(/^@/, "").toLowerCase();
+  const outputChoices = campaignChoices.filter(row => !outputQuery || row.name.toLowerCase().includes(outputQuery) || (row.channel + ":" + row.id).toLowerCase() === outputQuery).slice(0, 8);
+  const slashChoices = /^\/\w*$/.test(text) ? chatCommands.filter(command => command.name.startsWith(text.slice(1).toLowerCase())) : [];
+  const send = async () => {
+    if (locked || commandBusy.current) return;
+    let message = text;
+    let target = bot;
+    const command = parseChatCommand(text);
+    if (command) {
+      setCommandNotice("");
+      try {
+        if (!chatCommands.some(item => item.name === command.name)) throw new Error("Unknown command. Type /help to see available commands.");
+        if (command.name === "help") {
+          setCommandNotice(chatCommands.map(item => "/" + item.name + " — " + item.description).join("\n"));
+          return;
+        }
+        if (command.name === "history") {
+          dispatch({ type: "toggleAppSettings", open: true, section: "usage" });
+          setText("");
+          return;
+        }
+        if (command.name === "output") {
+          if (attachments.length) throw new Error("/output reads saved campaign results. Remove attachments first.");
+          const campaign = findOutputCampaign(command.args, campaignChoices);
+          commandBusy.current = true;
+          setOutput(null);
+          setCommandNotice("Loading campaign output…");
+          const rows = await readCampaignOutput(campaign, path => api("/api/campaign-workspace/" + path));
+          setOutput({ campaign, rows });
+          setCommandNotice("");
+          return;
+        }
+        if (command.name === "campaign") {
+          if (attachments.length) throw new Error("Campaign drafts use an existing audience and template. Import contacts in Campaigns first.");
+          commandBusy.current = true;
+          const [audiences, templates] = await Promise.all([
+            api("/api/campaign-workspace/whatsapp/audiences"),
+            api("/api/campaign-workspace/whatsapp/templates"),
+          ]);
+          if (!Array.isArray(audiences) || !Array.isArray(templates)) throw new Error("Could not load campaign audiences and templates.");
+          const payload = campaignDraft(command.args, audiences, templates);
+          await api("/api/campaign-workspace/whatsapp/campaigns", { method: "POST", body: JSON.stringify(payload) });
+          window.dispatchEvent(new Event("campaign-workspace-changed"));
+          setCommandNotice("Saved WhatsApp draft: " + payload.name + ". Review and start it in Campaigns.");
+          setText("");
+          return;
+        }
+        if (command.name === "attach") {
+          const selected = attachmentTarget(command.args, state.bots.filter(item => !item.hidden));
+          target = selected.bot;
+          if (!attachments.length) {
+            fileInputRef.current?.click();
+            throw new Error("Choose a file, then send /attach again.");
+          }
+          message = selected.instructions || "Read the attached files and use them as context for this conversation.";
+        }
+        if (command.name === "create") {
+          if (!command.args) throw new Error("Describe the agent, for example: /create a sales assistant for property enquiries");
+          target = bot?.chiefOfStaff ? bot : state.bots.find(item => item.chiefOfStaff && !item.hidden && (item.section ?? "") === (bot?.section ?? ""));
+          if (!target) throw new Error("Open your Chief of Staff chat to create an agent.");
+          message = "Create a specialist agent for this request using create_bot. Ask for missing essential details if needed. Report success only after the tool confirms creation. Request: " + command.args;
+        }
+        if (command.name === "summarize") message = "Summarize this conversation and any attached files, including decisions and next actions. " + command.args;
+      } catch (error) {
+        setCommandNotice(error instanceof Error ? error.message : "Command failed.");
+        return;
+      } finally {
+        commandBusy.current = false;
+      }
+    }
+    if (command && (command.name === "attach" || command.name === "create") && target) {
+      if (attachments.some(item => item.kind === "image") && !botSupportsImages(target)) {
+        setCommandNotice("The target bot does not support image attachments.");
+        return;
+      }
+      dispatch({ type: "send", botId: target.id, text: composeMessage(message, attachments) });
+      dispatch({ type: "select", id: target.id });
+      setText("");
+      setAttachments([]);
+      return;
+    }
     if (attachments.some((attachment) => attachment.kind === "image") && !imageTargetsSupport(text)) {
       dispatch({ type: "error", message: "The selected responder does not support image attachments." });
       return;
     }
-    const t = composeMessage(text, attachments);
+    const t = composeMessage(message, attachments);
     if (!t) return;
     if (busy && group) {
       setQueued(t);
@@ -288,6 +396,22 @@ export function Composer({
 
   return (
     <div className="shrink-0 border-t border-hairline/30 bg-app/95 px-4 pb-[max(0.6rem,env(safe-area-inset-bottom))] pt-2.5 backdrop-blur-xl sm:px-10 sm:pb-5 sm:pt-3">
+      {output && <section aria-label="Campaign output" className="mb-3 max-h-80 overflow-auto rounded-xl border border-hairline/40 bg-card p-3">
+        <div className="mb-3 flex items-center justify-between gap-2"><h3 className="font-medium">{output.campaign.name} — {output.campaign.channel} output</h3><button type="button" aria-label="Close campaign output" onClick={() => setOutput(null)}><X size={18} /></button></div>
+        {output.rows.length ? <CampaignOutcomes key={output.campaign.channel + output.campaign.id} rows={output.rows} campaignName={output.campaign.name} resultValues={output.rows.map(row => String(row.Result ?? row.status ?? row.result ?? ""))} onExport={() => {}} /> : <p className="text-sm text-ink-secondary">No outcomes recorded yet. Campaign status: {output.campaign.status || "unknown"}.</p>}
+      </section>}
+      {outputMode && <div className="mb-2 max-h-44 overflow-auto rounded-xl border border-hairline/40 bg-card p-2" aria-label="Mention a campaign">
+        {campaignChoiceError && <p role="status" className="p-2 text-sm text-ink-secondary">{campaignChoiceError}</p>}
+        {outputChoices.map(campaign => <button type="button" key={campaign.channel + campaign.id} className="block w-full rounded-lg px-3 py-2 text-left text-sm hover:bg-raised" onClick={() => { setText("/output @" + (campaignChoices.filter(row => row.name.toLowerCase() === campaign.name.toLowerCase()).length === 1 ? campaign.name : campaign.channel + ":" + campaign.id)); inputRef.current?.focus(); }}>
+          @{campaign.name} <span className="text-ink-secondary">— {campaign.channel} · {campaign.status}</span>
+        </button>)}
+      </div>}
+      {commandNotice && <div role="status" className="mb-2 whitespace-pre-wrap text-sm text-ink-secondary">{commandNotice}</div>}
+      {slashChoices.length > 0 && <div aria-label="Chat commands" className="mb-2 rounded-xl border border-hairline/40 bg-card p-2">
+        {slashChoices.map(command => <button key={command.name} type="button" className="block w-full rounded-lg px-3 py-2 text-left text-sm hover:bg-raised" onClick={() => { setText("/" + command.name + " "); inputRef.current?.focus(); }}>
+          <span className="font-medium text-accent">/{command.name}</span> <span className="text-ink-secondary">{command.description}</span>
+        </button>)}
+      </div>}
       {speechError && (
         <div className="mx-auto mb-2 max-w-none rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-[12px] text-warning">
           {speechError}
