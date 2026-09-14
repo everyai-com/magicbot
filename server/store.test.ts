@@ -1,12 +1,13 @@
 // Store persistence contract: bots.json + messages-<threadId>.json are
 // the durable record — everything here must survive a process restart
 // except `busy`, which never does (no turn survives one either).
-import { readFileSync, rmSync, writeFileSync } from "node:fs";
+import { readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { DATA_DIR } from "./config.ts";
 import type { ModelSelection } from "./contracts.ts";
+import { automaticBotAppearance, AUTO_BOT_COLORS } from "../shared/bot-personality.ts";
 import { peerAllowKey } from "./peer-approval-key.ts";
 import { Store, type BotRecord } from "./store.ts";
 
@@ -15,6 +16,18 @@ const selection = (): ModelSelection => ({ instanceId: "claude", model: "claude-
 describe("Store", () => {
   beforeEach(() => {
     rmSync(DATA_DIR, { recursive: true, force: true });
+  });
+
+  // Every sibling state file (config.json, decisions.ndjson, webhooks.json)
+  // is 0600; these two were written at the umask default inside a 0755 data
+  // dir, so any other local account could read the bot roster.
+  it.skipIf(process.platform === "win32")("writes its state files private to the user", () => {
+    const store = new Store(selection);
+    const bot = store.createBot();
+    store.createGroup("Standup", [bot.id], false);
+    for (const name of ["bots.json", "groups.json"]) {
+      expect(statSync(join(DATA_DIR, name)).mode & 0o777, name).toBe(0o600);
+    }
   });
 
   it("createBot seeds a greeting and an onboarding card", () => {
@@ -95,11 +108,22 @@ describe("Store", () => {
     expect(reloaded.bot(bot.id)?.composio).toBe(false);
   });
 
-  it("rotates colors across created bots", () => {
+  // This used to assert that two freshly created bots differ in colour. The
+  // colour is a hash of the bot's random id over a ten-colour palette, so that
+  // assertion failed about one run in ten — it tested the dice, not the code.
+  // The contract that actually holds is the one the deriving function
+  // documents: a colour from the palette, stable for a given id.
+  it("gives every bot a palette colour that is stable for its id", () => {
     const store = new Store(selection);
     const first = store.createBot();
     const second = store.createBot();
-    expect(first.color).not.toBe(second.color);
+
+    for (const bot of [first, second]) {
+      expect(AUTO_BOT_COLORS).toContain(bot.color);
+      expect(bot.color).toBe(automaticBotAppearance(bot.id).color);
+    }
+    // and it survives a reload, because it is derived from the stored id
+    expect(new Store(selection).bot(first.id)?.color).toBe(first.color);
   });
 
   it("defaults a room to its first member and repairs the lead when membership changes", () => {
