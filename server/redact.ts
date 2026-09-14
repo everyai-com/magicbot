@@ -69,12 +69,12 @@ export function redactSecretsInText(text: string): string {
   return out;
 }
 
-/** Deep copy with credential VALUES replaced. Handles the two shapes that
- * actually carry them: a plain object of env vars ({KEY: "v"}) and the ACP
- * wire shape (env: [{name, value}]). Anything unrecognised is copied as-is. */
 const MAX_DEPTH = 12;
 const TOO_DEEP = "«redacted: nested too deep to scan»";
 
+/** Deep copy with credential VALUES replaced. Handles the two shapes that
+ * actually carry them: a plain object of env vars ({KEY: "v"}) and the ACP
+ * wire shape (env: [{name, value}]). Anything unrecognised is copied as-is. */
 export function redactSecrets(input: unknown, depth = 0): unknown {
   if (typeof input === "string") return redactSecretsInText(input);
   if (input === null || typeof input !== "object") return input;
