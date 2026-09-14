@@ -469,9 +469,9 @@ const askMessageByRequest = new Map<string, string>(); // threadId:requestId -> 
  * the engine has no asks — is fail-closed: the action was never run. The
  * card is settled and a chip says so, instead of the answer vanishing into
  * a 500 while the card sits open forever. */
-/** The one-line "why did this stop?" on an approval card. Null when nothing
- * was granted in the first place — then the card is simply the normal way a
- * permission is asked, and saying "it stopped" would be noise. */
+/** The one-line "why did this stop?" on an approval card. Undefined when
+ * nothing was granted in the first place — then the card is simply the normal
+ * way a permission is asked, and saying "it stopped" would be noise. */
 function heldReason(verdict: AutoVerdict | null): string | undefined {
   switch (verdict?.source) {
     case "unattended-block":
@@ -505,11 +505,6 @@ function answeredVia(req: IncomingMessage): "user" | "api" {
   return origin && isAllowedOrigin(origin) ? "user" : "api";
 }
 
-/** Write down a widening of what this bot may do without a human.
- *
- * These three fields decide what runs unattended, and the loopback API cannot
- * authenticate its caller (see answeredVia). Narrowings are not logged: taking
- * a permission away is never the thing an auditor is hunting for. */
 interface PermissionSnapshot {
   autoApprove: boolean;
   approvePeerComms: boolean;
@@ -522,6 +517,11 @@ const permissionSnapshot = (bot: BotRecord | null | undefined): PermissionSnapsh
   alwaysAllow: [...(bot?.alwaysAllow ?? [])],
 });
 
+/** Write down a widening of what this bot may do without a human.
+ *
+ * These three fields decide what runs unattended, and the loopback API cannot
+ * authenticate its caller (see answeredVia). Narrowings are not logged: taking
+ * a permission away is never the thing an auditor is hunting for. */
 function logPermissionChange(
   before: PermissionSnapshot,
   after: BotRecord,
