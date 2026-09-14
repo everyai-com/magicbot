@@ -135,7 +135,15 @@ export type WebhookManagerEvent =
   | { kind: "webhook.deleted"; webhookId: string }
   | { kind: "webhook.attempt"; attempt: WebhookAttempt };
 
-const MAX_DELIVERIES = 2_000;
+/** Delivery receipts are what make a provider's retry idempotent, so they are
+ * retained PER ENDPOINT: one global list meant a busy webhook evicted a quiet
+ * one's receipts and the quiet one's retry ran its task again. Providers retry
+ * for hours (GitHub) to days (Stripe), so the age bound is what matters; the
+ * per-endpoint count is a backstop against a flood, and the absolute cap keeps
+ * a workspace with many webhooks bounded. */
+const MAX_DELIVERIES_PER_ENDPOINT = 500;
+const DELIVERY_TTL_MS = 7 * 24 * 60 * 60_000;
+const MAX_DELIVERIES = 20_000;
 const MAX_ATTEMPTS = 2_000;
 const MAX_EVENT_CHARS = 48_000;
 const RATE_WINDOW_MS = 60_000;
@@ -541,9 +549,7 @@ export class WebhookManager {
       receivedAt: now,
     });
     this.deliveries.push({ key: `${trigger.endpointId}:${deliveryId}`, runId: run.id, at: now });
-    if (this.deliveries.length > MAX_DELIVERIES) {
-      this.deliveries.splice(0, this.deliveries.length - MAX_DELIVERIES);
-    }
+    this.pruneDeliveries(trigger.endpointId, now);
     trigger.lastReceivedAt = now;
     trigger.lastRunId = run.id;
     trigger.deliveryCount += 1;
@@ -616,6 +622,25 @@ export class WebhookManager {
     if (this.attempts.length > MAX_ATTEMPTS) this.attempts.splice(0, this.attempts.length - MAX_ATTEMPTS);
     this.options.emit?.({ kind: "webhook.attempt", attempt: { ...attempt } });
     return attempt;
+  }
+
+  /** Drop receipts that can no longer make a retry idempotent: older than the
+   * retry window providers use, beyond this endpoint's own backstop, or past
+   * the absolute ceiling. Scoped to the endpoint that just received, so
+   * traffic on one webhook never evicts another's. */
+  private pruneDeliveries(endpointId: string, now: number): void {
+    const prefix = `${endpointId}:`;
+    let own = 0;
+    // walk newest first, so the per-endpoint backstop keeps the most recent
+    for (let index = this.deliveries.length - 1; index >= 0; index -= 1) {
+      const delivery = this.deliveries[index]!;
+      const expired = now - delivery.at > DELIVERY_TTL_MS;
+      const overflow = delivery.key.startsWith(prefix) && ++own > MAX_DELIVERIES_PER_ENDPOINT;
+      if (expired || overflow) this.deliveries.splice(index, 1);
+    }
+    if (this.deliveries.length > MAX_DELIVERIES) {
+      this.deliveries.splice(0, this.deliveries.length - MAX_DELIVERIES);
+    }
   }
 
   private emit(trigger: StoredWebhookTrigger): void {
