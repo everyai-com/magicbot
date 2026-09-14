@@ -44,7 +44,15 @@ const KEY_PREFIXES: RegExp[] = [
   /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g, // jwt
 ];
 const BEARER = /(\bBearer\s+)([A-Za-z0-9._~+/=-]{12,})/g;
-const PEM_BLOCK = /(-----BEGIN [A-Z ]*PRIVATE KEY-----)([\s\S]*?)(-----END [A-Z ]*PRIVATE KEY-----)/g;
+/** A PEM body is base64 and whitespace, nothing else, and it is bounded.
+ *
+ * `[\s\S]*?` here was quadratic: an opener with no closer sent the engine
+ * scanning to end-of-string, once per opener, and this runs synchronously on
+ * the bus fold — a reply full of openers stalled every bot in the fleet. A
+ * character class that a PEM body actually uses fails at the first `-` of the
+ * next opener instead, and the bound caps the worst case outright. 8 KB clears
+ * an RSA-4096 body (~3.2 KB) with room to spare. */
+const PEM_BLOCK = /(-----BEGIN [A-Z ]*PRIVATE KEY-----)([A-Za-z0-9+/=\s]{0,8192}?)(-----END [A-Z ]*PRIVATE KEY-----)/g;
 /** key=value / key: value / key="value" where the key is secret-shaped.
  * The value must be a single token of some length; prose after a colon
  * ("password: leave blank…") has spaces and does not match. */
@@ -64,9 +72,17 @@ export function redactSecretsInText(text: string): string {
 /** Deep copy with credential VALUES replaced. Handles the two shapes that
  * actually carry them: a plain object of env vars ({KEY: "v"}) and the ACP
  * wire shape (env: [{name, value}]). Anything unrecognised is copied as-is. */
+const MAX_DEPTH = 12;
+const TOO_DEEP = "«redacted: nested too deep to scan»";
+
 export function redactSecrets(input: unknown, depth = 0): unknown {
   if (typeof input === "string") return redactSecretsInText(input);
-  if (depth > 12 || input === null || typeof input !== "object") return input;
+  if (input === null || typeof input !== "object") return input;
+  // Past the recursion ceiling the subtree is DROPPED, not returned. Returning
+  // it handed back whatever was down there verbatim — a key literally named
+  // `token` included — and provider protocol messages nest this deeply
+  // (params.mcpServers[n].env[n], tool-result content trees).
+  if (depth > MAX_DEPTH) return TOO_DEEP;
 
   if (Array.isArray(input)) {
     return input.map((item) => {
@@ -79,7 +95,13 @@ export function redactSecrets(input: unknown, depth = 0): unknown {
         typeof (item as { value?: unknown }).value === "string"
       ) {
         const entry = item as { name: string; value: string };
-        return isSecretName(entry.name) ? { ...entry, value: mask(entry.value) } : entry;
+        // A name that does not look secret can still carry one in its value
+        // (MB_CONNECTOR_UPSTREAM_HEADERS is a JSON blob holding a bearer
+        // token), so the value still goes through the content pass — the same
+        // treatment every other string in the tree gets.
+        return isSecretName(entry.name)
+          ? { ...entry, value: mask(entry.value) }
+          : { ...entry, value: redactSecretsInText(entry.value) };
       }
       return redactSecrets(item, depth + 1);
     });
