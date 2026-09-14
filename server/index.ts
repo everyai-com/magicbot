@@ -497,6 +497,10 @@ function answeredVia(req: IncomingMessage): "user" | "api" {
   const raw = req.headers["sec-fetch-site"];
   const site = Array.isArray(raw) ? raw[0] : raw;
   if (site) return "user";
+  // The companion sidecar authenticates a paired device before forwarding, and
+  // strips Origin on the way through, so this is how a person answering on
+  // their phone is told apart from a script.
+  if (req.headers["x-magicbots-client"] === "companion") return "user";
   const origin = req.headers.origin;
   return origin && isAllowedOrigin(origin) ? "user" : "api";
 }

@@ -557,6 +557,8 @@ describe("pairing, end to end", () => {
       }),
     );
     await new Promise<void>((r) => paired.listen(0, "127.0.0.1", r));
+    // SAFETY: address() is AddressInfo — an object with a port — for any
+    // IP server that is listening, which the awaited listen guarantees.
     const port = (paired.address() as { port: number }).port;
     try {
       const response = await fetch(`http://127.0.0.1:${port}/api/pair`, {
@@ -568,6 +570,61 @@ describe("pairing, end to end", () => {
       expect(await response.json()).toEqual({ error: "body too large" });
     } finally {
       await new Promise<void>((r) => paired.close(() => r()));
+    }
+  });
+
+  // The harness labels an approval answer by its provenance, and a paired
+  // phone is a person. The proxy strips Origin (it must not travel) and a
+  // phone sends no browser fetch metadata, so without this the harness would
+  // record a human's answer from the phone as an unattributed API call.
+  it("tells the harness that a forwarded request came from a paired device", async () => {
+    const { DeviceRegistry } = await import("../src/devices.ts");
+    const registry = new DeviceRegistry();
+    const opened = registry.openPairing();
+    const paired = registry.redeem(opened.code, "Ada's iPhone");
+    expect(paired, "pairing did not produce a device token").not.toHaveProperty("error");
+    // SAFETY: the expect above rules out the error branch of redeem's union.
+    const token = (paired as { token: string }).token;
+
+    const seen: Array<Record<string, string | string[] | undefined>> = [];
+    const harness = createServer((req, res) => {
+      seen.push(req.headers);
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end("{}");
+    });
+    await new Promise<void>((r) => harness.listen(0, "127.0.0.1", r));
+    // SAFETY: address() is AddressInfo — an object with a port — for any
+    // IP server that is listening, which the awaited listen guarantees.
+    const harnessPort = (harness.address() as { port: number }).port;
+
+    const proxy = createServer(
+      createProxyHandler({
+        harnessPort,
+        authenticate: (t) => registry.authenticate(t ?? undefined),
+        redeem: (code, deviceName) => registry.redeem(code, deviceName),
+        serverName: () => "Ada's computer",
+        hosts: () => [],
+      }),
+    );
+    await new Promise<void>((r) => proxy.listen(0, "127.0.0.1", r));
+    // SAFETY: address() is AddressInfo — an object with a port — for any
+    // IP server that is listening, which the awaited listen guarantees.
+    const port = (proxy.address() as { port: number }).port;
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/api/bots`, {
+        headers: { authorization: `Bearer ${token}` },
+      });
+      expect(response.status).toBe(200);
+      expect(seen).toHaveLength(1);
+      expect(seen[0]!["x-magicbots-client"]).toBe("companion");
+    } finally {
+      // devices.json is shared by every DeviceRegistry in this file, so a
+      // device left behind here would follow the next test
+      // SAFETY: the expect above rules out redeem's error branch.
+      registry.revoke((paired as { device: { id: string } }).device.id);
+      registry.closePairing();
+      await new Promise<void>((r) => proxy.close(() => r()));
+      await new Promise<void>((r) => harness.close(() => r()));
     }
   });
 

@@ -119,7 +119,17 @@ const sendJson = (res: ServerResponse, status: number, body: unknown, closeAfter
  * is the sidecar's credential and means nothing to the harness, and hop-by-hop
  * headers are by definition not ours to relay. */
 const forwardHeaders = (req: IncomingMessage): Record<string, string> => {
-  const out: Record<string, string> = { accept: String(req.headers.accept ?? "*/*") };
+  // Say who this came from. The harness labels an approval answer by its
+  // provenance, and it cannot see a paired phone: `origin` must not travel
+  // (see above) and a phone sends no browser fetch metadata, so a person
+  // answering on their phone would otherwise be recorded as an unattributed
+  // API call. The proxy has already authenticated the device by the time it
+  // forwards anything. Like every header on a loopback API this is a claim,
+  // not proof — see answeredVia in server/index.ts.
+  const out: Record<string, string> = {
+    accept: String(req.headers.accept ?? "*/*"),
+    "x-magicbots-client": "companion",
+  };
   const contentType = req.headers["content-type"];
   if (contentType) out["content-type"] = String(contentType);
   // Last-Event-ID is how a reconnecting client asks for the gap. Dropping it
