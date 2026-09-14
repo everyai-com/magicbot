@@ -1349,10 +1349,14 @@ async function startTurn(
   if (!bot) throw Object.assign(new Error("no such bot"), { status: 404 });
   if (bot.busy) throw Object.assign(new Error("the bot is already working — interrupt it first"), { status: 409 });
   const threadId = opts?.threadId ?? bot.threadId;
-  // a webhook turn, or one inherited from a bot already running unattended
-  if (opts?.automationSource === "webhook" || opts?.unattended) markUnattended(bot.id);
-  // a person typing into this bot ends the unattended window immediately
-  else if (opts?.automationSource === undefined && !opts?.commsDepth && !opts?.connectorContinuation) clearUnattended(bot.id);
+  // Any turn a person did not start: a webhook delivery, a calendar routine,
+  // or one inherited from a bot already running unattended. Listing the
+  // triggers that ARE unattended is how "schedule" got missed — a 3am routine
+  // ran with auto mode answering for the absent human — so the test is
+  // inverted: every automation source counts except the one a person presses.
+  if ((opts?.automationSource && opts.automationSource !== "manual") || opts?.unattended) markUnattended(bot.id);
+  // a person typing into this bot — or pressing Run now — ends the window
+  else if (!opts?.commsDepth && !opts?.connectorContinuation) clearUnattended(bot.id);
   const task = store.taskByThread(bot.id, threadId);
   if (!task) throw Object.assign(new Error("no such task"), { status: 404 });
   const commsDepth = opts?.commsDepth ?? 0;
@@ -2099,6 +2103,14 @@ function startGroupTurn(groupId: string, text: string) {
     }
     return;
   }
+
+  // A person typed this message, so the turns it starts are attended. Room
+  // turns bypass startTurn, which is where that mark is otherwise cleared —
+  // and because isUnattended refreshes its TTL on every positive read, one
+  // earlier webhook would otherwise make every later room message look
+  // unattended for good. Only the responders: a chained hop into a bot that is
+  // busy elsewhere keeps its own mark, which fails closed.
+  for (const responder of responders) clearUnattended(responder.id);
 
   const prev = groupQueues.get(groupId) ?? Promise.resolve();
   const next = prev.then(async () => {
