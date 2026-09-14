@@ -97,7 +97,15 @@ function eventName(req: IncomingMessage): string | undefined {
 
 export function createWebhookIngressHandler(manager: WebhookManager) {
   return async (req: IncomingMessage, res: ServerResponse) => {
-    const url = new URL(req.url ?? "/", "http://localhost");
+    // Node's HTTP parser accepts request targets the URL constructor refuses
+    // (`//[`). This parse used to sit outside every error boundary, so one
+    // unauthenticated request ended the process that owns this listener.
+    let url: URL;
+    try {
+      url = new URL(req.url ?? "/", "http://localhost");
+    } catch {
+      return json(res, 400, { error: "Malformed request target" });
+    }
     if (req.method === "GET" && url.pathname === "/health") {
       return json(res, 200, { app: "magicbots-webhooks", ready: true });
     }

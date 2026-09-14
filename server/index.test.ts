@@ -5,6 +5,7 @@
 // the shadow-instance behavior end to end while it's at it.
 import { spawn, type ChildProcess } from "node:child_process";
 import { createServer, request, type Server } from "node:http";
+import { connect } from "node:net";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -2296,5 +2297,23 @@ describe("computer control API (who is driving)", () => {
   it("keeps the internal who-is-driving endpoint behind the boot token", async () => {
     const res = await fetch(`${BASE}/api/internal/computer-control?botId=${botId}`);
     expect(res.status).toBe(401);
+  });
+
+  // Node's HTTP parser accepts request targets the URL constructor refuses.
+  // Parsing one before the handler's error boundary ended the harness from a
+  // single unauthenticated request, so this pins both halves: a 400 back, and
+  // a server still answering afterwards.
+  it("answers a malformed request target and keeps serving", async () => {
+    const statusLine = await new Promise<string>((resolve, reject) => {
+      const socket = connect(PORT, "127.0.0.1", () => {
+        socket.write("GET //[ HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n");
+      });
+      let buf = "";
+      socket.on("data", (chunk) => (buf += chunk));
+      socket.on("error", reject);
+      socket.on("close", () => resolve(buf.split("\r\n")[0] ?? ""));
+    });
+    expect(statusLine).toContain("400");
+    expect((await api("GET", "/api/health")).status).toBe(200);
   });
 });

@@ -1,4 +1,5 @@
 import { mkdtempSync, rmSync } from "node:fs";
+import { connect } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -94,6 +95,32 @@ describe("webhook-only ingress", () => {
     expect(await response.json()).toMatchObject({ accepted: true, captured: true });
     expect(queued).toHaveLength(before);
     expect(manager.list().find((webhook) => webhook.id === created.webhook.id)).toMatchObject({ verificationPending: false, enabled: false });
+  });
+
+  // Node's HTTP parser accepts request targets the URL constructor refuses.
+  // Parsing one outside the handler's error boundary took the whole harness
+  // down, from one unauthenticated request, before authentication ran.
+  it("answers a malformed request target and stays up", async () => {
+    const statusLine = (target: string) =>
+      new Promise<string>((resolve, reject) => {
+        const socket = connect(ingress.port, "127.0.0.1", () => {
+          socket.write(`POST ${target} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 0\r\n\r\n`);
+        });
+        let buf = "";
+        socket.on("data", (chunk) => {
+          buf += chunk;
+          if (buf.includes("\r\n")) {
+            socket.destroy();
+            resolve(buf.split("\r\n")[0]);
+          }
+        });
+        socket.on("error", reject);
+        socket.on("close", () => resolve(buf.split("\r\n")[0] ?? ""));
+      });
+
+    expect(await statusLine("//[")).toContain("400");
+    // and the listener is still serving
+    expect((await fetch(`${ingress.baseUrl}/health`)).status).toBe(200);
   });
 
   it("rejects invalid credentials, malformed JSON and oversized bodies", async () => {

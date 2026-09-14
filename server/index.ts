@@ -2484,7 +2484,15 @@ function isAllowedOrigin(origin: string | undefined | null): boolean {
 }
 
 const server = createServer(async (req, res) => {
-  const url = new URL(req.url ?? "/", `http://localhost:${PORT}`);
+  // Node's HTTP parser accepts request targets the URL constructor refuses
+  // (`//[`). This parse used to sit outside the try below, so one malformed
+  // request ended the harness before any route or gate ran.
+  let url: URL;
+  try {
+    url = new URL(req.url ?? "/", `http://localhost:${PORT}`);
+  } catch {
+    return json(res, 400, { error: "malformed request target" });
+  }
   const path = url.pathname;
   const method = req.method ?? "GET";
   /** scratch for route matches, shared by every `path.match` below */
