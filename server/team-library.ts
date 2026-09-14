@@ -55,10 +55,22 @@ function relativeFile(
 ): string {
   const path = text(value, field, 300);
   const suffixes = Array.isArray(suffix) ? suffix : [suffix];
+  // Compare DECODED segments. The value is concatenated into a URL, and the
+  // URL parser collapses `%2e%2e` exactly as it collapses `..`, so a literal
+  // check alone let an entry walk out of the teams/<slug>/ folder it is
+  // supposed to be pinned to — and out of the pinned repository with it. A
+  // percent-escape that does not decode is not a path we can reason about.
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(path);
+  } catch {
+    throw new Error(`${field} is not a safe catalog path`);
+  }
   if (
     path.startsWith("/") ||
     path.includes("\\") ||
-    path.split("/").some((part) => !part || part === "." || part === "..") ||
+    decoded.includes("\\") ||
+    decoded.split("/").some((part) => !part || part === "." || part === "..") ||
     !path.startsWith(prefix) ||
     !suffixes.some((candidate) => path.endsWith(candidate))
   ) {

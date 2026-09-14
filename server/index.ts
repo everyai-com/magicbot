@@ -3933,11 +3933,19 @@ const server = createServer(async (req, res) => {
       const target = perBotLocalVmTarget(bot.id);
       localVmIdles.get(target.key)?.cancel();
       localVmIdles.delete(target.key);
+      // EVERY thread the bot owned, not just its open conversation:
+      // store.deleteBot purges all of their transcripts, and these two logs
+      // (the provider protocol tee and the runtime event stream) hold the
+      // same material — prompts, tool output, reply text. Collected before
+      // the delete, because afterwards the task list is gone.
+      const ownedThreads = new Set([bot.threadId, ...(bot.tasks ?? []).map((task) => task.threadId)]);
       store.deleteBot(bot.id);
       for (const dir of [EVENTS_DIR, NATIVE_DIR]) {
-        try {
-          unlinkSync(join(dir, `${bot.threadId}.ndjson`));
-        } catch {}
+        for (const threadId of ownedThreads) {
+          try {
+            unlinkSync(join(dir, `${threadId}.ndjson`));
+          } catch {}
+        }
       }
       return json(res, 200, { ok: true });
     }

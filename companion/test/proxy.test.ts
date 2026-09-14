@@ -540,6 +540,37 @@ describe("the sidecar in front of an unmodified harness", () => {
 // use the token that comes back. This is the path that has no unit-test
 // equivalent — every piece is real except the phone.
 describe("pairing, end to end", () => {
+  // /api/pair is the one unauthenticated write on a port bound to the LAN, so
+  // its body is capped. The cap was enforced by destroying the socket, which
+  // tore down the response with it — the sender got a bare connection reset
+  // instead of being told what was wrong.
+  it("answers an oversized pairing body instead of resetting the connection", async () => {
+    const { DeviceRegistry } = await import("../src/devices.ts");
+    const registry = new DeviceRegistry();
+    const paired = createServer(
+      createProxyHandler({
+        harnessPort: HARNESS_PORT,
+        authenticate: (t) => registry.authenticate(t ?? undefined),
+        redeem: (code, deviceName) => registry.redeem(code, deviceName),
+        serverName: () => "Ada's computer",
+        hosts: () => [],
+      }),
+    );
+    await new Promise<void>((r) => paired.listen(0, "127.0.0.1", r));
+    const port = (paired.address() as { port: number }).port;
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/api/pair`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ code: "000000", padding: "x".repeat(128 * 1024) }),
+      });
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({ error: "body too large" });
+    } finally {
+      await new Promise<void>((r) => paired.close(() => r()));
+    }
+  });
+
   it("turns a QR credential into a working device token", async () => {
     const { DeviceRegistry } = await import("../src/devices.ts");
     const { createControlServer } = await import("../src/control.ts");
