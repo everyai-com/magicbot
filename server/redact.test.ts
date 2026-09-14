@@ -105,9 +105,9 @@ describe("redactSecrets", () => {
   // whole subtree used to come back verbatim, key named `token` and all.
   it("does not hand back an unredacted subtree past the depth ceiling", () => {
     for (const depth of [10, 12, 13, 20, 40]) {
-      let deep: Record<string, unknown> = { token: "deep-secret-value-1234" };
-      for (let i = 0; i < depth; i++) deep = { nested: deep };
-      expect(flat(redactSecrets(deep)), `depth ${depth}`).not.toContain("deep-secret-value-1234");
+      // built as JSON, the way a provider message actually arrives
+      const nested = `${'{"nested":'.repeat(depth)}{"token":"deep-secret-value-1234"}${"}".repeat(depth)}`;
+      expect(flat(redactSecrets(JSON.parse(nested))), `depth ${depth}`).not.toContain("deep-secret-value-1234");
     }
   });
 

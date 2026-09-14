@@ -207,9 +207,10 @@ posixOnly("unattended turns keep asking", () => {
         if (!run?.threadId) await new Promise((r) => setTimeout(r, 250));
       }
       expect(run?.triggerSource, "the run was not schedule-triggered").toBe("schedule");
-      expect(run?.threadId, "the routine never started a task").toBeTruthy();
+      const threadId = run?.threadId ?? "";
+      expect(threadId, "the routine never started a task").toBeTruthy();
 
-      const card = await waitForCard(run!.threadId!);
+      const card = await waitForCard(threadId);
       expect(card, "a scheduled turn auto-approved instead of asking").not.toBeNull();
       expect(card.card.answered).toBeUndefined();
     },
@@ -243,9 +244,11 @@ posixOnly("unattended turns keep asking", () => {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ event: "marker" }),
       });
+      // SAFETY: the ingress answers 202 with this exact shape, pinned by
+      // webhook-ingress.test.ts.
       const { runId } = (await delivered.json()) as { runId: string };
-      const hookThread = await waitForRunThread(runId);
-      const hookCard = await waitForCard(hookThread!);
+      const hookThread = (await waitForRunThread(runId)) ?? "";
+      const hookCard = await waitForCard(hookThread);
       expect(hookCard, "the webhook turn should have carded").not.toBeNull();
       await api("POST", `/api/threads/${hookThread}/respond`, {
         requestId: hookCard.card.requestId,

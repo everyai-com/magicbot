@@ -3878,6 +3878,8 @@ const server = createServer(async (req, res) => {
       } catch (error) {
         // MEMORY.md is a symlink: the write refuses to follow it rather than
         // putting this text somewhere outside the bot's workspace.
+        // SAFETY: writeMemoryFile only ever rejects with a Node fs error, so
+        // reading `code` off it is the documented shape of that failure.
         if ((error as NodeJS.ErrnoException)?.code === "ELOOP") {
           return json(res, 409, {
             error: "this bot's MEMORY.md is a link to another file — remove it and try again",
