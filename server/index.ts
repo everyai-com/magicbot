@@ -88,6 +88,7 @@ import {
   roomResponders,
   sectionKey,
   Store,
+  type BotRecord,
   type GroupDefaultResponder,
   type GroupRecord,
   type Message,
@@ -468,6 +469,59 @@ const askMessageByRequest = new Map<string, string>(); // threadId:requestId -> 
  * the engine has no asks — is fail-closed: the action was never run. The
  * card is settled and a chip says so, instead of the answer vanishing into
  * a 500 while the card sits open forever. */
+/** How an answer reached us, for the audit row only.
+ *
+ * Browsers set Sec-Fetch-* on every request and an Origin on a non-GET, and
+ * page scripts cannot change them; `curl` and a bot's tool call send neither.
+ * This does NOT authenticate anything — a deliberate script can set the same
+ * headers — it stops the log from calling every answer a person's by default. */
+function answeredVia(req: IncomingMessage): "user" | "api" {
+  const raw = req.headers["sec-fetch-site"];
+  const site = Array.isArray(raw) ? raw[0] : raw;
+  if (site) return "user";
+  const origin = req.headers.origin;
+  return origin && isAllowedOrigin(origin) ? "user" : "api";
+}
+
+/** Write down a widening of what this bot may do without a human.
+ *
+ * These three fields decide what runs unattended, and the loopback API cannot
+ * authenticate its caller (see answeredVia). Narrowings are not logged: taking
+ * a permission away is never the thing an auditor is hunting for. */
+interface PermissionSnapshot {
+  autoApprove: boolean;
+  approvePeerComms: boolean;
+  alwaysAllow: string[];
+}
+
+const permissionSnapshot = (bot: BotRecord | null | undefined): PermissionSnapshot => ({
+  autoApprove: bot?.autoApprove === true,
+  approvePeerComms: bot?.approvePeerComms === true,
+  alwaysAllow: [...(bot?.alwaysAllow ?? [])],
+});
+
+function logPermissionChange(
+  before: PermissionSnapshot,
+  after: BotRecord,
+  via: "user" | "api",
+): void {
+  const widened: string[] = [];
+  if (!before.autoApprove && after.autoApprove) widened.push("autoApprove on");
+  if (before.approvePeerComms && !after.approvePeerComms) widened.push("approvePeerComms off");
+  const had = new Set(before.alwaysAllow);
+  const added = (after.alwaysAllow ?? []).filter((key: string) => !had.has(key));
+  if (added.length) widened.push(`alwaysAllow +${added.join(", ")}`);
+  if (!widened.length) return;
+  appendDecision(DATA_DIR, {
+    threadId: after.threadId,
+    botId: after.id,
+    botName: after.name,
+    summary: widened.join("; "),
+    decision: "settings-changed",
+    source: via,
+  });
+}
+
 async function answerRequest(
   threadId: string,
   instanceId: string,
@@ -475,6 +529,7 @@ async function answerRequest(
   behavior: "allow" | "deny" | "answer",
   message?: string,
   decidedFor?: { id: string; name: string },
+  via: "user" | "api" = "api",
 ): Promise<RequestOutcome> {
   // Snapshot the card BEFORE delivering the answer: a delivered answer
   // resolves the request synchronously through the fold, which consumes
@@ -511,7 +566,7 @@ async function answerRequest(
       tool: card?.tool,
       summary: card?.subtitle,
       decision: behavior === "allow" ? "user-approved" : "user-denied",
-      source: "user",
+      source: via,
     });
   }
   if (outcome === "unavailable") {
@@ -3743,9 +3798,18 @@ const server = createServer(async (req, res) => {
       if (body.hidden === true && existingBot?.chiefOfStaff && body.chiefOfStaff !== false) {
         return json(res, 400, { error: "choose another Chief of Staff before hiding this bot" });
       }
-      // the permission fields decide what runs unattended, so they are
+      // The permission fields decide what runs unattended, so they are
       // type-checked rather than copied through: a string alwaysAllow would
-      // still answer .includes() — with substring matches, not tool names
+      // still answer .includes() — with substring matches, not tool names.
+      //
+      // What this route is NOT is an authorization boundary. A bot's own tool
+      // call reaches this API as the same user on the same machine, with no
+      // way to tell it from the app's renderer — the acknowledgeLocalAuto
+      // check below fences one combination, and nothing fences the rest. A
+      // secret would not help either: anything the renderer can read, a shell
+      // running as that user can read too. So every widening is written to the
+      // decision log (logPermissionChange) instead, and a real boundary has to
+      // come from running engines somewhere this API is not reachable.
       if (body.autoApprove !== undefined) {
         if (typeof body.autoApprove !== "boolean") return json(res, 400, { error: "autoApprove must be true or false" });
         patch.autoApprove = body.autoApprove;
@@ -3787,8 +3851,12 @@ const server = createServer(async (req, res) => {
         body.chiefOfStaff !== false &&
         section !== undefined &&
         sectionKey(existingBot?.section) !== sectionKey(section);
+      // patchBot mutates the stored record, so `existingBot` would already
+      // carry the new values by the time it is compared — snapshot first.
+      const permissionsBefore = permissionSnapshot(existingBot);
       const bot = store.patchBot(m[1], patch);
       if (!bot) return json(res, 404, { error: "no such bot" });
+      logPermissionChange(permissionsBefore, bot, answeredVia(req));
       const chiefChanges =
         body.chiefOfStaff === true || chiefMovedSections
           ? store.setChiefOfStaff(bot.id)
@@ -4012,7 +4080,7 @@ const server = createServer(async (req, res) => {
       if (resolvePeerComms(approvalBus, String(body.requestId), behavior)) {
         return json(res, 200, { ok: true, outcome: behavior === "allow" ? "allowed-once" : "rejected" });
       }
-      const outcome = await answerRequest(bot.threadId, bot.modelSelection.instanceId, String(body.requestId), behavior, body.message, { id: bot.id, name: bot.name });
+      const outcome = await answerRequest(bot.threadId, bot.modelSelection.instanceId, String(body.requestId), behavior, body.message, { id: bot.id, name: bot.name }, answeredVia(req));
       return json(res, 200, { ok: true, outcome });
     }
     // Answer by THREAD, so a request raised inside a room can be answered
@@ -4043,7 +4111,7 @@ const server = createServer(async (req, res) => {
           (pending?.from ? store.bot(pending.from.botId) : undefined)
         : store.botByThread(threadId);
       if (!owner && !pending) return json(res, 404, { error: "nothing is waiting on an answer in this conversation" });
-      const outcome = await answerRequest(threadId, owner?.modelSelection.instanceId ?? "", requestId, behavior, body.message, owner ? { id: owner.id, name: owner.name } : undefined);
+      const outcome = await answerRequest(threadId, owner?.modelSelection.instanceId ?? "", requestId, behavior, body.message, owner ? { id: owner.id, name: owner.name } : undefined, answeredVia(req));
       return json(res, 200, { ok: true, outcome });
     }
     m = path.match(/^\/api\/bots\/([\w-]+)\/interrupt$/);

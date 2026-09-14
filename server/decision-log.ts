@@ -26,13 +26,29 @@ import { join } from "node:path";
 import type { AutoVerdictSource } from "./auto-approve.ts";
 import { redactSecrets } from "./redact.ts";
 
-export type DecisionKind = "auto-approved" | "card-shown" | "user-approved" | "user-denied";
+export type DecisionKind =
+  | "auto-approved"
+  | "card-shown"
+  | "user-approved"
+  | "user-denied"
+  /** A permission FIELD changed — auto mode, a remembered grant, the peer-comms
+   * gate. Not a tool call, but it decides every later tool call that runs
+   * without a human, which is exactly what this log exists to answer. */
+  | "settings-changed";
 
 /** Who or what produced the decision. The AutoVerdictSource values carry
  * straight through from auto-approve.ts; `question` marks the cards a rule
  * may never answer, `auto-fallback` a card shown because an auto-approval
- * could not be delivered, and `user` the human's answer to a card. */
-export type DecisionSource = AutoVerdictSource | "question" | "auto-fallback" | "user";
+ * could not be delivered, `user` an answer that arrived from a browser
+ * context (the app's own UI or a paired client), and `api` one that arrived
+ * without that provenance.
+ *
+ * The loopback API cannot authenticate its caller — a bot's tool call runs as
+ * the same user on the same machine as the app — so `user` is a claim about
+ * SHAPE, not identity: a script can set the same headers deliberately. What it
+ * buys is that the default no longer reads as a person. An answer nobody saw
+ * is logged as `api`, which is the row an auditor needs. */
+export type DecisionSource = AutoVerdictSource | "question" | "auto-fallback" | "user" | "api";
 
 export interface DecisionRow {
   at: string;
