@@ -10,6 +10,7 @@ import {
   ensureSession,
   normalizeAccountAlias,
   parseSession,
+  register,
   sha256,
 } from "./index";
 
@@ -297,6 +298,47 @@ describe("connected-apps broker boundaries", () => {
     await expect(authorized.json()).resolves.toEqual({ url: "https://connect.composio.dev/link/gmail" });
     const linkCall = fetchCalls.find((call) => call.url.endsWith("/tool_router/session/trs_multi/link"));
     expect(JSON.parse(String(linkCall?.init?.body))).toEqual({ toolkit: "gmail", alias: "second" });
+  });
+
+  // Registration is unauthenticated and each installation it mints gets its
+  // own session budget against the operator's paid Composio key. The throttle
+  // keyed on IP + User-Agent, and the User-Agent is whatever the caller says —
+  // so every variant got a fresh bucket and the cap never engaged.
+  it("throttles registration on something the caller cannot vary", async () => {
+    const keys: string[] = [];
+    const created: unknown[][] = [];
+    const env = {
+      REGISTRATION_MODE: "open",
+      REGISTRATION_LIMITER: {
+        limit: async ({ key }: { key: string }) => {
+          keys.push(key);
+          return { success: true };
+        },
+      },
+      DB: {
+        prepare: (sql: string) => ({
+          bind: (...values: unknown[]) => ({
+            run: async () => {
+              created.push(values);
+            },
+            first: async () => (sql.includes("count(") ? { recent: created.length } : null),
+          }),
+        }),
+      },
+    };
+    const post = (userAgent: string) =>
+      register(
+        new Request("https://broker.example/v1/installations", {
+          method: "POST",
+          headers: { "cf-connecting-ip": "203.0.113.7", "user-agent": userAgent },
+        }),
+        env as never,
+      );
+
+    expect((await post("magicbots/1.0")).status).toBe(201);
+    expect((await post("attacker-2")).status).toBe(201);
+    expect(keys).toHaveLength(2);
+    expect(keys[0], "a caller-chosen header still splits the rate-limit bucket").toBe(keys[1]);
   });
 
   it("validates aliases at the broker boundary", () => {

@@ -229,6 +229,24 @@ async function sha256(value: string): Promise<string> {
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
+/** Salt used to burn the same key-derivation cost when no user matched.
+ * Any fixed value works: it is never compared against anything. */
+const ABSENT_USER_SALT = "magicteams-absent-user";
+
+/** The user for these credentials, or null.
+ *
+ * The derivation runs either way. Doing it only when the email exists made a
+ * miss return in a fraction of the time a hit takes — a timing oracle for
+ * "does this address have an account", and the login rate limit is keyed per
+ * (address, email), so sweeping a list of candidates is never throttled. */
+async function findUserForLogin(env: Env, email: string, password: string): Promise<User | null> {
+  const row = await env.DB.prepare("SELECT id, email, name, password_hash, password_salt FROM users WHERE email = ?")
+    .bind(email).first<User & { password_hash: string; password_salt: string }>();
+  const candidate = await passwordHash(password, row?.password_salt ?? ABSENT_USER_SALT);
+  if (!row) return null;
+  return constantTimeEqual(row.password_hash, candidate) ? row : null;
+}
+
 async function passwordHash(password: string, salt: string): Promise<string> {
   const key = await crypto.subtle.importKey("raw", encoder.encode(password), "PBKDF2", false, ["deriveBits"]);
   const bits = await crypto.subtle.deriveBits(
@@ -1128,6 +1146,30 @@ function webhookCredential(request: Request, webhook: WebhookRecord, secret: str
   return { endpointUrl, secret, url: `${endpointUrl}?token=${encodeURIComponent(secret)}` };
 }
 
+/** The only content types the upload route vets. /api/file-attachments takes
+ * anything the caller declares, so anything outside this list is handed back
+ * as a download rather than rendered on this origin. */
+const UPLOADABLE_MIME = ["image/png", "image/jpeg", "image/gif", "image/webp"];
+
+/** Headers for serving a stored attachment back.
+ *
+ * A caller-declared content type used to be echoed with `inline`, so an
+ * uploaded text/html document executed as script on the app's own origin. Only
+ * the types the upload route actually vets render in place; everything else
+ * downloads. */
+function attachmentResponseHeaders(file: { mime: string; name: string; size: number }) {
+  const vetted = UPLOADABLE_MIME.includes(file.mime);
+  // strip quotes and control characters so the filename cannot end the header
+  const name = file.name.replace(/[\u0000-\u001f"\\]/g, "").slice(0, 255) || "attachment";
+  return {
+    "content-type": vetted ? file.mime : "application/octet-stream",
+    "content-length": String(file.size),
+    "cache-control": "private, max-age=31536000, immutable",
+    "content-disposition": `${vetted ? "inline" : "attachment"}; filename="${name}"`,
+    "x-content-type-options": "nosniff",
+  };
+}
+
 function sameOrigin(request: Request): boolean {
   const origin = request.headers.get("origin");
   const fetchSite = request.headers.get("sec-fetch-site")?.toLowerCase();
@@ -1724,7 +1766,7 @@ async function api(request: Request, env: Env, user: User, path: string): Promis
     const maxBytes = path === "/api/attachments" ? 10 * 1024 * 1024 : 25 * 1024 * 1024;
     const declared = Number(request.headers.get("content-length") ?? 0);
     if (declared > maxBytes) return json({ error: `Upload exceeds ${maxBytes / 1024 / 1024} MB` }, 413);
-    if (path === "/api/attachments" && !["image/png", "image/jpeg", "image/gif", "image/webp"].includes(mime)) {
+    if (path === "/api/attachments" && !UPLOADABLE_MIME.includes(mime)) {
       return json({ error: "Unsupported image type" }, 400);
     }
     const bytes = await request.arrayBuffer();
@@ -1745,10 +1787,7 @@ async function api(request: Request, env: Env, user: User, path: string): Promis
     if (!row) return json({ error: "Attachment not found" }, 404);
     const object = await env.FILES.get(row.object_key);
     if (!object) return json({ error: "Attachment data not found" }, 404);
-    return new Response(object.body, { headers: {
-      "content-type": row.mime, "content-length": String(object.size), "cache-control": "private, max-age=31536000, immutable",
-      "content-disposition": `inline; filename="${row.name.replaceAll('"', "")}"`, "x-content-type-options": "nosniff",
-    } });
+    return new Response(object.body, { headers: attachmentResponseHeaders({ mime: row.mime, name: row.name, size: object.size }) });
   }
   if (path === "/api/groups" && request.method === "POST") {
     const body = await request.json<{ memberIds?: string[]; name?: string; section?: string }>();
@@ -2406,15 +2445,17 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
           .bind(id, email, name || "MagicTeams user", await passwordHash(password, salt), salt, Date.now()).run();
         user = { id, email, name: name || "MagicTeams user" };
       } else {
-        const row = await env.DB.prepare("SELECT id, email, name, password_hash, password_salt FROM users WHERE email = ?")
-          .bind(email).first<User & { password_hash: string; password_salt: string }>();
-        if (row && constantTimeEqual(row.password_hash, await passwordHash(password, row.password_salt))) user = row;
+        user = await findUserForLogin(env, email, password);
         if (!user) return loginPage("Email or password is incorrect.");
       }
       const token = await createSession(env, user.id);
       return redirect(safeNext(url.searchParams.get("next")), { "set-cookie": sessionCookie(token) });
     }
     if (url.pathname === "/logout") {
+      // Every neighbouring state-changing route checks this. Without it a
+      // top-level cross-site navigation signed the visitor out: SameSite=Lax
+      // blocks a subresource, not a navigation.
+      if (!sameOrigin(request)) return redirect("/login");
       const token = cookieValue(request, SESSION_COOKIE);
       if (token) await env.DB.prepare("DELETE FROM sessions WHERE token_hash = ?").bind(await sha256(token)).run();
       return redirect("/login", { "set-cookie": clearSessionCookie() });
@@ -2431,6 +2472,14 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
 function requestFailure(request: Request, error: unknown): Response {
   const incident = crypto.randomUUID().slice(0, 8);
   const url = new URL(request.url);
+  // A body the caller sent wrong is the caller's error. Every write route
+  // calls request.json() unguarded, so a malformed body landed here and came
+  // back as 503 "temporary server problem, please retry" — advice for a
+  // request that will never succeed, and an incident reference for a fault
+  // that was not ours.
+  if (error instanceof SyntaxError && url.pathname.startsWith("/api/")) {
+    return json({ error: "That request body is not valid JSON." }, 400);
+  }
   const detail = error instanceof Error
     ? { name: error.name, message: error.message, stack: error.stack }
     : { message: String(error) };
@@ -2454,6 +2503,8 @@ function requestFailure(request: Request, error: unknown): Response {
     headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "x-frame-options": "DENY" },
   });
 }
+
+export { attachmentResponseHeaders, findUserForLogin, requestFailure, sameOrigin, UPLOADABLE_MIME };
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
