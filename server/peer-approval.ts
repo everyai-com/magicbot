@@ -106,8 +106,15 @@ export function requestPeerApproval(
   message: string,
   action: PeerAction,
   sourceThreadId = from.threadId,
+  context?: {
+    /** the turn was started by an outside event, with nobody at the keyboard */
+    unattended?: boolean;
+  },
 ): Promise<"allow" | "deny"> {
-  if (allowKeyAllowed(from, peerAllowKey(action, target.id))) {
+  // A remembered grant is a decision someone made for turns they were present
+  // for — the same rule autoVerdict applies to tool permissions, and this gate
+  // sits beside it. On a turn nobody started, the human still decides.
+  if (!context?.unattended && allowKeyAllowed(from, peerAllowKey(action, target.id))) {
     return Promise.resolve("allow");
   }
   return new Promise((resolve) => {

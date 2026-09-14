@@ -69,6 +69,27 @@ describe("peer approval card lifecycle", () => {
     expect(store.messagesFor(from.threadId).find((m) => m.id === card.id)?.card?.answered).toBe("deny");
   });
 
+  // A remembered grant is a decision someone made for turns they were present
+  // for — the same rule autoVerdict applies to tool permissions. This gate is
+  // the harness's own, sitting beside it, and it skipped the rule.
+  it("does not let a remembered grant answer on a turn nobody started", async () => {
+    store.patchBot(from.id, { alwaysAllow: [peerAllowKey("ask_bot", target.id)] });
+    const granted = store.bot(from.id)!;
+
+    // attended: the grant stands, no card
+    await expect(requestPeerApproval(bus, granted, target, "ping", "ask_bot")).resolves.toBe("allow");
+    expect(pendingCard(store, from)).toBeUndefined();
+
+    // unattended: a human still decides
+    const verdict = requestPeerApproval(bus, granted, target, "ping", "ask_bot", granted.threadId, {
+      unattended: true,
+    });
+    const card = pendingCard(store, from);
+    expect(card, "a remembered grant contacted a peer with nobody watching").toBeTruthy();
+    resolvePeerComms(bus, card!.card!.requestId!, "deny");
+    await expect(verdict).resolves.toBe("deny");
+  });
+
   it("answers an unknown requestId as not-ours, so provider cards still route", () => {
     expect(resolvePeerComms(bus, "not-a-peer-request", "allow")).toBe(false);
   });

@@ -11,7 +11,7 @@ import { z } from "zod";
 import { botAvatarUrlFromStoredPath } from "../shared/bot-avatar.ts";
 import { BOT_PERSONALITIES } from "../shared/bot-personality.ts";
 
-import { approvalKey, autoVerdict } from "./auto-approve.ts";
+import { approvalKey, autoVerdict, type AutoVerdict } from "./auto-approve.ts";
 import { appendDecision, readDecisions } from "./decision-log.ts";
 import { validateBotCwd } from "./bot-cwd.ts";
 import {
@@ -469,6 +469,24 @@ const askMessageByRequest = new Map<string, string>(); // threadId:requestId -> 
  * the engine has no asks — is fail-closed: the action was never run. The
  * card is settled and a chip says so, instead of the answer vanishing into
  * a 500 while the card sits open forever. */
+/** The one-line "why did this stop?" on an approval card. Null when nothing
+ * was granted in the first place — then the card is simply the normal way a
+ * permission is asked, and saying "it stopped" would be noise. */
+function heldReason(verdict: AutoVerdict | null): string | undefined {
+  switch (verdict?.source) {
+    case "unattended-block":
+      return "Nobody started this turn, so auto mode stopped to ask.";
+    case "local-computer-block":
+      return "This controls your computer, so it stopped to ask.";
+    case "destructive-guard":
+      return "This looked destructive, so auto mode stopped to ask.";
+    case "sensitive-guard":
+      return "This touches credentials, so auto mode stopped to ask.";
+    default:
+      return undefined;
+  }
+}
+
 /** How an answer reached us, for the audit row only.
  *
  * Browsers set Sec-Fetch-* on every request and an Origin on a non-GET, and
@@ -974,11 +992,12 @@ bus.subscribe((event: RuntimeEvent) => {
             permission && !event.approvalScope
               ? (approvalKey(event.tool, event.summary, event.approvalScope) ?? undefined)
               : undefined,
-          // in auto mode a card can only mean the guard stopped it — say so
-          held:
-            permission && asker?.autoApprove
-              ? "This looked destructive, so auto mode stopped to ask."
-              : undefined,
+          // Why this stopped, from the verdict that actually decided it. The
+          // old text named the destructive guard for every card an auto-mode
+          // bot raised — but a grant outranks the guards, so an unattended
+          // turn always lands on unattended-block and the human was told a
+          // guard fired that did not.
+          held: permission ? heldReason(verdict) : undefined,
           approvalScope: event.approvalScope,
         },
       });
@@ -1230,7 +1249,7 @@ bus.subscribe((event: RuntimeEvent) => {
   // firing it later: the user who hit Stop does not expect the delegations
   // that turn queued to run anyway, minutes later, on an unrelated turn.
   if (!event.ok) return void discardDelegations(commsBus, event.threadId);
-  drainDelegations(commsBus, approvalBus, event.threadId, runDelegatedTurn);
+  drainDelegations(commsBus, approvalBus, event.threadId, runDelegatedTurn, isUnattended);
 });
 
 // ── steer-queue drain: messages sent while the bot was busy ────────────
@@ -1924,7 +1943,7 @@ _loadPending();
 {
   const leftover = pendingThreads();
   if (leftover.length) console.log(`delegations: ${leftover.length} thread(s) with queued handoffs from a previous run — draining`);
-  for (const threadId of leftover) drainDelegations(commsBus, approvalBus, threadId, runDelegatedTurn);
+  for (const threadId of leftover) drainDelegations(commsBus, approvalBus, threadId, runDelegatedTurn, isUnattended);
 }
 
 async function runGroupMemberTurn(
@@ -2650,6 +2669,7 @@ const server = createServer(async (req, res) => {
             message,
             "ask_bot",
             fromThreadId,
+            { unattended: isUnattended(from.id) },
           );
           if (verdict !== "allow") return json(res, 200, { error: "denied by user" });
           // The card may have been open for minutes. Re-read both records so

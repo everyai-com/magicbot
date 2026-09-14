@@ -11,7 +11,8 @@
 // sandbox and the bot's own computer, not a regex.
 
 const DESTRUCTIVE = [
-  /\brm\s+(-[a-z]*\s+)*-[a-z]*[rf]/i, // rm -rf, rm -fr, rm -r -f
+  // rm -rf, rm -fr, rm -r -f, and the long spellings GNU accepts
+  /\brm\s+((-[a-z]*|--[a-z-]+)\s+)*(-[a-z]*[rf]|--(recursive|force))\b/i,
   /\bmkfs\b|\bdiskutil\s+erase|\bdd\s+[^|]*\bof=\/dev\//i,
   /\bshutdown\b|\breboot\b|\bhalt\b/i,
   /:\(\)\s*\{.*\}\s*;?\s*:/, // fork bomb
@@ -130,7 +131,10 @@ export function autoVerdict(
   // the guards outrank the grants, so an "always allow" can never widen
   // into them
   const destructive = matchFirst(DESTRUCTIVE, summary) ?? matchFirst(DESTRUCTIVE, tool);
-  const sensitive = destructive ? null : matchFirst(SENSITIVE, summary);
+  // both fields, like the destructive check above: a tool NAME can carry the
+  // path just as a summary can, and reading only one of them waved through
+  // what the other would have stopped
+  const sensitive = destructive ? null : (matchFirst(SENSITIVE, summary) ?? matchFirst(SENSITIVE, tool));
   // The grant is computed even when a hard block will refuse it: the row
   // worth auditing is "this WOULD have auto-approved, and only the block
   // stood in the way", which cannot be told apart from an ordinary

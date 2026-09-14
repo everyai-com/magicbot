@@ -167,6 +167,9 @@ posixOnly("unattended turns keep asking", () => {
       expect(card.card.requestId).toBeTruthy();
       // and it must not already be answered
       expect(card.card.answered).toBeUndefined();
+      // the card must say why it actually stopped. `echo hi` is not
+      // destructive; the reason is that nobody started this turn.
+      expect(card.card.held).toBe("Nobody started this turn, so auto mode stopped to ask.");
     },
     60_000,
   );
