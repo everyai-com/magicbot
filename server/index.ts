@@ -3873,7 +3873,18 @@ const server = createServer(async (req, res) => {
           error: `memory is capped at ${MEMORY_FILE_MAX_BYTES / 1024}KB — move longer notes into memory/<topic>.md files`,
         });
       }
-      writeMemoryFile(m[1], parsed.data.text);
+      try {
+        writeMemoryFile(m[1], parsed.data.text);
+      } catch (error) {
+        // MEMORY.md is a symlink: the write refuses to follow it rather than
+        // putting this text somewhere outside the bot's workspace.
+        if ((error as NodeJS.ErrnoException)?.code === "ELOOP") {
+          return json(res, 409, {
+            error: "this bot's MEMORY.md is a link to another file — remove it and try again",
+          });
+        }
+        throw error;
+      }
       // truncated echoes back so the editor can warn about the load budget
       return json(res, 200, { ok: true, truncated: readMemoryFile(m[1]).truncated });
     }

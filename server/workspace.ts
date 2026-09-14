@@ -8,12 +8,46 @@
 // memory/ holds topic files the bot reads on demand with its ordinary
 // file tools. Plain markdown on purpose — the user can open, edit, or
 // delete anything the bot believes.
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { closeSync, constants, existsSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { DATA_DIR } from "./config.ts";
 
 export const WORKSPACES_DIR = join(DATA_DIR, "workspaces");
+
+/** Open flags for every write this module makes: create/truncate, and refuse
+ * to follow a symlink (ELOOP).
+ *
+ * The workspace is the bot's own cwd, so a bot can plant a link there with an
+ * ordinary in-bounds command — `ln -s ~/.config/x MEMORY.md` — and then server
+ * code doing the write would put the user's text outside the workspace, or
+ * create a file there through a dangling link. The name gates in this module
+ * are string checks; they never ask what a name RESOLVES to. This does.
+ *
+ * O_NOFOLLOW is POSIX-only; on Windows the flags degrade to a plain "w", where
+ * creating a symlink needs privileges anyway. */
+const WRITE_NOFOLLOW =
+  constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | (constants.O_NOFOLLOW ?? 0);
+
+/** writeFileSync with the flags above. Opened by descriptor because the flag
+ * is numeric; throws ELOOP when the path is a symlink. */
+function writeFileNoFollow(path: string, data: string, mode: number): void {
+  const fd = openSync(path, WRITE_NOFOLLOW, mode);
+  try {
+    writeFileSync(fd, data);
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/** A real file at this exact path — not a symlink to one somewhere else. */
+function isRegularFile(path: string): boolean {
+  try {
+    return lstatSync(path).isFile();
+  } catch {
+    return false;
+  }
+}
 
 /** The load budget: however large MEMORY.md grows, only this much rides
  * into the system prompt. Mirrors the shape of Claude Code's auto-memory
@@ -36,7 +70,17 @@ export function ensureWorkspace(botId: string): string {
   // directories should not be readable by other local accounts.
   mkdirSync(join(dir, "memory"), { recursive: true, mode: 0o700 });
   const memoryFile = join(dir, "MEMORY.md");
-  if (!existsSync(memoryFile)) writeFileSync(memoryFile, MEMORY_SEED, { mode: 0o600 });
+  // existsSync FOLLOWS links, so a dangling one reads as absent and the seed
+  // write would create the target outside the workspace. The write refuses to
+  // follow; a workspace whose MEMORY.md is a link simply goes unseeded, because
+  // this runs at every turn dispatch and must never throw the turn away.
+  if (!existsSync(memoryFile)) {
+    try {
+      writeFileNoFollow(memoryFile, MEMORY_SEED, 0o600);
+    } catch {
+      /* a link, or an unwritable workspace — the directory still exists */
+    }
+  }
   return dir;
 }
 
@@ -100,7 +144,11 @@ export function readMemoryFile(botId: string) {
  * run a turn, and the write must not depend on that ordering. */
 export function writeMemoryFile(botId: string, text: string): void {
   ensureWorkspace(botId);
-  writeFileSync(join(workspaceDir(botId), "MEMORY.md"), text, { mode: 0o600 });
+  // Throws ELOOP rather than writing the user's memory through a planted link.
+  // The route turns that into an error the user sees, which is the honest
+  // outcome: this path belongs to the workspace and something else is sitting
+  // on it.
+  writeFileNoFollow(join(workspaceDir(botId), "MEMORY.md"), text, 0o600);
 }
 
 // One path segment, starts with a word character, plain characters only,
@@ -126,7 +174,9 @@ export function listMemoryTopics(botId: string): Array<{ name: string; bytes: nu
     .filter(isMemoryTopicName)
     .flatMap((name) => {
       try {
-        const stat = statSync(join(workspaceDir(botId), "memory", name));
+        // lstat, not stat: a link out of the workspace is not this bot's file,
+        // and listing it would advertise the target's size to the UI.
+        const stat = lstatSync(join(workspaceDir(botId), "memory", name));
         return stat.isFile() ? [{ name, bytes: stat.size }] : [];
       } catch {
         return [];
@@ -140,6 +190,8 @@ export function listMemoryTopics(botId: string): Array<{ name: string; bytes: nu
  * arbitrary path. Null for anything invalid or unreadable. */
 export function readMemoryTopic(botId: string, name: string): string | null {
   if (!isMemoryTopicName(name)) return null;
+  // The name gate cannot see where a link points, so check the path itself.
+  if (!isRegularFile(join(workspaceDir(botId), "memory", name))) return null;
   try {
     return readFileSync(join(workspaceDir(botId), "memory", name), "utf8");
   } catch {
