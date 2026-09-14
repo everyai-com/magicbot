@@ -29,7 +29,7 @@ import type {
   SendTurnInput,
 } from "../contracts.ts";
 import { computerProxyEnv } from "../container-computer.ts";
-import { newEventId, newId } from "../contracts.ts";
+import { MAX_REQUEST_SUMMARY, newEventId, newId } from "../contracts.ts";
 import { classifyError, computeBackoff, interruptibleDelay, RETRY_MAX_ATTEMPTS } from "./retry.ts";
 import {
   applyClaudeInject,
@@ -215,14 +215,18 @@ function systemEndedReply(kind: Ask["kind"]): { behavior: AskBehavior; message: 
     : { behavior: "deny", message: "MagicBots: the turn ended" };
 }
 
-/** One human-readable line for an ask — what the card subtitle shows. */
+/** The ask as the CLI will run it — the harness's policy input, not a display
+ * string. Shortening it here hid the tail of a command from the guards while
+ * the CLI still ran the whole thing; the card shortens it for display instead.
+ * MAX_REQUEST_SUMMARY is the one bound that stays, so a tool whose input is a
+ * whole file cannot put that file on the bus. */
 function askSummary(ask: Ask): string {
   const input = ask.input ?? {};
-  if (typeof input.question === "string") return input.question.slice(0, 300);
-  if (typeof input.command === "string") return input.command.slice(0, 200);
-  if (typeof input.url === "string") return input.url.slice(0, 200);
+  if (typeof input.question === "string") return input.question.slice(0, MAX_REQUEST_SUMMARY);
+  if (typeof input.command === "string") return input.command.slice(0, MAX_REQUEST_SUMMARY);
+  if (typeof input.url === "string") return input.url.slice(0, MAX_REQUEST_SUMMARY);
   const text = JSON.stringify(input);
-  return text === "{}" ? (ask.tool ?? "tool") : text.slice(0, 200);
+  return text === "{}" ? (ask.tool ?? "tool") : text.slice(0, MAX_REQUEST_SUMMARY);
 }
 
 export function permissionSocketPath(threadId: string) {

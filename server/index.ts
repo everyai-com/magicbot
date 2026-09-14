@@ -652,6 +652,13 @@ bus.subscribe((event: RuntimeEvent) => {
 const unattendedBots = new Map<string, number>();
 const UNATTENDED_TTL_MS = 30 * 60_000;
 
+/** Approval cards show one line. The event carries the request WHOLE, because
+ * that is what the guards read (server/contracts.ts) — shortening happens here,
+ * at the point of display, and nowhere earlier. */
+const CARD_SUBTITLE_CHARS = 200;
+const cardSubtitle = (summary: string) =>
+  summary.length > CARD_SUBTITLE_CHARS ? `${summary.slice(0, CARD_SUBTITLE_CHARS)}…` : summary;
+
 function markUnattended(botId: string) {
   unattendedBots.set(botId, Date.now());
 }
@@ -865,7 +872,7 @@ bus.subscribe((event: RuntimeEvent) => {
               kind: "options",
               card: {
                 title: "Approval needed",
-                subtitle: summary,
+                subtitle: cardSubtitle(summary),
                 options: ["Allow", "Deny"],
                 requestId,
                 tool,
@@ -902,7 +909,7 @@ bus.subscribe((event: RuntimeEvent) => {
               : permission
                 ? "Approval needed"
                 : "Your bot has a question",
-          subtitle: event.summary,
+          subtitle: cardSubtitle(event.summary),
           options: event.choices?.length ? event.choices : permission ? ["Allow", "Deny"] : [],
           requestId: event.requestId,
           tool: permission ? event.tool : undefined,
