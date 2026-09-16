@@ -13,6 +13,8 @@ import {
   type LiveMessage,
   type Row,
 } from "@/lib/ultravox-calls";
+import { outcomeStatus } from "@/lib/campaign-outcome-summary";
+import { ResultPill } from "./ResultPill";
 
 const text = (value: unknown): string =>
   value == null || value === "" ? "—" : typeof value === "object" ? JSON.stringify(value) : String(value);
@@ -336,7 +338,7 @@ export function CallDetail({ row, raw, live, onClose, onLiveUpdate }: {
             </div>
             <div className="mt-1 flex flex-wrap items-center gap-2 text-[12px] text-ink-secondary">
               <span className="inline-flex items-center gap-1"><Clock size={12} />{formatTime(created)}</span>
-              <LivePill status={status} />
+              {current ? <LivePill status={status} /> : <ResultPill value={row.Result} className="!text-[12px]" />}
               {current && !isLive(status) && (
                 <span className="inline-block rounded-full bg-success/15 px-2.5 py-0.5 text-xs font-medium text-success">Live from provider</span>
               )}
@@ -361,7 +363,7 @@ export function CallDetail({ row, raw, live, onClose, onLiveUpdate }: {
               <span className="inline-flex items-center gap-1.5"><User size={13} className="text-ink-secondary" />{contact}</span>
             </Field>
             <Field label="Duration">{duration != null ? formatDuration(duration) : text(row.Duration)}</Field>
-            <Field label="Result">{isLive(status) ? "Live" : status}</Field>
+            <Field label="Result">{current ? (isLive(status) ? "Live" : status) : outcomeStatus(row.Result).label}</Field>
             <Field label="Billed">{current ? formatBilled(current.billedDuration) : formatBilled(row["Billed seconds"])}</Field>
             <Field label="Ended">{current?.ended ? formatTime(current.ended) : "—"}</Field>
           </div>
@@ -382,7 +384,7 @@ export function CallDetail({ row, raw, live, onClose, onLiveUpdate }: {
               />
             ) : (
               <p className="text-[13px] text-ink-secondary">
-                This history entry has no provider call id, so no recording can be loaded.
+                This call has no provider call id, so no recording can be loaded.
               </p>
             )}
           </section>

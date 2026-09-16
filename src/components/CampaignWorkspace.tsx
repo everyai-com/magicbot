@@ -5,8 +5,11 @@ import { EmailTemplates } from "./EmailTemplates";
 import { SmsTemplates } from "./SmsTemplates";
 import { CampaignOutcomes } from "./CampaignOutcomes";
 import { CampaignOutcomeList } from "./CampaignOutcomeList";
+import { CallDetail } from "./CallDetail";
 import { outcomeBreakdown, outcomeCountsFor, summaryRows, type OutcomeCount } from "@/lib/campaign-outcome-summary";
 import { matchOutcomeContact } from "@/lib/campaign-outcomes";
+import { resolveLiveCall } from "@/lib/live-call";
+import type { LiveCall } from "@/lib/ultravox-calls";
 import { parseCampaignCsv } from "@/lib/campaign-csv";
 import { Phone, MessageSquare, Mail, MessageCircle, ChevronLeft, ChevronRight, FileSpreadsheet, Megaphone, LayoutTemplate, ChartColumn, Upload, MoreHorizontal } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
@@ -145,8 +148,13 @@ function CampaignDetail({ channel, active, onBack }: { channel: Channel; active:
 
   const [outcomeId, setOutcomeId] = useState("");
   const [outcomeRows, setOutcomeRows] = useState<Row[]>([]);
+  const [outcomeRaw, setOutcomeRaw] = useState<Row[]>([]);
   const [outcomeResults, setOutcomeResults] = useState<string[]>([]);
   const [outcomeSummary, setOutcomeSummary] = useState<OutcomeCount[]>([]);
+  /** The outcome whose call detail is open, by call identity — the list
+   *  re-sorts under it every few seconds, so an index would drift. */
+  const [outcomeDetailKey, setOutcomeDetailKey] = useState<string | null>(null);
+  const [outcomeLive, setOutcomeLive] = useState<LiveCall | null>(null);
   const loadedOutcomeId = useRef("");
   const [outcomeLoading, setOutcomeLoading] = useState(false);
   const [outcomeError, setOutcomeError] = useState("");
@@ -293,8 +301,22 @@ function CampaignDetail({ channel, active, onBack }: { channel: Channel; active:
     void update();
     return () => { cancelled = true; if (timer) clearTimeout(timer); };
   }, [active, channel, root, tab, hasRunningWhatsapp]);
+  /** Identity of one outcome: its call when it has one, else the dial itself. */
+  const outcomeKey = (raw: Row | undefined) => raw
+    ? String(raw.call_log_id ?? raw.ultravox_call_id ?? `${raw.phone_number ?? ""}|${raw.attempt_number ?? ""}|${raw.created_at ?? raw.call_timestamp ?? ""}`)
+    : "";
+  /** Open one outcome's call: recording, transcript and summary included. */
+  const openOutcomeCall = (index: number) => {
+    const raw = outcomeRaw[index] ?? {};
+    setOutcomeDetailKey(outcomeKey(raw));
+    setOutcomeLive(null);
+    void resolveLiveCall(raw)
+      .then((live) => { if (live) setOutcomeLive(live); })
+      .catch(() => { /* the panel still shows the stored row without the provider read */ });
+  };
+  const closeOutcomeCall = () => { setOutcomeDetailKey(null); setOutcomeLive(null); };
   const navigateBack = () => {
-    if (tab === "Outcomes" && outcomeId) { setOutcomeId(""); setOutcomeRows([]); return; }
+    if (tab === "Outcomes" && outcomeId) { setOutcomeId(""); setOutcomeRows([]); setOutcomeRaw([]); closeOutcomeCall(); return; }
     if (tab === "Campaigns" && (detailOpen || creating || editFields)) {
       setDetailOpen(false); setCreating(false); setEditFields(null); setConfirmDelete(false);
       openTool("Campaigns");
@@ -320,6 +342,7 @@ function CampaignDetail({ channel, active, onBack }: { channel: Channel; active:
         return Number.isNaN(parsed.getTime()) ? "—" : parsed.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
       };
       setOutcomeResults(rows.map((outcome: Row) => String(outcome.outcome ?? outcome.status ?? "")));
+      setOutcomeRaw(rows);
       setOutcomeRows(rows.map((outcome: Row, index: number) => {
         const contact = matchOutcomeContact(outcome, campaignContacts);
         const fields = contact ? contactColumns(contact) : {};
@@ -337,9 +360,13 @@ function CampaignDetail({ channel, active, onBack }: { channel: Channel; active:
           Attempt: outcome.attempt_number,
           Result: outcome.outcome ?? outcome.status,
           Error: outcome.error ?? outcome.error_message ?? outcome.failure_reason,
-          Duration: outcome.duration_seconds != null ? `${outcome.duration_seconds}s` : outcome.duration != null ? `${outcome.duration}s` : null,
-          Transcript: outcome.transcript,
-          "AI Summary": outcome.summary,
+          // The call travels with the outcome, so its own duration, transcript
+          // and summary are what the row can show.
+          Duration: outcome.call_duration != null ? `${outcome.call_duration}s` : outcome.duration_seconds != null ? `${outcome.duration_seconds}s` : null,
+          "Billed seconds": outcome.call_duration,
+          Agent: outcome.agent_name ?? campaign?.name ?? campaign?.venue_name ?? "—",
+          Transcript: outcome.transcript ?? outcome.call_transcript,
+          "AI Summary": outcome.summary ?? outcome.call_summary,
           "Creation Time": date(outcome.created_at),
           "Sheet Reference": find(["sheetreference"]) ?? contact?.sheet_reference ?? outcome.sheet_reference,
         };
@@ -938,7 +965,21 @@ function CampaignDetail({ channel, active, onBack }: { channel: Channel; active:
             {outcomeLoading && <p role="status" className="text-sm text-ink-secondary">Loading outcomes…</p>}
             {outcomeError && <p role="alert" className="text-sm text-danger">{outcomeError}</p>}
             {!outcomeLoading && !outcomeError && !outcomeRows.length && <p className="text-sm text-ink-secondary">No outcomes recorded for this campaign yet.</p>}
-            {outcomeRows.length > 0 && <><CampaignOutcomes exportTarget={exportTarget} key={outcomeId} agentId={String(campaigns.find((row) => recordId(row) === outcomeId)?.agent_id ?? "")} campaignName={String(campaigns.find((row) => recordId(row) === outcomeId)?.name ?? campaigns.find((row) => recordId(row) === outcomeId)?.venue_name ?? "Campaign")} rows={outcomeRows} resultValues={channel === "sms" ? outcomeResults : undefined} onExport={(rows) => exportRows(rows, "outcomes.csv")} /></>}
+            {outcomeRows.length > 0 && <><CampaignOutcomes exportTarget={exportTarget} key={outcomeId} agentId={String(campaigns.find((row) => recordId(row) === outcomeId)?.agent_id ?? "")} campaignName={String(campaigns.find((row) => recordId(row) === outcomeId)?.name ?? campaigns.find((row) => recordId(row) === outcomeId)?.venue_name ?? "Campaign")} rows={outcomeRows} resultValues={channel === "sms" ? outcomeResults : undefined} onSelectRow={channel === "voice" ? openOutcomeCall : undefined} onExport={(rows) => exportRows(rows, "outcomes.csv")} /></>}
+            {/* Only a voice outcome has a call behind it — an SMS or WhatsApp
+                row opens nothing rather than an empty player. */}
+            {channel === "voice" && outcomeDetailKey != null && (() => {
+              const index = outcomeRaw.findIndex((raw) => outcomeKey(raw) === outcomeDetailKey);
+              if (index < 0 || !outcomeRows[index]) return null;
+              return <CallDetail
+                key={outcomeDetailKey}
+                row={outcomeRows[index]}
+                raw={outcomeRaw[index] ?? {}}
+                live={outcomeLive}
+                onClose={closeOutcomeCall}
+                onLiveUpdate={setOutcomeLive}
+              />;
+            })()}
           </div>
         </Card>}
       </div>}

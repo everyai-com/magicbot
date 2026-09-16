@@ -11,37 +11,10 @@ import {
   normalizeLiveCall,
   type LiveCall,
 } from '@/lib/ultravox-calls';
+import { resolveLiveCall } from '@/lib/live-call';
 
 type Row = Record<string, unknown>;
 const paths = { 'Voice Calls': 'call-logs/with-agent-name', SMS: 'messaging/sms-campaigns/completed', Email: 'messaging/gmail-campaigns/completed', WhatsApp: 'whatsapp/campaigns' };
-
-/** Resolve one history row to its live provider call: direct id first,
-// then time-proximity matching through the server. */
-async function resolveLiveCall(raw: Row): Promise<LiveCall | null> {
-  const callId = extractCallId(raw);
-  if (callId) {
-    try {
-      const data = await api(`/api/ultravox/calls/${encodeURIComponent(callId)}`);
-      if (data && typeof data.call === "object" && data.call) {
-        return normalizeLiveCall(data.call as Row);
-      }
-    } catch {
-      // Fall through to time-proximity matching below.
-    }
-  }
-  const platformAgentId = extractPlatformAgentId(raw);
-  const at = extractRowTime(raw);
-  if (!platformAgentId || !at) return null;
-  const data = await api('/api/ultravox/match-calls', {
-    method: 'POST',
-    body: JSON.stringify({ items: [{ key: 'r', platformAgentId, at }] }),
-  });
-  const found = Array.isArray(data?.results) ? data.results[0] : null;
-  if (found && found.matched && found.call && typeof found.call === "object") {
-    return normalizeLiveCall(found.call as Row);
-  }
-  return null;
-}
 
 export function HistorySection() {
   const [tab, setTab] = useState<keyof typeof paths>('Voice Calls');

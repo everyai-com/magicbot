@@ -2,26 +2,10 @@ import { createPortal } from "react-dom";
 import { OutcomeExport } from "./OutcomeExport";
 import { Search, Clock } from "lucide-react";
 import { useState } from "react";
-import { outcomeStatus, type OutcomeTone } from "@/lib/campaign-outcome-summary";
+import { outcomeStatus } from "@/lib/campaign-outcome-summary";
+import { ResultPill } from "./ResultPill";
 
 type Row = Record<string, unknown>;
-
-/** One look per result, shared with the campaign list so a call reads the same in both. */
-const toneClass = {
-  live: "bg-success/15 text-success",
-  positive: "bg-success/15 text-success",
-  voicemail: "bg-accent/15 text-accent",
-  warning: "bg-warning/15 text-warning",
-  danger: "bg-danger/15 text-danger",
-  neutral: "bg-control text-ink-secondary",
-} satisfies Record<OutcomeTone, string>;
-
-export function ResultPill({ value }: { value: unknown }) {
-  const status = outcomeStatus(value);
-  return <span className={"inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium " + toneClass[status.tone]}>
-    {status.tone === "live" && <span className="size-1.5 animate-pulse rounded-full bg-success" />}{status.label}
-  </span>;
-}
 
 export function CampaignOutcomes({ rows, onExport, onSelectRow, agentId, campaignName, exportTarget, resultValues, showErrorSummary = true }: { showErrorSummary?: boolean; resultValues?: string[]; exportTarget?: HTMLDivElement | null; rows: Row[]; agentId?: string; campaignName: string; onExport: (rows: Row[]) => void; onSelectRow?: (index: number) => void }) {
   const [search, setSearch] = useState("");
