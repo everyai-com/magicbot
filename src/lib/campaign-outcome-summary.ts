@@ -1,7 +1,25 @@
 type Row = Record<string, unknown>;
 
-/** One (campaign, result) bucket from /api/call-outcomes/summary. */
-export type OutcomeCount = { campaign_id: string; outcome: string; count: number };
+/** One (campaign, run, result) bucket from /api/call-outcomes/summary. */
+export type OutcomeCount = {
+  campaign_id: string;
+  outcome: string;
+  count: number;
+  /** The campaign's attempt number: starting a campaign again dials a new run. */
+  attempt_number: number;
+  first_at: number;
+  latest_at: number;
+};
+
+/** One run of a campaign — what a card in the Outcomes list stands for. */
+export type CampaignRun = {
+  campaignId: string;
+  attempt: number;
+  counts: OutcomeCounts;
+  /** When the run's first and last call were recorded. */
+  firstAt: number;
+  latestAt: number;
+};
 
 export type OutcomeCounts = {
   /** Calls recorded for the campaign — one row per dial, so attempts add up. */
@@ -71,11 +89,15 @@ const emptyCounts = (): OutcomeCounts => ({
   pending: 0,
 });
 
-/** Tally one campaign's results, so a campaign reads as a single outcome. */
-export function outcomeCountsFor(rows: OutcomeCount[], campaignId: string): OutcomeCounts {
+/**
+ * Tally one run's results. Without an attempt this sums the whole campaign,
+ * which is what a campaign with a single run shows anyway.
+ */
+export function outcomeCountsFor(rows: OutcomeCount[], campaignId: string, attempt?: number | null): OutcomeCounts {
   const counts = emptyCounts();
   for (const row of rows) {
     if (!row || String(row.campaign_id) !== String(campaignId)) continue;
+    if (attempt != null && Number(row.attempt_number ?? 1) !== Number(attempt)) continue;
     const count = Math.max(0, Number(row.count ?? 0));
     if (!count) continue;
     counts.total += count;
@@ -150,6 +172,41 @@ export function summaryRows(data: unknown): OutcomeCount[] {
       campaign_id: String(row.campaign_id ?? ""),
       outcome: String(row.outcome ?? ""),
       count: Number(row.count ?? 0),
+      attempt_number: Number(row.attempt_number ?? 1) || 1,
+      first_at: Number(row.first_at ?? 0),
+      latest_at: Number(row.latest_at ?? 0),
     }))
     .filter((row) => row.campaign_id && row.count > 0);
+}
+
+/**
+ * Every run of one campaign, newest first.
+ *
+ * A campaign started again is a new attempt, and its card stands on its own —
+ * the earlier run's result is never overwritten by the newer one, which is the
+ * only way to see what a second, smaller run actually did.
+ */
+export function campaignRuns(rows: OutcomeCount[], campaignId: string): CampaignRun[] {
+  const attempts = new Set(rows.filter((row) => String(row.campaign_id) === String(campaignId)).map((row) => Number(row.attempt_number ?? 1) || 1));
+  return [...attempts]
+    .sort((a, b) => b - a)
+    .map((attempt) => {
+      const scoped = rows.filter((row) => String(row.campaign_id) === String(campaignId) && (Number(row.attempt_number ?? 1) || 1) === attempt);
+      const times = scoped.flatMap((row) => [row.first_at, row.latest_at]).filter((value) => value > 0);
+      return {
+        campaignId: String(campaignId),
+        attempt,
+        counts: outcomeCountsFor(rows, campaignId, attempt),
+        firstAt: times.length ? Math.min(...times) : 0,
+        latestAt: times.length ? Math.max(...times) : 0,
+      };
+    });
+}
+
+/** When a run started, for the card that has to tell two runs apart. */
+export function runMoment(at: number): string {
+  if (!at) return "";
+  const date = new Date(at);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hour12: false });
 }

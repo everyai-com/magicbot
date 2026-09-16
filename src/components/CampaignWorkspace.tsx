@@ -151,6 +151,8 @@ function CampaignDetail({ channel, active, onBack }: { channel: Channel; active:
   const [outcomeRaw, setOutcomeRaw] = useState<Row[]>([]);
   const [outcomeResults, setOutcomeResults] = useState<string[]>([]);
   const [outcomeSummary, setOutcomeSummary] = useState<OutcomeCount[]>([]);
+  /** Which run of the open campaign is being shown; null = every run. */
+  const [outcomeRun, setOutcomeRun] = useState<number | null>(null);
   /** The outcome whose call detail is open, by call identity — the list
    *  re-sorts under it every few seconds, so an index would drift. */
   const [outcomeDetailKey, setOutcomeDetailKey] = useState<string | null>(null);
@@ -301,6 +303,14 @@ function CampaignDetail({ channel, active, onBack }: { channel: Channel; active:
     void update();
     return () => { cancelled = true; if (timer) clearTimeout(timer); };
   }, [active, channel, root, tab, hasRunningWhatsapp]);
+  /** Opens one run of a campaign: its card stands for that run's calls. */
+  const openCampaignRun = (campaign: Row, attempt: number) => {
+    setCampaignMenu(null);
+    setOutcomeRows([]);
+    setOutcomeRaw([]);
+    setOutcomeRun(attempt);
+    setOutcomeId(recordId(campaign));
+  };
   /** Identity of one outcome: its call when it has one, else the dial itself. */
   const outcomeKey = (raw: Row | undefined) => raw
     ? String(raw.call_log_id ?? raw.ultravox_call_id ?? `${raw.phone_number ?? ""}|${raw.attempt_number ?? ""}|${raw.created_at ?? raw.call_timestamp ?? ""}`)
@@ -315,8 +325,15 @@ function CampaignDetail({ channel, active, onBack }: { channel: Channel; active:
       .catch(() => { /* the panel still shows the stored row without the provider read */ });
   };
   const closeOutcomeCall = () => { setOutcomeDetailKey(null); setOutcomeLive(null); };
+  // A card stands for one run, so the detail it opens shows that run's calls
+  // and keeps their indexes so a click still resolves to the right call.
+  const shownOutcomeIndexes = outcomeRows
+    .map((_, index) => index)
+    .filter((index) => outcomeRun == null || (Number(outcomeRaw[index]?.attempt_number ?? 1) || 1) === outcomeRun);
+  const shownOutcomeRows = shownOutcomeIndexes.map((index) => outcomeRows[index]);
+  const detailTitle = `${String(campaigns.find((row) => recordId(row) === outcomeId)?.name ?? campaigns.find((row) => recordId(row) === outcomeId)?.venue_name ?? "Campaign outcomes")}${outcomeRun != null ? ` · run ${outcomeRun}` : ""}`;
   const navigateBack = () => {
-    if (tab === "Outcomes" && outcomeId) { setOutcomeId(""); setOutcomeRows([]); setOutcomeRaw([]); closeOutcomeCall(); return; }
+    if (tab === "Outcomes" && outcomeId) { setOutcomeId(""); setOutcomeRows([]); setOutcomeRaw([]); setOutcomeRun(null); closeOutcomeCall(); return; }
     if (tab === "Campaigns" && (detailOpen || creating || editFields)) {
       setDetailOpen(false); setCreating(false); setEditFields(null); setConfirmDelete(false);
       openTool("Campaigns");
@@ -936,8 +953,8 @@ function CampaignDetail({ channel, active, onBack }: { channel: Channel; active:
           <label className="text-xs text-ink-secondary">Campaign name<input autoFocus className={control + " mt-1 w-full min-w-0"} value={campaignName} onChange={(event) => setCampaignName(event.target.value)} onKeyDown={(event) => { if (event.key === "Escape") { event.stopPropagation(); setRenamingId(null); } }} required /></label>
           <div className="mt-2 flex gap-2"><button type="submit" className={button}>Save</button><button type="button" className={control} onClick={() => setRenamingId(null)}>Cancel</button></div>
         </form> : !outcomeId ? (channel === "voice"
-          ? <CampaignOutcomeList channel={channel} campaigns={outcomeCampaigns} summary={outcomeSummary} menu={campaignMenu} menuRef={campaignMenuRef} onMenu={setCampaignMenu}
-              onOpen={(campaign) => { setCampaignMenu(null); setOutcomeRows([]); setOutcomeId(recordId(campaign)); }}
+          ? <CampaignOutcomeList campaigns={outcomeCampaigns} summary={outcomeSummary} agents={agents} menu={campaignMenu} menuRef={campaignMenuRef} onMenu={setCampaignMenu}
+              onOpen={openCampaignRun}
               onRename={(campaign) => { setRenamingId(recordId(campaign)); setCampaignName(String(campaign.name ?? campaign.venue_name ?? recordId(campaign))); }}
               onDelete={(campaign) => setOutcomeDeleteId(recordId(campaign))} />
           : <div className="grid gap-2 sm:grid-cols-2">{outcomeCampaigns.map((row) => {
@@ -954,18 +971,15 @@ function CampaignDetail({ channel, active, onBack }: { channel: Channel; active:
               </div>}
             </div>
           </div>;
-        })}{!loading && !outcomeCampaigns.length && <p className="text-sm text-ink-secondary">{(channel === "sms" || channel === "whatsapp") ? "No completed campaigns yet. Campaigns appear here after all recipients have been processed." : "No campaigns yet."}</p>}</div>) : <Card title={String(campaigns.find((row) => recordId(row) === outcomeId)?.name ?? campaigns.find((row) => recordId(row) === outcomeId)?.venue_name ?? "Campaign outcomes")}>
+        })}{!loading && !outcomeCampaigns.length && <p className="text-sm text-ink-secondary">{(channel === "sms" || channel === "whatsapp") ? "No completed campaigns yet. Campaigns appear here after all recipients have been processed." : "No campaigns yet."}</p>}</div>) : <Card title={detailTitle}>
           <div className="min-w-0 space-y-3">
-            {/* The same reading as the campaign's row in the list, so the detail
-                never disagrees with what the operator just clicked. */}
-            {channel === "voice" && (outcomeSummary.length > 0 || outcomeRows.length > 0) && (() => {
-              const counts = outcomeCountsFor(outcomeSummary, outcomeId);
-              return <p className="text-[13px] text-ink-secondary">{outcomeBreakdown(counts)}</p>;
-            })()}
+            {/* The same reading as the card that was opened, so the detail
+                never disagrees with the run the operator just clicked. */}
+            {channel === "voice" && (outcomeSummary.length > 0 || outcomeRows.length > 0) && <p className="text-[13px] text-ink-secondary">{outcomeBreakdown(outcomeCountsFor(outcomeSummary, outcomeId, outcomeRun))}</p>}
             {outcomeLoading && <p role="status" className="text-sm text-ink-secondary">Loading outcomes…</p>}
             {outcomeError && <p role="alert" className="text-sm text-danger">{outcomeError}</p>}
-            {!outcomeLoading && !outcomeError && !outcomeRows.length && <p className="text-sm text-ink-secondary">No outcomes recorded for this campaign yet.</p>}
-            {outcomeRows.length > 0 && <><CampaignOutcomes exportTarget={exportTarget} key={outcomeId} agentId={String(campaigns.find((row) => recordId(row) === outcomeId)?.agent_id ?? "")} campaignName={String(campaigns.find((row) => recordId(row) === outcomeId)?.name ?? campaigns.find((row) => recordId(row) === outcomeId)?.venue_name ?? "Campaign")} rows={outcomeRows} resultValues={channel === "sms" ? outcomeResults : undefined} onSelectRow={channel === "voice" ? openOutcomeCall : undefined} onExport={(rows) => exportRows(rows, "outcomes.csv")} /></>}
+            {!outcomeLoading && !outcomeError && !shownOutcomeRows.length && <p className="text-sm text-ink-secondary">{outcomeRun != null ? "No calls recorded for this run yet." : "No outcomes recorded for this campaign yet."}</p>}
+            {shownOutcomeRows.length > 0 && <><CampaignOutcomes exportTarget={exportTarget} key={`${outcomeId}:${outcomeRun ?? "all"}`} agentId={String(campaigns.find((row) => recordId(row) === outcomeId)?.agent_id ?? "")} campaignName={detailTitle} rows={shownOutcomeRows} resultValues={channel === "sms" ? outcomeResults : undefined} onSelectRow={channel === "voice" ? (index) => openOutcomeCall(shownOutcomeIndexes[index]) : undefined} onExport={(rows) => exportRows(rows, "outcomes.csv")} /></>}
             {/* Only a voice outcome has a call behind it — an SMS or WhatsApp
                 row opens nothing rather than an empty player. */}
             {channel === "voice" && outcomeDetailKey != null && (() => {

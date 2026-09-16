@@ -1,9 +1,11 @@
 import { expect, it } from "vitest";
 import {
+  campaignRuns,
   outcomeBreakdown,
   outcomeCountsFor,
   outcomeStatus,
   processedPercent,
+  runMoment,
   summaryRows,
 } from "./campaign-outcome-summary";
 
@@ -57,4 +59,34 @@ it("survives a summary the platform cannot answer yet", () => {
   expect(summaryRows(undefined)).toEqual([]);
   expect(summaryRows({ error: "Not found" })).toEqual([]);
   expect(summaryRows([{ campaign_id: "", outcome: "COMPLETED", count: 3 }])).toEqual([]);
+});
+
+it("gives every run of a campaign its own card, instead of folding it in", () => {
+  const rows = summaryRows([
+    { campaign_id: "a", attempt_number: 1, outcome: "COMPLETED", count: 50, first_at: 1_000, latest_at: 9_000 },
+    { campaign_id: "a", attempt_number: 2, outcome: "COMPLETED", count: 12, first_at: 60_000, latest_at: 61_000 },
+    { campaign_id: "a", attempt_number: 2, outcome: "PENDING", count: 28, first_at: 60_000, latest_at: 61_000 },
+    { campaign_id: "b", attempt_number: 1, outcome: "VOICEMAIL", count: 3, first_at: 5_000, latest_at: 6_000 },
+  ]);
+  const runs = campaignRuns(rows, "a");
+  expect(runs.map((run) => run.attempt)).toEqual([2, 1]);
+  expect(runs[0].counts).toMatchObject({ total: 40, completed: 12, pending: 28 });
+  expect(outcomeBreakdown(runs[0].counts)).toBe("12 completed · 28 pending");
+  expect(runs[1].counts).toMatchObject({ total: 50, completed: 50 });
+  expect(runs[0].firstAt).toBe(60_000);
+  expect(runs[1].latestAt).toBe(9_000);
+  expect(campaignRuns(rows, "c")).toEqual([]);
+});
+
+it("treats a summary without an attempt as the campaign's first run", () => {
+  const runs = campaignRuns(summaryRows([{ campaign_id: "a", outcome: "COMPLETED", count: 4 }]), "a");
+  expect(runs).toHaveLength(1);
+  expect(runs[0].attempt).toBe(1);
+  expect(outcomeCountsFor(summaryRows([{ campaign_id: "a", outcome: "COMPLETED", count: 4 }]), "a", 1).total).toBe(4);
+});
+
+it("dates a run the way a card needs to tell two runs apart", () => {
+  const at = Date.UTC(2026, 8, 16, 15, 20);
+  expect(runMoment(at)).toMatch(/16 Sept/);
+  expect(runMoment(0)).toBe("");
 });
