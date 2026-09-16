@@ -5,6 +5,9 @@ import { isDeepStrictEqual } from "node:util";
 
 const API = "https://api.ultravox.ai/api";
 const MAX_PAGES = 8;
+/** Every Ultravox read is capped: a stalled upstream must never hang UI
+ *  requests (history, demo list, recordings) indefinitely. */
+const UV_TIMEOUT_MS = 20_000;
 
 const SERVER_ENV_FILES = [
   ".env.local",
@@ -81,13 +84,23 @@ function platformBaseUrl(): string {
 }
 
 function message(status: number, body: unknown): string {
+  const clean = (text: string): string => {
+    // Upstream 404s arrive as full HTML pages — never surface markup as an
+    // error message; fall back to a plain status description instead.
+    if (/<\s*html|<\s*!doctype/i.test(text)) {
+      return status === 404
+        ? "Ultravox could not find this agent or call. It may belong to a different workspace or API key."
+        : `Ultravox returned ${status}`;
+    }
+    return text.length > 300 ? text.slice(0, 300) : text;
+  };
   const text =
     body && typeof body === "object"
       ? String((body as { error?: unknown; detail?: unknown; message?: unknown }).error ?? (body as { detail?: unknown }).detail ?? (body as { message?: unknown }).message ?? "")
       : typeof body === "string"
         ? body
         : "";
-  return text || `Ultravox returned ${status}`;
+  return text ? clean(text) : `Ultravox returned ${status}`;
 }
 
 function isAudioMime(value: string | null): boolean {
@@ -106,6 +119,166 @@ function audioMimeFromUrl(value: string): string | null {
 
 export function configured(cfg: AppConfig): boolean {
   return Boolean(apiKey(cfg));
+}
+
+export interface UltravoxCallMessage {
+  role: "user" | "agent";
+  text: string;
+  start: string;
+  end: string;
+}
+
+export interface UltravoxRecording {
+  bytes: ArrayBuffer;
+  mime: string;
+}
+
+const ULTRAVOX_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export function isUltravoxId(value: unknown): value is string {
+  return typeof value === "string" && ULTRAVOX_UUID.test(value.trim());
+}
+
+/** Raw call object as Ultravox returns it (detail + list endpoints share it). */
+export async function getCall(cfg: AppConfig, callId: string): Promise<Record<string, unknown>> {
+  if (!/^[\w-]+$/.test(callId.trim()) || !callId.trim()) {
+    throw Object.assign(new Error("callId must be a valid call id"), { status: 400 });
+  }
+  return ultravoxJson<Record<string, unknown>>(cfg, `/calls/${encodeURIComponent(callId.trim())}`);
+}
+
+/** Recent calls for one Ultravox agent, newest first. */
+export async function listAgentCalls(
+  cfg: AppConfig,
+  ultravoxAgentId: string,
+  pageSize = 25,
+): Promise<Record<string, unknown>[]> {
+  if (!isUltravoxId(ultravoxAgentId)) throw Object.assign(new Error("agentId must be a valid Ultravox agent id"), { status: 400 });
+  const size = Math.max(1, Math.min(Number.isFinite(pageSize) ? Math.floor(pageSize) : 25, 50));
+  const url = new URL(`${API}/agents/${encodeURIComponent(ultravoxAgentId.trim())}/calls`);
+  url.searchParams.set("pageSize", String(size));
+  const key = apiKey(cfg);
+  if (!key) throw Object.assign(new Error("Ultravox API key is not configured in the backend"), { status: 409 });
+  const res = await fetch(url, { headers: { "X-API-Key": key }, signal: AbortSignal.timeout(UV_TIMEOUT_MS) });
+  const contentType = res.headers.get("content-type") ?? "";
+  const body = contentType.includes("application/json") ? await res.json().catch(() => ({})) : await res.text().catch(() => "");
+  if (!res.ok) throw Object.assign(new Error(message(res.status, body)), { status: res.status });
+  const results = body && typeof body === "object" && Array.isArray((body as { results?: unknown }).results)
+    ? (body as { results: unknown[] }).results
+    : [];
+  return results.filter((row): row is Record<string, unknown> => !!row && typeof row === "object");
+}
+
+/** Newest calls across the whole workspace (agent may be deleted since). */
+export async function listRecentCalls(cfg: AppConfig, pageSize = 50): Promise<Record<string, unknown>[]> {
+  const size = Math.max(1, Math.min(Number.isFinite(pageSize) ? Math.floor(pageSize) : 50, 50));
+  const key = apiKey(cfg);
+  if (!key) throw Object.assign(new Error("Ultravox API key is not configured in the backend"), { status: 409 });
+  const url = new URL(`${API}/calls`);
+  url.searchParams.set("pageSize", String(size));
+  const res = await fetch(url, { headers: { "X-API-Key": key }, signal: AbortSignal.timeout(UV_TIMEOUT_MS) });
+  const contentType = res.headers.get("content-type") ?? "";
+  const body = contentType.includes("application/json") ? await res.json().catch(() => ({})) : await res.text().catch(() => "");
+  if (!res.ok) throw Object.assign(new Error(message(res.status, body)), { status: res.status });
+  const results = body && typeof body === "object" && Array.isArray((body as { results?: unknown }).results)
+    ? (body as { results: unknown[] }).results
+    : [];
+  return results.filter((row): row is Record<string, unknown> => !!row && typeof row === "object");
+}
+
+/** Small subset of a call object: everything the history UI needs, without
+ *  the heavy system prompt. */
+export function pruneLiveCall(call: Record<string, unknown>): Record<string, unknown> {
+  const keep = ["callId", "created", "joined", "ended", "endReason", "billedDuration",
+    "billingStatus", "summary", "shortSummary", "model", "voice", "medium", "clientVersion", "metadata",
+    "to", "from", "to_number", "from_number", "recipient", "direction"];
+  const pruned: Record<string, unknown> = {};
+  for (const field of keep) {
+    if (call[field] !== undefined) pruned[field] = call[field];
+  }
+  return pruned;
+}
+
+/** Agent display name for attribution (best-effort; empty when unknown). */
+export async function getAgentName(cfg: AppConfig, ultravoxAgentId: string): Promise<string> {
+  try {
+    const agent = await ultravoxJson<Record<string, unknown>>(cfg, `/agents/${encodeURIComponent(ultravoxAgentId.trim())}`);
+    const name = agent.name ?? agent.title;
+    return typeof name === "string" ? name.trim() : "";
+  } catch {
+    return "";
+  }
+}
+
+export async function listCallMessages(cfg: AppConfig, callId: string): Promise<UltravoxCallMessage[]> {
+  if (!/^[\w-]+$/.test(callId.trim()) || !callId.trim()) {
+    throw Object.assign(new Error("callId must be a valid call id"), { status: 400 });
+  }
+  const key = apiKey(cfg);
+  if (!key) throw Object.assign(new Error("Ultravox API key is not configured in the backend"), { status: 409 });
+  const messages: UltravoxCallMessage[] = [];
+  let cursor = "";
+  for (let page = 0; page < 5; page += 1) {
+    const url = new URL(`${API}/calls/${encodeURIComponent(callId.trim())}/messages`);
+    url.searchParams.set("pageSize", "100");
+    if (cursor) url.searchParams.set("cursor", cursor);
+    const res = await fetch(url, { headers: { "X-API-Key": key }, signal: AbortSignal.timeout(UV_TIMEOUT_MS) });
+    const contentType = res.headers.get("content-type") ?? "";
+    const body = contentType.includes("application/json") ? await res.json().catch(() => ({})) : await res.text().catch(() => "");
+    if (!res.ok) throw Object.assign(new Error(message(res.status, body)), { status: res.status });
+    const results = body && typeof body === "object" && Array.isArray((body as { results?: unknown }).results)
+      ? (body as { results: Record<string, unknown>[] }).results
+      : [];
+    for (const row of results) {
+      const text = typeof row.text === "string" ? row.text : "";
+      if (!text.trim()) continue;
+      const span = (row.timespan && typeof row.timespan === "object" ? row.timespan : {}) as Record<string, unknown>;
+      messages.push({
+        role: row.role === "MESSAGE_ROLE_AGENT" ? "agent" : "user",
+        text,
+        start: typeof span.start === "string" ? span.start : "",
+        end: typeof span.end === "string" ? span.end : "",
+      });
+    }
+    const next = body && typeof body === "object" ? (body as { next?: unknown }).next : null;
+    if (typeof next !== "string" || !next) break;
+    try {
+      cursor = new URL(next).searchParams.get("cursor") ?? "";
+    } catch {
+      break;
+    }
+    if (!cursor) break;
+  }
+  return messages;
+}
+
+/** Call recording bytes. Ultravox answers with a short-lived signed-URL
+ *  redirect, so resolve it at request time instead of caching the URL. */
+export async function fetchCallRecording(cfg: AppConfig, callId: string): Promise<UltravoxRecording> {
+  if (!/^[\w-]+$/.test(callId.trim()) || !callId.trim()) {
+    throw Object.assign(new Error("callId must be a valid call id"), { status: 400 });
+  }
+  const key = apiKey(cfg);
+  if (!key) throw Object.assign(new Error("Ultravox API key is not configured in the backend"), { status: 409 });
+  const redirect = await fetch(`${API}/calls/${encodeURIComponent(callId.trim())}/recording`, {
+    headers: { "X-API-Key": key },
+    redirect: "manual",
+    signal: AbortSignal.timeout(UV_TIMEOUT_MS),
+  });
+  const location = redirect.headers.get("location") ?? "";
+  if ((redirect.status === 301 || redirect.status === 302 || redirect.status === 307) && location) {
+    const audio = await fetch(location, { signal: AbortSignal.timeout(60_000) });
+    if (!audio.ok) throw Object.assign(new Error("Ultravox recording is not available yet"), { status: 502 });
+    const bytes = await audio.arrayBuffer();
+    if (bytes.byteLength > 25 * 1024 * 1024) throw Object.assign(new Error("Recording exceeds 25 MB"), { status: 413 });
+    const lower = location.split("?")[0].toLowerCase();
+    return {
+      bytes,
+      mime: lower.endsWith(".mp3") ? "audio/mpeg" : lower.endsWith(".ogg") ? "audio/ogg" : "audio/wav",
+    };
+  }
+  if (redirect.status === 404) throw Object.assign(new Error("No recording is available for this call yet"), { status: 404 });
+  throw Object.assign(new Error(message(redirect.status, await redirect.text().catch(() => ""))), { status: redirect.status });
 }
 
 /** Read-only runtime audit; never returns prompts, credentials or customer content. */
@@ -409,7 +582,7 @@ export async function listVoices(
     if (input.search?.trim()) url.searchParams.set("search", input.search.trim());
     if (input.primaryLanguage?.trim()) url.searchParams.set("primaryLanguage", input.primaryLanguage.trim());
 
-    const res = await fetch(url, { headers: { "X-API-Key": key } });
+    const res = await fetch(url, { headers: { "X-API-Key": key }, signal: AbortSignal.timeout(UV_TIMEOUT_MS) });
     const contentType = res.headers.get("content-type") ?? "";
     const body = contentType.includes("application/json") ? await res.json().catch(() => ({})) : await res.text().catch(() => "");
     if (!res.ok) throw new Error(message(res.status, body));

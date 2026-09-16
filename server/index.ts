@@ -25,6 +25,7 @@ import {
   FILE_MAX_BYTES,
   IMAGE_MAX_BYTES,
   readAttachment,
+  readDocumentAttachment,
   saveFile,
   saveImage,
   type SavedAttachment,
@@ -103,6 +104,7 @@ import {
 } from "./store.ts";
 import * as tts from "./tts/index.ts";
 import * as ultravox from "./ultravox.ts";
+import { discoverTelnyxNumber, normalizeTelnyxNumber, provisionTelnyxNumber } from "./telnyx.ts";
 import { hostedCallSettings } from "./call-settings.ts";
 import { parseCustomTool } from "../shared/custom-tool.ts";
 import { narrateTool, toUtterances } from "./tts/speech-text.ts";
@@ -2832,7 +2834,7 @@ let localEmailCampaigns: EmailCampaigns | undefined;
 let localWhatsappCampaigns: WhatsappCampaigns | undefined;
 async function platformJson(
   path: string,
-  options: { method?: string; authorization?: string | string[]; body?: unknown } = {},
+  options: { method?: string; authorization?: string | string[]; body?: unknown; timeoutMs?: number } = {},
 ): Promise<unknown> {
   const bearer = usableBearer(options.authorization);
   if (!bearer) throw Object.assign(new Error("Sign in to load connected MagicTeams resources"), { status: 401 });
@@ -2841,7 +2843,7 @@ async function platformJson(
     "content-type": "application/json",
   };
   const response = await fetch(betterAuthApiUrl(path), {
-    signal: AbortSignal.timeout(25_000),
+    signal: AbortSignal.timeout(options.timeoutMs ?? 25_000),
     method: options.method ?? "GET",
     headers,
     body: options.body === undefined ? undefined : JSON.stringify(options.body),
@@ -2902,6 +2904,88 @@ function normalizeDemoCallResponse(value: unknown): Record<string, unknown> {
     logId: firstStringField(value, ["logId", "log_id"]) || null,
     provider: firstStringField(value, ["provider"]) || "ultravox",
   };
+}
+
+/** HTTP status for an Ultravox helper failure: auth/config problems keep
+ *  their status, everything else surfaces as a bad-gateway from Ultravox. */
+function uvStatus(error: unknown): number {
+  if (error && typeof error === "object" && typeof (error as { status?: unknown }).status === "number") {
+    return (error as { status: number }).status;
+  }
+  return ultravox.configured(cfg) ? 502 : 409;
+}
+
+/** In-memory recording cache (LRU-ish, capped). Every player seek issues a
+ *  Range request; re-fetching the whole file from Ultravox each time would
+ *  make seeking crawl. */
+const recordingCache = new Map<string, { bytes: Buffer; mime: string }>();
+
+async function cachedRecording(callId: string): Promise<{ bytes: Buffer; mime: string }> {
+  const hit = recordingCache.get(callId);
+  if (hit) {
+    recordingCache.delete(callId);
+    recordingCache.set(callId, hit);
+    return hit;
+  }
+  const audio = await ultravox.fetchCallRecording(cfg, callId);
+  const entry = { bytes: Buffer.from(audio.bytes), mime: audio.mime };
+  recordingCache.set(callId, entry);
+  while (recordingCache.size > 10) {
+    const oldest = recordingCache.keys().next().value;
+    if (oldest === undefined) break;
+    recordingCache.delete(oldest);
+  }
+  return entry;
+}
+
+/** Match one platform call-log row to its live Ultravox call by creation
+ *  time. Platform agent ids resolve to Ultravox agent ids through the
+ *  platform agent record; ids that already are Ultravox ids skip that hop.
+ *  Calls can outlive their agent (deleted/ephemeral agents), so fall back to
+ *  the workspace-wide recent-calls list before giving up. */
+async function matchUltravoxCall(
+  platformAgentId: string,
+  atMs: number,
+  authorization: string | string[] | undefined,
+): Promise<Record<string, unknown>> {
+  const MATCH_WINDOW_MS = 10 * 60 * 1000;
+  const nearestWithin = (calls: Record<string, unknown>[]): Record<string, unknown> | null => {
+    let best: Record<string, unknown> | null = null;
+    let bestDiff = Number.POSITIVE_INFINITY;
+    for (const call of calls) {
+      const created = typeof call.created === "string" ? Date.parse(call.created) : NaN;
+      if (!Number.isFinite(created)) continue;
+      const diff = Math.abs(created - atMs);
+      if (diff < bestDiff) {
+        bestDiff = diff;
+        best = call;
+      }
+    }
+    return best && bestDiff <= MATCH_WINDOW_MS ? best : null;
+  };
+  if (ultravox.isUltravoxId(platformAgentId)) {
+    const direct = nearestWithin(await ultravox.listAgentCalls(cfg, platformAgentId.trim(), 25));
+    if (direct) return ultravox.pruneLiveCall(direct);
+  } else {
+    try {
+      // Short timeout: agent-name attribution must never stall the lookup —
+      // the workspace-wide list below is the real fallback.
+      const agent = await platformJson(`/api/agents/${encodeURIComponent(platformAgentId)}`, { authorization, timeoutMs: 8000 });
+      const record = (agent && typeof agent === "object"
+        ? ((agent as Record<string, unknown>).agent ?? (agent as Record<string, unknown>).data ?? agent)
+        : {}) as Record<string, unknown>;
+      const resolved = record.ultravox_agent_id ?? record.ultravoxAgentId;
+      if (ultravox.isUltravoxId(resolved)) {
+        const scoped = nearestWithin(await ultravox.listAgentCalls(cfg, (resolved as string).trim(), 25));
+        if (scoped) return ultravox.pruneLiveCall(scoped);
+      }
+    } catch {
+      // Fall through to the workspace-wide list below.
+    }
+  }
+  const global = nearestWithin(await ultravox.listRecentCalls(cfg, 50));
+  if (global) return ultravox.pruneLiveCall(global);
+  throw Object.assign(new Error("No matching live call found near this history entry."), { status: 404 });
 }
 
 function platformRows(value: unknown, keys: string[]): Array<Record<string, unknown>> {
@@ -3739,6 +3823,24 @@ const server = createServer(async (req, res) => {
         req.on("error", (error) => fail(400, error instanceof Error ? error.message : String(error)));
       });
       return json(res, 201, saved);
+    }
+
+    // Reading a document back: the image route is name-locked to image
+    // extensions, and /attach needs the bytes of a TXT/MD/PDF/DOCX the user
+    // attached. Served as octet-stream + nosniff so the browser never
+    // renders it — the client parses it itself.
+    m = path.match(/^\/api\/file-attachments\/([\w.-]+)$/);
+    if (m && method === "GET") {
+      const bytes = readDocumentAttachment(m[1]!);
+      if (!bytes) return json(res, 404, { error: "no such attachment" });
+      res.writeHead(200, {
+        "content-type": "application/octet-stream",
+        "content-length": String(bytes.byteLength),
+        "content-disposition": "attachment",
+        "x-content-type-options": "nosniff",
+        "cache-control": "private, no-store",
+      });
+      return res.end(bytes);
     }
 
     // serving is name-locked to the attachments dir — readAttachment
@@ -5491,6 +5593,35 @@ const server = createServer(async (req, res) => {
       }
     }
 
+    // ── Telnyx provisioning (local) ───────────────────────────────────
+    // One API key plus the number is enough: these resolve or create the
+    // Voice API application, its outbound voice profile, and the messaging
+    // profile, then attach them to the number. The key is used here, never
+    // logged, and never returned. Only `provision` writes to the account.
+    if (method === "POST" && path === "/api/phone-configs/telnyx/discover") {
+      const body = await readBody(req);
+      for (const key of Object.keys(body)) {
+        if (!["phone_number", "telnyx_api_key"].includes(key)) return json(res, 400, { error: `Unsupported field: ${key}` });
+      }
+      const apiKey = typeof body.telnyx_api_key === "string" ? body.telnyx_api_key.trim() : "";
+      if (!apiKey || apiKey.length > 4000) return json(res, 400, { error: "Enter the Telnyx API key." });
+      return json(res, 200, await discoverTelnyxNumber(apiKey, normalizeTelnyxNumber(body.phone_number)));
+    }
+    if (method === "POST" && path === "/api/phone-configs/telnyx/provision") {
+      const body = await readBody(req);
+      for (const key of Object.keys(body)) {
+        if (!["phone_number", "telnyx_api_key", "channel", "enable_sms"].includes(key)) return json(res, 400, { error: `Unsupported field: ${key}` });
+      }
+      const apiKey = typeof body.telnyx_api_key === "string" ? body.telnyx_api_key.trim() : "";
+      if (!apiKey || apiKey.length > 4000) return json(res, 400, { error: "Enter the Telnyx API key." });
+      if (body.channel !== "voice" && body.channel !== "sms") return json(res, 400, { error: "Choose a voice or SMS configuration." });
+      if (body.enable_sms !== undefined && typeof body.enable_sms !== "boolean") return json(res, 400, { error: "Invalid SMS selection." });
+      return json(res, 201, await provisionTelnyxNumber(apiKey, normalizeTelnyxNumber(body.phone_number), {
+        channel: body.channel,
+        enableSms: body.enable_sms === true,
+      }));
+    }
+
     // ── MagicTeams hosted voice resources ─────────────────────────────
     if (method === "GET" && path === "/api/platform/phone-configs") {
       const authorization = Array.isArray(req.headers.authorization) ? req.headers.authorization[0] : req.headers.authorization;
@@ -6056,6 +6187,146 @@ const server = createServer(async (req, res) => {
         },
       });
       return json(res, 201, { call });
+    }
+    // ── ultravox live call detail ───────────────────────────────────
+    // History rows come from the platform, whose call status can lag behind
+    // reality (a finished call still shows "initiated"). These routes re-read
+    // Ultravox directly so the UI can show live status, transcript and audio.
+    m = path.match(/^\/api\/ultravox\/calls\/([\w-]+)\/recording$/);
+    if (m && method === "GET") {
+      try {
+        // Cache per call: every seek issues a Range request, and re-fetching
+        // the whole file from Ultravox each time would make seeking crawl.
+        const audio = await cachedRecording(m[1]);
+        const total = audio.bytes.length;
+        const rangeHeader = Array.isArray(req.headers.range) ? req.headers.range[0] : req.headers.range;
+        const range = typeof rangeHeader === "string" ? rangeHeader.match(/^bytes=(\d*)-(\d*)$/) : null;
+        if (range && (range[1] || range[2])) {
+          let start = range[1] ? parseInt(range[1], 10) : 0;
+          let end = range[2] ? parseInt(range[2], 10) : total - 1;
+          if (Number.isNaN(start)) start = 0;
+          if (Number.isNaN(end)) end = total - 1;
+          if (start >= total || end >= total || start > end) {
+            res.writeHead(416, { "content-range": `bytes */${total}` });
+            return res.end();
+          }
+          const chunk = audio.bytes.subarray(start, end + 1);
+          res.writeHead(206, {
+            "content-type": audio.mime,
+            "content-length": String(chunk.length),
+            "content-range": `bytes ${start}-${end}/${total}`,
+            "accept-ranges": "bytes",
+            "cache-control": "no-store",
+          });
+          return res.end(chunk);
+        }
+        res.writeHead(200, {
+          "content-type": audio.mime,
+          "content-length": String(total),
+          "accept-ranges": "bytes",
+          "cache-control": "no-store",
+        });
+        return res.end(audio.bytes);
+      } catch (e) {
+        return json(res, uvStatus(e), { error: e instanceof Error ? e.message : String(e) });
+      }
+    }
+    m = path.match(/^\/api\/ultravox\/calls\/([\w-]+)\/messages$/);
+    if (m && method === "GET") {
+      try {
+        return json(res, 200, { messages: await ultravox.listCallMessages(cfg, m[1]) });
+      } catch (e) {
+        return json(res, uvStatus(e), { error: e instanceof Error ? e.message : String(e) });
+      }
+    }
+    m = path.match(/^\/api\/ultravox\/calls\/([\w-]+)$/);
+    if (m && method === "GET") {
+      try {
+        return json(res, 200, { call: await ultravox.getCall(cfg, m[1]) });
+      } catch (e) {
+        return json(res, uvStatus(e), { error: e instanceof Error ? e.message : String(e) });
+      }
+    }
+    if (method === "POST" && path === "/api/ultravox/match-calls") {
+      const authorization = Array.isArray(req.headers.authorization) ? req.headers.authorization[0] : req.headers.authorization;
+      const body = await readBody(req);
+      const items = Array.isArray(body.items) ? body.items.slice(0, 50) : [];
+      const results = await Promise.all(items.map(async (item: { key?: unknown; platformAgentId?: unknown; at?: unknown }) => {
+        const key = String(item?.key ?? "");
+        const platformAgentId = String(item?.platformAgentId ?? "").trim();
+        const atMs = Date.parse(String(item?.at ?? ""));
+        if (!key || !platformAgentId || !Number.isFinite(atMs)) {
+          return { key, matched: false };
+        }
+        try {
+          return { key, matched: true, call: await matchUltravoxCall(platformAgentId, atMs, authorization) };
+        } catch (e) {
+          return { key, matched: false, error: e instanceof Error ? e.message : String(e) };
+        }
+      }));
+      return json(res, 200, { results });
+    }
+    // Browser demo calls never land in the platform call-logs, so the Demo
+    // tab reads them straight from the Ultravox account: attributed per
+    // agent through the platform agent record, plus recent unattributed
+    // web calls (ephemeral/deleted agents) from the workspace-wide list.
+    if (method === "POST" && path === "/api/ultravox/demo-calls") {
+      const started = Date.now();
+      const authorization = Array.isArray(req.headers.authorization) ? req.headers.authorization[0] : req.headers.authorization;
+      const body = await readBody(req);
+      const rawIds: unknown[] = Array.isArray(body.agentIds) ? body.agentIds : [];
+      const agentIds: string[] = [...new Set(
+        rawIds.map((id) => String(id ?? "").trim()).filter((id) => id.length > 0),
+      )].slice(0, 20);
+      const isWebCall = (call: Record<string, unknown>): boolean => {
+        const medium = call.medium;
+        const keys = medium && typeof medium === "object" ? Object.keys(medium).join(",") : String(medium ?? "");
+        return /webrtc/i.test(keys);
+      };
+      const agents = await Promise.all(agentIds.map(async (platformAgentId: string) => {
+        try {
+          let ultravoxAgentId = "";
+          let agentName = "";
+          if (ultravox.isUltravoxId(platformAgentId)) {
+            ultravoxAgentId = platformAgentId;
+            agentName = await ultravox.getAgentName(cfg, ultravoxAgentId);
+          } else {
+            // Short timeout so one slow agent lookup never stalls the tab.
+            const agent = await platformJson(`/api/agents/${encodeURIComponent(platformAgentId)}`, { authorization, timeoutMs: 8000 });
+            const record = (agent && typeof agent === "object"
+              ? ((agent as Record<string, unknown>).agent ?? (agent as Record<string, unknown>).data ?? agent)
+              : {}) as Record<string, unknown>;
+            const resolved = record.ultravox_agent_id ?? record.ultravoxAgentId;
+            if (!ultravox.isUltravoxId(resolved)) return { platformAgentId, agentName: "", calls: [] };
+            ultravoxAgentId = (resolved as string).trim();
+            const name = record.name ?? record.title;
+            agentName = typeof name === "string" ? name.trim() : "";
+          }
+          const calls = (await ultravox.listAgentCalls(cfg, ultravoxAgentId, 25))
+            .filter(isWebCall)
+            .map((call) => ultravox.pruneLiveCall(call));
+          return { platformAgentId, agentName, calls };
+        } catch (e) {
+          return { platformAgentId, agentName: "", calls: [], error: e instanceof Error ? e.message : String(e) };
+        }
+      }));
+      let unassigned: Record<string, unknown>[] = [];
+      try {
+        const seen = new Set<string>();
+        for (const entry of agents) {
+          for (const call of entry.calls) {
+            if (typeof call.callId === "string") seen.add(call.callId);
+          }
+        }
+        unassigned = (await ultravox.listRecentCalls(cfg, 50))
+          .filter((call) => isWebCall(call) && typeof call.callId === "string" && !seen.has(call.callId))
+          .slice(0, 25)
+          .map((call) => ultravox.pruneLiveCall(call));
+      } catch {
+        unassigned = [];
+      }
+      console.log(`[demo-calls] agents=${agentIds.length} attributed=${agents.reduce((n, a) => n + a.calls.length, 0)} unassigned=${unassigned.length} ms=${Date.now() - started}`);
+      return json(res, 200, { agents, unassigned });
     }
     m = path.match(/^\/api\/platform\/agents\/([^/]+)\/demo-call$/);
     if (m && method === "POST") {

@@ -124,8 +124,8 @@ function FaceArtwork({ face, blink }: { face: Face; blink: BlinkKind }) {
   if (closeLeft || closeRight) {
     return (
       <g className={`circle-bot__eyes circle-bot__eyes--blink circle-bot__eyes--blink-${blink}`} aria-hidden="true">
-        {closeLeft ? <ClosedEye x={40} soft={soft} /> : <rect x="35" y="41" width="10" height="21" rx="5" />}
-        {closeRight ? <ClosedEye x={64} soft={soft} /> : <rect x="59" y="41" width="10" height="21" rx="5" />}
+        {closeLeft ? <ClosedEye x={40} soft={soft} /> : <><ellipse cx="40" cy="51" rx="7" ry="10" /><circle className="circle-bot__glint" cx="37.5" cy="47" r="2.5" /></>}
+        {closeRight ? <ClosedEye x={64} soft={soft} /> : <><ellipse cx="64" cy="51" rx="7" ry="10" /><circle className="circle-bot__glint" cx="61.5" cy="47" r="2.5" /></>}
       </g>
     );
   }
@@ -134,29 +134,29 @@ function FaceArtwork({ face, blink }: { face: Face; blink: BlinkKind }) {
     case "happy":
       return <g className="circle-bot__eyes circle-bot__eyes--stroke" aria-hidden="true"><path d="M34 53c2-7 11-7 14 0M56 53c2-7 11-7 14 0" /></g>;
     case "excited":
-      return <g className="circle-bot__eyes" aria-hidden="true"><ellipse cx="41" cy="50" rx="7" ry="10" /><ellipse cx="63" cy="50" rx="7" ry="10" /><circle className="circle-bot__glint" cx="39" cy="46" r="2" /><circle className="circle-bot__glint" cx="61" cy="46" r="2" /></g>;
+      return <g className="circle-bot__eyes" aria-hidden="true"><ellipse cx="41" cy="50" rx="7" ry="10" /><ellipse cx="63" cy="50" rx="7" ry="10" /><circle className="circle-bot__glint" cx="38.5" cy="46" r="2.5" /><circle className="circle-bot__glint" cx="60.5" cy="46" r="2.5" /></g>;
     case "curious":
-      return <g className="circle-bot__eyes" aria-hidden="true"><ellipse cx="40" cy="52" rx="5.5" ry="7.5" /><ellipse cx="64" cy="48" rx="7" ry="9.5" /><circle className="circle-bot__glint" cx="62" cy="45" r="1.8" /></g>;
+      return <g className="circle-bot__eyes" aria-hidden="true"><ellipse cx="40" cy="52" rx="5.5" ry="7.5" /><ellipse cx="64" cy="48" rx="7" ry="9.5" /><circle className="circle-bot__glint" cx="38" cy="49" r="1.6" /><circle className="circle-bot__glint" cx="62" cy="45" r="1.8" /></g>;
     case "thinking":
-      return <g className="circle-bot__eyes" aria-hidden="true"><rect x="35" y="42" width="10" height="19" rx="5" /><rect x="58" y="42" width="10" height="19" rx="5" /><path className="circle-bot__brow" d="M58 36c5-3 9-2 12 1" /></g>;
+      return <g className="circle-bot__eyes" aria-hidden="true"><ellipse cx="40" cy="51" rx="7" ry="10" /><ellipse cx="64" cy="51" rx="7" ry="10" /><circle className="circle-bot__glint" cx="37.5" cy="47" r="2.5" /><circle className="circle-bot__glint" cx="61.5" cy="47" r="2.5" /><path className="circle-bot__brow" d="M58 36c5-3 9-2 12 1" /></g>;
     case "surprised":
-      return <g className="circle-bot__eyes" aria-hidden="true"><rect x="34" y="39" width="11" height="23" rx="5.5" /><rect x="59" y="39" width="11" height="23" rx="5.5" /></g>;
+      return <g className="circle-bot__eyes" aria-hidden="true"><ellipse cx="40" cy="51" rx="7.5" ry="11" /><ellipse cx="64" cy="51" rx="7.5" ry="11" /><circle className="circle-bot__glint" cx="37.5" cy="46.5" r="2.5" /><circle className="circle-bot__glint" cx="61.5" cy="46.5" r="2.5" /></g>;
     case "focused":
       return <g className="circle-bot__eyes" aria-hidden="true"><path d="M33 43l15 5-3 13H34z" /><path d="M56 48l15-5-1 18H59z" /></g>;
     case "wink":
-      return <g className="circle-bot__eyes" aria-hidden="true"><rect x="34" y="41" width="11" height="21" rx="5.5" /><path className="circle-bot__wink" d="M58 52l12-7M58 52l12 7" /></g>;
+      return <g className="circle-bot__eyes" aria-hidden="true"><ellipse cx="40" cy="51" rx="7" ry="10" /><circle className="circle-bot__glint" cx="37.5" cy="47" r="2.5" /><path className="circle-bot__wink" d="M58 52l12-7M58 52l12 7" /></g>;
     case "tired":
       return <g className="circle-bot__eyes circle-bot__eyes--stroke" aria-hidden="true"><path d="M34 50c4 2 9 2 13 0M57 50c4 2 9 2 13 0" /></g>;
     case "love":
       return <g className="circle-bot__eyes" aria-hidden="true"><path d="M41 60S31 52 31 45c0-7 9-9 11-3 3-6 11-4 11 3 0 7-12 15-12 15z" /><path d="M65 60S55 52 55 45c0-7 9-9 11-3 3-6 11-4 11 3 0 7-12 15-12 15z" /></g>;
     case "confused":
-      return <g className="circle-bot__eyes" aria-hidden="true"><rect x="34" y="41" width="11" height="21" rx="5.5" /><path className="circle-bot__wink" d="M58 53h12" /></g>;
+      return <g className="circle-bot__eyes" aria-hidden="true"><ellipse cx="40" cy="51" rx="7" ry="10" /><circle className="circle-bot__glint" cx="37.5" cy="47" r="2.5" /><path className="circle-bot__wink" d="M58 53h12" /></g>;
     case "error":
       return <g className="circle-bot__eyes circle-bot__eyes--stroke" aria-hidden="true"><path d="M34 50h13M57 50h13" /></g>;
     case "sad":
       return <g className="circle-bot__eyes circle-bot__eyes--stroke" aria-hidden="true"><path d="M34 54c3-6 10-6 13 0M57 54c3-6 10-6 13 0" /></g>;
     default:
-      return <g className="circle-bot__eyes" aria-hidden="true"><rect x="35" y="41" width="10" height="21" rx="5" /><rect x="59" y="41" width="10" height="21" rx="5" /></g>;
+      return <g className="circle-bot__eyes" aria-hidden="true"><ellipse cx="40" cy="51" rx="7" ry="10" /><ellipse cx="64" cy="51" rx="7" ry="10" /><circle className="circle-bot__glint" cx="37.5" cy="47" r="2.5" /><circle className="circle-bot__glint" cx="61.5" cy="47" r="2.5" /></g>;
   }
 }
 

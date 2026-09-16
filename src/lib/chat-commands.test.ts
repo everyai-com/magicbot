@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { attachmentTarget, campaignDraft, parseChatCommand } from './chat-commands';
+import { attachmentTarget, campaignDraft, parseChatCommand, resolveAttachmentTarget } from './chat-commands';
 
 describe('chat commands', () => {
   it('recognizes leading commands without treating normal messages as commands', () => {
@@ -28,4 +28,54 @@ it('treats a leading dollar mention as an output shortcut', () => {
   expect(parseChatCommand('$Summer Sale')).toEqual({ name: 'output', args: '$Summer Sale' });
   expect(parseChatCommand('/output $Summer Sale')).toEqual({ name: 'output', args: '$Summer Sale' });
   expect(parseChatCommand('Price is $20')).toBeNull();
+});
+
+describe('resolveAttachmentTarget', () => {
+  const bots = [{ id: '1', name: 'Sales' }, { id: '2', name: 'FXBC 1 demo' }];
+
+  it('resolves the leading command form', () => {
+    expect(resolveAttachmentTarget('/attach @Sales read this', bots)).toEqual({
+      bot: bots[0],
+      instructions: 'read this',
+      explicit: true,
+    });
+  });
+
+  it('resolves /attach written after a tagged bot in prose', () => {
+    const text = '@FXBC 1 demo now /attach this file to the knowledge base for this bot';
+    expect(resolveAttachmentTarget(text, bots)).toEqual({
+      bot: bots[1],
+      instructions: '',
+      explicit: false,
+    });
+  });
+
+  it('resolves a tagged request that only describes the action', () => {
+    const text = '@FXBC 1 demo now add this file to the knowledge base for this bot';
+    expect(resolveAttachmentTarget(text, bots)).toEqual({
+      bot: bots[1],
+      instructions: '',
+      explicit: false,
+    });
+  });
+
+  it('leaves described prose alone when no bot can be resolved', () => {
+    expect(resolveAttachmentTarget('put this in the knowledge base', [])).toBeNull();
+  });
+
+  it('falls back to the current bot when no tag is present', () => {
+    expect(resolveAttachmentTarget('please /attach this file', bots, bots[1])).toEqual({
+      bot: bots[1],
+      instructions: '',
+      explicit: false,
+    });
+    expect(() => resolveAttachmentTarget('please /attach this file', bots)).toThrow(/Choose a bot/);
+  });
+
+  it('ignores messages that are not attach requests', () => {
+    expect(resolveAttachmentTarget('summarize this', bots)).toBeNull();
+    expect(resolveAttachmentTarget('/help', bots)).toBeNull();
+    expect(resolveAttachmentTarget('/create a sales assistant', bots)).toBeNull();
+    expect(resolveAttachmentTarget('$Summer Sale', bots)).toBeNull();
+  });
 });

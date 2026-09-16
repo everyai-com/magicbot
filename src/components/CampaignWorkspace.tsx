@@ -12,6 +12,26 @@ import { api } from "@/state/store";
 import { NewVoiceCampaign, type VoiceCampaignFields } from "./NewVoiceCampaign";
 import { CampaignContacts, contactColumns, contactMetadata } from "./CampaignContacts";
 import { Card } from "./SettingsPrimitives";
+import {
+  cancelSchedule,
+  defaultTimeZone,
+  executeStartPlan,
+  formatCountdown,
+  listSchedules,
+  logSchedEvent,
+  markSchedule,
+  planContactCount,
+  previewSchedule,
+  readHeartbeat,
+  readSchedLog,
+  saveSchedule,
+  timeZones,
+  zonedTimeToMs,
+  type ScheduledCampaign,
+  type StartPlan,
+} from "@/lib/campaign-schedules";
+
+const ALL_TIMEZONES = timeZones();
 
 type Row = Record<string, unknown>;
 type Channel = "voice" | "sms" | "gmail" | "whatsapp";
@@ -193,6 +213,20 @@ function CampaignDetail({ channel, active, onBack }: { channel: Channel; active:
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [revision, setRevision] = useState(0);
+  const [startMode, setStartMode] = useState<"now" | "later">("now");
+  const [schedDate, setSchedDate] = useState(() => {
+    const tomorrow = new Date(Date.now() + 86400000);
+    return `${tomorrow.getFullYear()}-${String(tomorrow.getMonth() + 1).padStart(2, "0")}-${String(tomorrow.getDate()).padStart(2, "0")}`;
+  });
+  const [schedTime, setSchedTime] = useState("09:00");
+  const [schedTz, setSchedTz] = useState(defaultTimeZone());
+  const [schedules, setSchedules] = useState<ScheduledCampaign[]>([]);
+  const refreshSchedules = () => setSchedules(listSchedules());
+  useEffect(() => {
+    refreshSchedules();
+    window.addEventListener("campaign-schedules-changed", refreshSchedules);
+    return () => window.removeEventListener("campaign-schedules-changed", refreshSchedules);
+  }, [active, channel]);
   const root = roots[channel];
   useEffect(() => {
     let alive = true;
@@ -426,32 +460,126 @@ function CampaignDetail({ channel, active, onBack }: { channel: Channel; active:
     setCampaignId(""); setContacts([]); setSelected([]); setDetailOpen(false); setConfirmDelete(false); setEditFields(null);
     setNotice("Campaign deleted.");
   });
-  const start = () => run(async () => {
+  /** Validate current selections and snapshot everything a start needs, so an
+   *  immediate start and a scheduled start replay the exact same request. */
+  const buildStartPlan = (): StartPlan => {
     if (!campaignId) throw new Error("Choose a campaign.");
+    const campaignRow = campaigns.find((row) => recordId(row) === campaignId);
+    const campaignName = String(campaignRow?.name ?? campaignRow?.venue_name ?? campaignId);
+    const plan: StartPlan = {
+      channel, campaignId, campaignName, agent, phone, template, templateMessage: "",
+      audience, delay, locking, contactIds: [], selectedIndexes: [...selected].sort((a, b) => a - b),
+      snapshotRows: [], preparedRows: null,
+    };
     if (channel === "voice") {
       if (!agent || !phone || !selected.length) throw new Error("Select agent, caller number and contacts.");
-      await request(root + "/" + campaignId, "PATCH", { agent_id: agent, phone_config_id: phone, delay_seconds: delay, enable_number_locking: locking });
-      await request(root + "/" + campaignId + "/start", "POST", { contact_ids: selected.map((i) => recordId(contacts[i])) });
+      // Platform contact rows don't always use id/_id — resolve broadly, and
+      // fail LOUDLY instead of sending blank ids the platform silently drops.
+      const resolveContactId = (row: Row): string => {
+        const candidates = [row.id, row._id, row.contact_id, row.contactId, row.uuid, row.contact_uuid];
+        const found = candidates.find((value): value is string => typeof value === "string" && value.trim().length > 0);
+        return found ?? "";
+      };
+      plan.contactIds = selected.map((i) => resolveContactId(contacts[i] ?? {}));
+      const missing = selected.find((i) => !resolveContactId(contacts[i] ?? {}));
+      if (missing !== undefined) {
+        const row = contacts[missing] ?? {};
+        const label = String(row.first_name ?? row.name ?? row.phone_number ?? row.phone ?? `row ${missing + 1}`);
+        throw new Error(`Contact "${label}" has no platform ID, so the start request would silently skip it. Re-import the contacts for this campaign and try again.`);
+      }
     } else if (channel === "whatsapp") {
       if (!audience || !template) throw new Error("Choose audience and template.");
-      await request(root + "/" + campaignId, "PATCH", { audience_id: audience, template_id: template });
-      await request(root + "/" + campaignId + "/start", "POST", {});
     } else if (channel === "gmail") {
       const chosenTemplate = templates.find((row) => recordId(row) === template);
       if (!chosenTemplate) throw new Error("Choose an email template.");
-      const prepared = prepareEmailContacts(contacts, selected, String(chosenTemplate.message ?? ""));
-      const accounts = list(await request("messaging/gmail-campaigns/accounts"));
-      if (!accounts.length) throw new Error("Connect your Gmail account in Integrations before starting an email campaign.");
-      await request(root + "/" + encodeURIComponent(campaignId), "PATCH", { extracted_contacts: prepared, template_id: template });
-      setContacts(prepared);
-      setCampaigns((old) => old.map((row) => recordId(row) === campaignId ? { ...row, extracted_contacts: prepared, template_id: template } : row));
-      await request(root + "/start", "POST", { campaign_id: campaignId, template_id: template, selected_contact_indexes: [...selected].sort((a, b) => a - b), delay_seconds: delay });
+      plan.templateMessage = String(chosenTemplate.message ?? "");
+      plan.preparedRows = prepareEmailContacts(contacts, selected, plan.templateMessage);
     } else {
-      if (!template || !selected.length || (channel === "sms" && !phone)) throw new Error("Select template, contacts and sender number where required.");
-      await request(root + "/" + campaignId + "/start", "POST", { campaign_id: campaignId, template_id: template, phone_config_id: phone, selected_contact_indexes: selected, delay_seconds: delay });
+      if (!template || !selected.length || (channel === "sms" && !phone)) {
+        throw new Error("Select template, contacts and sender number where required.");
+      }
+      plan.snapshotRows = selected.map((i) => contacts[i]);
     }
-    setNotice("Start request accepted. Check Outcomes for delivery results."); setRevision((v) => v + 1);
+    return plan;
+  };
+  const start = () => run(async () => {
+    const plan = buildStartPlan();
+    // Keep the platform's acceptance summary visible (scheduled runs already
+    // log it) — it's the only proof of what the provider actually queued.
+    const summary = await executeStartPlan(plan);
+    if (channel === "gmail" && plan.preparedRows) {
+      setContacts(plan.preparedRows);
+      setCampaigns((old) => old.map((row) => recordId(row) === campaignId ? { ...row, extracted_contacts: plan.preparedRows, template_id: plan.template } : row));
+    }
+    setNotice(`Start request accepted (${summary}). Check Outcomes for delivery results.`); setRevision((v) => v + 1);
   });
+  const schedule = () => run(async () => {
+    const plan = buildStartPlan();
+    const atMs = zonedTimeToMs(schedDate, schedTime, schedTz);
+    if (atMs == null) throw new Error("Enter a valid date and time.");
+    if (atMs <= Date.now() + 30000) throw new Error("Pick a time at least a minute in the future.");
+    const preview = previewSchedule(atMs, schedTz);
+    saveSchedule({ channel, campaignId, campaignName: plan.campaignName, atMs, timezone: schedTz, plan });
+    logSchedEvent("scheduled", `${plan.campaignName}: scheduled for ${preview.local} (${schedTz})`);
+    refreshSchedules();
+    setNotice(`Scheduled for ${preview.local} (${preview.timezone}, ${preview.offset}). The campaign starts automatically while the app is open.`);
+  });
+  /** Human-readable recipients from the snapshotted contact data — proves
+   *  exactly whose details the scheduled start will use. */
+  const planRecipients = (plan: StartPlan): string => {
+    const contactKey = (row: Row): string =>
+      [row.id, row._id, row.contact_id, row.contactId, row.uuid, row.contact_uuid]
+        .find((value): value is string => typeof value === "string" && value.trim().length > 0) ?? "";
+    let rows: Row[] = [];
+    if (plan.channel === "voice") {
+      rows = plan.contactIds.map((id) => contacts.find((contact) => contactKey(contact) === id) ?? { id });
+    } else if (plan.channel === "gmail" && plan.preparedRows) {
+      rows = plan.preparedRows;
+    } else if (plan.channel === "sms") {
+      rows = plan.snapshotRows;
+    }
+    if (!rows.length) return "";
+    const label = (row: Row): string => {
+      const name = row.first_name ?? row.name;
+      const phone = row.phone_number ?? row.phone;
+      const email = row.email;
+      const main = typeof name === "string" && name ? name
+        : typeof phone === "string" && phone ? phone
+        : typeof email === "string" && email ? email : "contact";
+      const detail = typeof phone === "string" && phone && main !== phone ? ` ${phone}` : "";
+      return `${main}${detail}`;
+    };
+    const labels = rows.slice(0, 2).map(label);
+    return rows.length > 2 ? `${labels.join(", ")} +${rows.length - 2} more` : labels.join(", ");
+  };
+  /** Proves the background loop is alive — a stale heartbeat means scheduled
+   *  starts can't fire (e.g. every tab closed or JS paused). */
+  const schedulerStatus = (): string => {
+    const beat = readHeartbeat();
+    if (beat == null) return "scheduler starting…";
+    const age = Math.round((Date.now() - beat) / 1000);
+    return age < 60 ? "scheduler active" : `scheduler idle ${Math.floor(age / 60)}m+ (keep the app open)`;
+  };
+  const channelPendingCount = schedules.filter((item) => (item.status === "pending" || item.status === "firing") && item.channel === channel).length;
+  const pendingForCampaign = schedules.filter((item) => (item.status === "pending" || item.status === "firing") && item.channel === channel);
+  const failedForCampaign = schedules.filter((item) => item.status === "failed" && item.channel === channel);
+  const retrySchedule = (item: ScheduledCampaign) => run(async () => {
+    try {
+      await executeStartPlan(item.plan);
+      markSchedule(item.id, { status: "fired", firedAt: Date.now() });
+      setNotice("Start request accepted. Check Outcomes for delivery results."); setRevision((v) => v + 1);
+    } catch (e) {
+      markSchedule(item.id, { status: "failed", error: e instanceof Error ? e.message : String(e) });
+      throw e;
+    }
+  });
+  const dismissSchedule = (id: string) => {
+    const item = schedules.find((entry) => entry.id === id);
+    if (item) logSchedEvent("cancelled", `${item.campaignName}: schedule cancelled`);
+    cancelSchedule(id);
+    refreshSchedules();
+  };
+  const activityLog = readSchedLog().slice(0, 8);
   return <div ref={detailRef} className="flex min-w-0 flex-col gap-4">
     <button hidden={tab === null} type="button" onClick={navigateBack} className={tab === null ? "hidden" : control + " inline-flex items-center gap-1.5 self-start"}><ChevronLeft size={14} /> Back</button>
     <section className={tab === null ? "rounded-2xl bg-card p-4" : undefined}>
@@ -550,7 +678,7 @@ function CampaignDetail({ channel, active, onBack }: { channel: Channel; active:
       {tab === "Campaigns" && detailOpen && selectedCampaign && <div ref={detailPanelRef} tabIndex={-1} className="flex flex-col gap-3 outline-none">
         {confirmDelete && <div role="alert" className="rounded-xl border border-danger/40 p-4 text-sm"><p>Delete “{String(selectedCampaign.venue_name ?? selectedCampaign.name)}”? Its contacts and call outcomes will also be deleted. This cannot be undone.</p><div className="mt-3 flex gap-2"><button type="button" className={button + " bg-danger"} onClick={deleteCampaign}>Delete permanently</button><button type="button" className={control} onClick={() => setConfirmDelete(false)}>Cancel</button></div></div>}
         {editFields ? <NewVoiceCampaign key={campaignId} editing initialValues={editFields} agents={agents.map((row) => ({ id: recordId(row), name: String(row.name ?? recordId(row)) }))} phones={phones.map((row) => ({ id: recordId(row), name: String(row.friendly_name ?? row.phone_number ?? recordId(row)) }))} contactCount={0} onCreate={updateCampaign} onCancel={() => setEditFields(null)} /> : <><Card title="Campaign details">
-          <dl className="grid gap-3 text-[13px] sm:grid-cols-2">{[
+          <dl className="grid gap-3 text-[13px] sm:grid-cols-2">{([
             ["Campaign name", selectedCampaign.name ?? selectedCampaign.venue_name ?? "—"],
             ["Delay", selectedCampaign.delay_seconds != null ? `${selectedCampaign.delay_seconds} seconds` : "—"],
             ["Created", (() => {
@@ -561,7 +689,17 @@ function CampaignDetail({ channel, active, onBack }: { channel: Channel; active:
             })()],
             ["Location", selectedCampaign.venue_location || selectedCampaign.location || "—"],
             ["Total contacts", selectedCampaign.total_contacts ?? contacts.length],
-          ].map(([label, value]) => <div key={String(label)} className="min-w-0"><dt className="text-ink-secondary">{String(label)}</dt><dd className="mt-1 text-ink [overflow-wrap:anywhere]">{String(value)}</dd></div>)}</dl>
+            ...(pendingForCampaign.length ? [[
+              "Scheduled start",
+              (() => {
+                const own = pendingForCampaign.filter((item) => item.campaignId === campaignId);
+                const next = [...own].sort((a, b) => a.atMs - b.atMs)[0] ?? [...pendingForCampaign].sort((a, b) => a.atMs - b.atMs)[0];
+                const preview = previewSchedule(next.atMs, next.timezone);
+                const label = next.campaignId === campaignId ? "" : `${next.campaignName} · `;
+                return `${label}${preview.local} (${next.timezone}, ${preview.offset})${pendingForCampaign.length > 1 ? ` +${pendingForCampaign.length - 1} more` : ""}`;
+              })(),
+            ]] : []),
+          ] as Array<[string, unknown]>).map(([label, value]) => <div key={String(label)} className="min-w-0"><dt className="text-ink-secondary">{String(label)}</dt><dd className="mt-1 text-ink [overflow-wrap:anywhere]">{String(value)}</dd></div>)}</dl>
         </Card>
         <Card title="Contacts"><CampaignContacts key={campaignId} rows={contacts} selected={selected} onSelectionChange={setSelected} onDelete={async (row) => {
             if (channel !== "voice") throw new Error("Contact deletion is currently available for voice campaigns.");
@@ -627,7 +765,87 @@ function CampaignDetail({ channel, active, onBack }: { channel: Channel; active:
         </div>
         <label className="text-sm">Delay between starts (seconds)<input className={control + " ml-2 w-24"} type="number" min="1" max="3600" value={delay} onChange={(e) => setDelay(Math.max(1, Math.min(3600, Number(e.target.value) || 1)))} /></label>
         {channel === "voice" && <label className="text-sm"><input type="checkbox" checked={locking} onChange={(e) => setLocking(e.target.checked)} /> Lock caller number</label>}
-        <button className={button} disabled={!campaignId} onClick={start}>Start {channels[channel]} campaign</button>
+        <div role="radiogroup" aria-label="Start timing" className="flex flex-wrap gap-4 text-sm text-ink">
+          <label className="inline-flex cursor-pointer items-center gap-1.5"><input type="radio" name={`start-mode-${channel}`} checked={startMode === "now"} onChange={() => setStartMode("now")} /> Start now</label>
+          <label className="inline-flex cursor-pointer items-center gap-1.5"><input type="radio" name={`start-mode-${channel}`} checked={startMode === "later"} onChange={() => setStartMode("later")} /> Schedule for later</label>
+        </div>
+        {startMode === "later" && (
+          <div className="flex min-w-0 flex-col gap-3 rounded-xl border border-hairline/40 bg-inset/40 p-3">
+            <div className="grid gap-3 sm:grid-cols-3">
+              <label className="flex min-w-0 flex-col gap-1 text-[13px] text-ink-secondary">Date<input type="date" className={control} value={schedDate} onChange={(e) => setSchedDate(e.target.value)} /></label>
+              <label className="flex min-w-0 flex-col gap-1 text-[13px] text-ink-secondary">Time<input type="time" className={control} value={schedTime} onChange={(e) => setSchedTime(e.target.value)} /></label>
+              <label className="flex min-w-0 flex-col gap-1 text-[13px] text-ink-secondary">Timezone<select className={control} value={schedTz} onChange={(e) => setSchedTz(e.target.value)}>{ALL_TIMEZONES.map((zone) => <option key={zone} value={zone}>{zone}</option>)}</select></label>
+            </div>
+            {(() => {
+              const atMs = zonedTimeToMs(schedDate, schedTime, schedTz);
+              if (atMs == null) return <p role="alert" className="text-[13px] text-danger">Enter a valid date and time.</p>;
+              const preview = previewSchedule(atMs, schedTz);
+              const future = atMs > Date.now() + 30000;
+              return (
+                <div className={"rounded-lg border p-3 text-[13px] leading-relaxed " + (future ? "border-success/30 bg-success/10 text-ink" : "border-warning/30 bg-warning/10 text-ink")}>
+                  <p><span className="font-medium">Starts:</span> {preview.local} <span className="text-ink-secondary">({preview.timezone}, {preview.offset})</span></p>
+                  <p className="mt-0.5 text-ink-secondary">{preview.utc} · {future ? preview.relative : "pick a time at least a minute in the future"}</p>
+                </div>
+              );
+            })()}
+            <p className="text-[12px] leading-relaxed text-ink-secondary">Scheduled starts run automatically while the app is open. Times are honored in the timezone above, not your device clock.</p>
+          </div>
+        )}
+        <button className={button} disabled={!campaignId} onClick={startMode === "now" ? start : schedule}>{startMode === "now" ? `Start ${channels[channel]} campaign` : "Schedule campaign"}</button>
+        <p className="text-[12px] text-ink-secondary" role="status">
+          {schedulerStatus()}{channelPendingCount > 0 ? ` · ${channelPendingCount} scheduled` : " · nothing scheduled"}
+        </p>
+        {pendingForCampaign.length > 0 && (
+          <div className="space-y-2">
+            <p className="text-[13px] font-medium text-ink">Scheduled starts <span className="font-normal text-ink-secondary">· {schedulerStatus()}</span></p>
+            {pendingForCampaign.map((item) => {
+              const preview = previewSchedule(item.atMs, item.timezone);
+              const contacts = planContactCount(item.plan);
+              const recipients = planRecipients(item.plan);
+              const firing = item.status === "firing";
+              return (
+                <div key={item.id} className="flex min-w-0 items-center gap-3 rounded-lg border border-hairline/40 bg-inset/40 px-3 py-2.5">
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-[13px] font-medium text-ink">{item.campaignName}</p>
+                    <p className="mt-0.5 truncate text-[12px] text-ink-secondary">{preview.local} <span>({preview.timezone}, {preview.offset})</span></p>
+                    <p className="mt-0.5 text-[12px] text-ink-secondary">{firing ? "Starting…" : formatCountdown(item.atMs)}{contacts != null ? ` · ${contacts} contact${contacts === 1 ? "" : "s"}` : ""}</p>
+                    {recipients ? <p className="mt-0.5 truncate text-[12px] text-ink-secondary">To: {recipients}</p> : null}
+                  </div>
+                  {!firing && <button type="button" onClick={() => dismissSchedule(item.id)} className="shrink-0 rounded-lg border border-hairline/50 px-2.5 py-1.5 text-[12px] text-ink-secondary hover:text-ink">Cancel</button>}
+                </div>
+              );
+            })}
+          </div>
+        )}
+        {failedForCampaign.length > 0 && (
+          <div className="space-y-2">
+            <p className="text-[13px] font-medium text-ink">Needs attention</p>
+            {failedForCampaign.map((item) => (
+              <div key={item.id} role="alert" className="flex min-w-0 items-center gap-3 rounded-lg border border-danger/40 bg-danger/10 px-3 py-2.5">
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-[13px] font-medium text-ink">{item.campaignName}</p>
+                  <p className="mt-0.5 truncate text-[13px] text-ink">Scheduled start failed{item.error ? `: ${item.error}` : ""}</p>
+                  <p className="mt-0.5 text-[12px] text-ink-secondary">{previewSchedule(item.atMs, item.timezone).local} ({item.timezone})</p>
+                </div>
+                <button type="button" onClick={() => void retrySchedule(item)} className="shrink-0 rounded-lg bg-accent px-2.5 py-1.5 text-[12px] text-white">Start now</button>
+                <button type="button" onClick={() => dismissSchedule(item.id)} className="shrink-0 rounded-lg border border-hairline/50 px-2.5 py-1.5 text-[12px] text-ink-secondary hover:text-ink">Dismiss</button>
+              </div>
+            ))}
+          </div>
+        )}
+        {activityLog.length > 0 && (
+          <details className="text-[12px] text-ink-secondary">
+            <summary className="cursor-pointer hover:text-ink">Scheduler activity</summary>
+            <ul className="mt-2 space-y-1.5">
+              {activityLog.map((entry, index) => (
+                <li key={`${entry.at}-${index}`} className="break-words">
+                  <span className="tabular-nums">{new Date(entry.at).toLocaleString()}</span>
+                  {" · "}{entry.text}
+                </li>
+              ))}
+            </ul>
+          </details>
+        )}
       </div></Card>}
       {tab === "Templates" && channel === "sms" && <SmsTemplates templates={templates} onSave={async (draft) => {
         const saved = await request("messaging/sms-templates", "POST", draft);

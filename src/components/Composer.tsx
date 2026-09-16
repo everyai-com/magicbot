@@ -1,6 +1,6 @@
 import { findOutputCampaign, outputCampaigns, outputRoots, readCampaignOutput, type OutputCampaign } from "@/lib/campaign-output";
 import { CampaignOutcomes } from "./CampaignOutcomes";
-import { attachmentTarget, campaignDraft, chatCommands, parseChatCommand } from "@/lib/chat-commands";
+import { campaignDraft, chatCommands, parseChatCommand, resolveAttachmentTarget, type AttachmentRequest } from "@/lib/chat-commands";
 import { track } from "@/lib/analytics";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowUp, Clock, Mic, Paperclip, Square, Users, X } from "lucide-react";
@@ -20,6 +20,7 @@ import {
   type Attachment,
 } from "@/lib/composer-attachments";
 import { normalizeState } from "@/lib/mascot";
+import { attachToKnowledgeBase, withKnowledgeEntry } from "@/lib/knowledge-base";
 import { groupComposerHint, roomRespondersForComposer } from "@/lib/group-routing";
 import { PendingApprovalActions, PendingApprovalPanel, pendingApprovals } from "./PendingApproval";
 import { useDesktopCapabilities } from "./DesktopCapabilities";
@@ -109,10 +110,7 @@ export function Composer({
     );
   const imageTargetsSupport = (message: string) => {
     const command = parseChatCommand(message);
-    if (command?.name === "attach") {
-      try { return botSupportsImages(attachmentTarget(command.args, state.bots.filter(item => !item.hidden)).bot); }
-      catch { return false; }
-    }
+    if (command?.name === "attach") return false;
     if (!group) return botSupportsImages(bot);
     const responders = roomRespondersForComposer(message, members ?? [], group);
     return responders.length > 0 && responders.every(botSupportsImages);
@@ -208,6 +206,17 @@ export function Composer({
     let message = text;
     let target = bot;
     const command = parseChatCommand(text);
+    // A file chip plus "/attach" anywhere in the message is a knowledge-base
+    // request: leading command or tagged prose. Resolved before the command
+    // block so "@Bot … /attach …" isn't sent to the model as ordinary text.
+    let attachRequest: AttachmentRequest<Bot> | null = null;
+    try {
+      attachRequest = resolveAttachmentTarget(text, state.bots.filter(item => !item.hidden), bot);
+    } catch (error) {
+      setCommandNotice(error instanceof Error ? error.message : "Couldn't read that /attach request.");
+      return;
+    }
+    if (attachRequest && !attachRequest.explicit && attachments.length === 0) attachRequest = null;
     if (command) {
       setCommandNotice("");
       try {
@@ -247,15 +256,6 @@ export function Composer({
           setText("");
           return;
         }
-        if (command.name === "attach") {
-          const selected = attachmentTarget(command.args, state.bots.filter(item => !item.hidden));
-          target = selected.bot;
-          if (!attachments.length) {
-            fileInputRef.current?.click();
-            throw new Error("Choose a file, then send /attach again.");
-          }
-          message = selected.instructions || "Read the attached files and use them as context for this conversation.";
-        }
         if (command.name === "create") {
           if (!command.args) throw new Error("Describe the agent, for example: /create a sales assistant for property enquiries");
           target = bot?.chiefOfStaff ? bot : state.bots.find(item => item.chiefOfStaff && !item.hidden && (item.section ?? "") === (bot?.section ?? ""));
@@ -270,7 +270,34 @@ export function Composer({
         commandBusy.current = false;
       }
     }
-    if (command && (command.name === "attach" || command.name === "create") && target) {
+    if (attachRequest) {
+      if (!attachments.length) {
+        fileInputRef.current?.click();
+        setCommandNotice("Choose a file, then send /attach again.");
+        return;
+      }
+      const attachBot = attachRequest.bot;
+      commandBusy.current = true;
+      setCommandNotice("Adding to @" + attachBot.name + "'s knowledge base…");
+      try {
+        const result = await attachToKnowledgeBase({
+          bot: { name: attachBot.name, remoteAgentId: attachBot.remoteAgentId },
+          attachments,
+          instructions: attachRequest.instructions,
+          request: api,
+        });
+        dispatch({ type: "updateBot", botId: attachBot.id, patch: { agentConfig: withKnowledgeEntry(attachBot.agentConfig, result) } });
+        setText("");
+        setAttachments([]);
+        setCommandNotice(`Added "${result.title}" to @${attachBot.name}'s knowledge base.`);
+      } catch (error) {
+        setCommandNotice(error instanceof Error ? error.message : "Couldn't update the knowledge base.");
+      } finally {
+        commandBusy.current = false;
+      }
+      return;
+    }
+    if (command?.name === "create" && target) {
       if (attachments.some(item => item.kind === "image") && !botSupportsImages(target)) {
         setCommandNotice("The target bot does not support image attachments.");
         return;

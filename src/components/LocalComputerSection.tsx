@@ -99,6 +99,21 @@ interface ConnectorStatus {
 
 type PhoneProvider = "twilio" | "telnyx";
 
+/** What the harness resolves from Telnyx for one number (see server/telnyx.ts). */
+interface TelnyxNumberState {
+  number_id: string;
+  phone_number: string;
+  status: string;
+  connection_id: string;
+  connection_name: string;
+  outbound_voice_profile_id: string;
+  messaging_profile_id: string;
+  messaging_profile_name: string;
+  webhook: { voice: string; messaging: string };
+  missing: string[];
+  created?: { outbound_voice_profile: boolean; connection: boolean; messaging_profile: boolean };
+}
+
 interface PhoneConfigRecord {
   id: string;
   provider: PhoneProvider;
@@ -517,6 +532,9 @@ function PhoneIntegrationPanel() {
   const [telnyxApiKey, setTelnyxApiKey] = useState("");
   const [telnyxConnectionId, setTelnyxConnectionId] = useState("");
   const [telnyxPublicKey, setTelnyxPublicKey] = useState("");
+  const [telnyxState, setTelnyxState] = useState<TelnyxNumberState | null>(null);
+  const [telnyxMessaging, setTelnyxMessaging] = useState(true);
+  const [telnyxStatus, setTelnyxStatus] = useState<{ state: "idle" | "reading" | "working" | "done" | "error"; message: string }>({ state: "idle", message: "" });
   const [editingId, setEditingId] = useState("");
   const [menuId, setMenuId] = useState("");
   const [loading, setLoading] = useState(true);
@@ -548,9 +566,62 @@ function PhoneIntegrationPanel() {
     setTelnyxApiKey("");
     setTelnyxConnectionId("");
     setTelnyxPublicKey("");
+    setTelnyxState(null);
+    setTelnyxMessaging(true);
+    setTelnyxStatus({ state: "idle", message: "" });
     setEditingId("");
     setMenuId("");
   };
+
+  /** Resolve the number's Telnyx setup. `provision` is the only action here
+   * that writes to the account, and it runs only from an explicit click. */
+  const telnyxLookup = async (action: "discover" | "provision", silent = false) => {
+    const key = telnyxApiKey.trim();
+    const number = phoneNumber.replace(/[^\d+]/g, "");
+    if (!key || !/^\+[1-9]\d{7,14}$/.test(number)) {
+      if (!silent) setTelnyxStatus({ state: "error", message: !key ? "Enter the Telnyx API key first." : "Enter the number in international form, for example +18334905225." });
+      return;
+    }
+    setTelnyxStatus({ state: action === "discover" ? "reading" : "working", message: "" });
+    try {
+      // SAFETY: this route is the app's own harness, which answers with the
+      // TelnyxNumberState shape server/telnyx.ts produces.
+      const result = await api(`/api/phone-configs/telnyx/${action}`, {
+        method: "POST",
+        // The panel configures a voice number; messaging is opt-in next to it.
+        body: JSON.stringify(action === "provision"
+          ? { phone_number: number, telnyx_api_key: key, channel: "voice", enable_sms: telnyxMessaging }
+          : { phone_number: number, telnyx_api_key: key }),
+      }) as TelnyxNumberState;
+      setTelnyxState(result);
+      if (result.connection_id) setTelnyxConnectionId(result.connection_id);
+      const made = [
+        result.created?.connection ? "voice connection" : "",
+        result.created?.outbound_voice_profile ? "outbound voice profile" : "",
+        result.created?.messaging_profile ? "messaging profile" : "",
+      ].filter(Boolean);
+      setTelnyxStatus({
+        state: "done",
+        message: action === "provision"
+          ? made.length ? `Created and attached in Telnyx: ${made.join(", ")}.` : "This number already had everything it needed."
+          : result.missing.length ? `Missing in Telnyx: ${result.missing.join(", ")}. Create and attach adds them.` : "Connection and messaging are set on this number.",
+      });
+    } catch (cause) {
+      setTelnyxState(null);
+      // Auto-discovery stays quiet: a half-typed key is not an error worth showing.
+      if (!silent) setTelnyxStatus({ state: "error", message: cause instanceof Error ? cause.message : "Telnyx lookup failed." });
+      else setTelnyxStatus({ state: "idle", message: "" });
+    }
+  };
+
+  // Fill the Connection ID as soon as a key and a complete number are present.
+  useEffect(() => {
+    if (provider !== "telnyx" || !telnyxApiKey.trim()) return;
+    if (!/^\+[1-9]\d{7,14}$/.test(phoneNumber.replace(/[^\d+]/g, ""))) return;
+    const handle = window.setTimeout(() => void telnyxLookup("discover", true), 700);
+    return () => window.clearTimeout(handle);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [provider, phoneNumber, telnyxApiKey]);
 
   const editConfig = (config: PhoneConfigRecord) => {
     setProvider(config.provider);
@@ -576,8 +647,8 @@ function PhoneIntegrationPanel() {
       setError("Twilio Account SID and Auth Token are required.");
       return;
     }
-    if (provider === "telnyx" && ((!editingId && !telnyxApiKey.trim()) || !telnyxConnectionId.trim() || !telnyxPublicKey.trim())) {
-      setError("Telnyx API Key, Connection ID, and Public Key are required.");
+    if (provider === "telnyx" && ((!editingId && !telnyxApiKey.trim()) || !telnyxConnectionId.trim())) {
+      setError("Telnyx API Key and Connection ID are required.");
       return;
     }
 
@@ -592,7 +663,9 @@ function PhoneIntegrationPanel() {
     } else {
       if (telnyxApiKey.trim()) body.telnyx_api_key = telnyxApiKey.trim();
       body.telnyx_connection_id = telnyxConnectionId.trim();
-      body.telnyx_public_key = telnyxPublicKey.trim();
+      // Optional: Telnyx only publishes this in the portal, and the platform
+      // already holds the one it verified with.
+      if (telnyxPublicKey.trim()) body.telnyx_public_key = telnyxPublicKey.trim();
     }
 
     setSaving(true);
@@ -818,12 +891,60 @@ function PhoneIntegrationPanel() {
               />
               <label className={fieldLabelClass}>
                 Connection ID
-                <input value={telnyxConnectionId} onChange={(event) => setTelnyxConnectionId(event.target.value)} placeholder="Telnyx connection ID" className={inputClass} />
+                <input value={telnyxConnectionId} onChange={(event) => setTelnyxConnectionId(event.target.value)} placeholder="Filled from Telnyx, or paste one" className={inputClass} />
               </label>
               <label className={fieldLabelClass}>
-                Public Key
+                Public Key <span className="font-normal text-ink-secondary">(optional)</span>
                 <input value={telnyxPublicKey} onChange={(event) => setTelnyxPublicKey(event.target.value)} placeholder="Telnyx public key" className={inputClass} />
               </label>
+              <div className="rounded-lg border border-hairline/30 bg-inset p-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="text-[12.5px] font-medium text-ink">Telnyx setup</div>
+                  <div className="flex gap-3">
+                    <button
+                      type="button"
+                      disabled={saving || telnyxStatus.state === "reading" || telnyxStatus.state === "working"}
+                      onClick={() => void telnyxLookup("discover")}
+                      className="text-[12.5px] font-medium text-accent hover:underline disabled:opacity-50"
+                    >
+                      {telnyxStatus.state === "reading" ? "Reading…" : "Fetch from Telnyx"}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={saving || telnyxStatus.state === "reading" || telnyxStatus.state === "working"}
+                      onClick={() => void telnyxLookup("provision")}
+                      className="text-[12.5px] font-medium text-accent hover:underline disabled:opacity-50"
+                    >
+                      {telnyxStatus.state === "working" ? "Working…" : "Create and attach"}
+                    </button>
+                  </div>
+                </div>
+                <label className="mt-2 flex cursor-pointer items-start gap-2.5">
+                  <input
+                    type="checkbox"
+                    checked={telnyxMessaging}
+                    onChange={(event) => setTelnyxMessaging(event.target.checked)}
+                    className="mt-0.5 size-4 shrink-0 rounded border-hairline/60 accent-[var(--accent)]"
+                  />
+                  <span className="min-w-0">
+                    <span className="block text-[12.5px] font-medium text-ink">Enable messaging</span>
+                    <span className="mt-0.5 block text-[11.5px] leading-relaxed text-ink-secondary">
+                      Create and attach a messaging profile with the inbound webhook, so this number can send and receive SMS. Leave off for a voice-only number.
+                    </span>
+                  </span>
+                </label>
+                <div className={cn("mt-2 text-[12px] leading-relaxed", telnyxStatus.state === "error" ? "text-danger" : "text-ink-secondary")}>
+                  {telnyxStatus.message || "Enter the API key and the number — the Connection ID fills in from Telnyx. Create and attach builds the Voice API application and its outbound voice profile in your account when they are missing, then attaches them."}
+                </div>
+                {telnyxState ? (
+                  <div className="mt-2 space-y-1 border-t border-hairline/25 pt-2 text-[11.5px] text-ink-secondary">
+                    <div>Messaging profile: <span className="text-ink">{telnyxState.messaging_profile_name || telnyxState.messaging_profile_id || "none yet"}</span></div>
+                    <div>Outbound voice profile: <span className="text-ink">{telnyxState.outbound_voice_profile_id || "none on this connection"}</span></div>
+                    <div className="break-all">Voice webhook: <span className="text-ink">{telnyxState.webhook.voice}</span></div>
+                    <div className="break-all">Messaging webhook: <span className="text-ink">{telnyxState.webhook.messaging}</span></div>
+                  </div>
+                ) : null}
+              </div>
             </>
           )}
         </div>

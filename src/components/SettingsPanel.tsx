@@ -6,6 +6,7 @@ import { betterAuthToken } from "@/lib/auth";
 import { stateForBot } from "@/lib/mascot";
 import { cn } from "@/lib/cn";
 import { customToolNotes } from "@/lib/custom-tool-entries";
+import { parseKnowledgeCorpusMap, prepareKnowledgeFile, stringifyKnowledgeCorpusMap, type PreparedKnowledgeFile } from "@/lib/knowledge-base";
 import { CrmCampaignResults } from "./CrmCampaignResults";
 import { BotProfileAvatarCard } from "./BotProfileAvatarCard";
 import { BOT_PROFILE_LIMITS } from "../../shared/bot-profile";
@@ -374,28 +375,6 @@ function providerLabel(provider: string | undefined): string {
 
 function knowledgeRowId(row: KnowledgeBaseRow): string {
   return row.id ?? row._id ?? (row.localIndex === undefined ? "" : `local-${row.localIndex}`);
-}
-
-function parseKnowledgeCorpusMap(value: string | undefined): Record<string, string> {
-  if (!value?.trim()) return {};
-  try {
-    const parsed = JSON.parse(value);
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
-    return Object.fromEntries(
-      Object.entries(parsed).filter((entry): entry is [string, string] =>
-        typeof entry[0] === "string" &&
-        typeof entry[1] === "string" &&
-        entry[1].trim().length > 0,
-      ),
-    );
-  } catch {
-    return {};
-  }
-}
-
-function stringifyKnowledgeCorpusMap(value: Record<string, string>): string {
-  const entries = Object.entries(value).filter(([, corpusId]) => corpusId.trim());
-  return entries.length ? JSON.stringify(Object.fromEntries(entries)) : "";
 }
 
 function rowUltravoxCorpusId(row: KnowledgeBaseRow, map: Record<string, string>): string {
@@ -792,118 +771,6 @@ function withoutKnowledgeEntry(value: string | undefined, row: KnowledgeBaseRow,
     return true;
   });
   return filtered.join("\n\n---\n");
-}
-
-interface PreparedKnowledgeFile {
-  name: string;
-  content: string;
-  error?: string;
-}
-
-function decodeXmlText(xml: string): string {
-  const body = xml
-    .replace(/<w:tab\/>/g, "\t")
-    .replace(/<\/w:p>/g, "\n")
-    .replace(/<[^>]+>/g, "")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&amp;/g, "&")
-    .replace(/&quot;/g, "\"")
-    .replace(/&apos;/g, "'");
-  return body
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .join("\n");
-}
-
-async function inflateZipEntry(bytes: Uint8Array): Promise<Uint8Array> {
-  const payload = new ArrayBuffer(bytes.byteLength);
-  new Uint8Array(payload).set(bytes);
-  const stream = new Blob([payload]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
-  const buffer = await new Response(stream).arrayBuffer();
-  return new Uint8Array(buffer);
-}
-
-async function extractDocxText(file: File): Promise<string> {
-  const bytes = new Uint8Array(await file.arrayBuffer());
-  const decoder = new TextDecoder();
-  let eocdOffset = -1;
-  for (let index = bytes.length - 22; index >= 0; index -= 1) {
-    const view = new DataView(bytes.buffer, bytes.byteOffset + index, 4);
-    if (view.getUint32(0, true) === 0x06054b50) {
-      eocdOffset = index;
-      break;
-    }
-  }
-  if (eocdOffset < 0) return "";
-  const eocd = new DataView(bytes.buffer, bytes.byteOffset + eocdOffset);
-  const centralDirectorySize = eocd.getUint32(12, true);
-  const centralDirectoryOffset = eocd.getUint32(16, true);
-  let offset = centralDirectoryOffset;
-  const centralDirectoryEnd = centralDirectoryOffset + centralDirectorySize;
-  while (offset + 46 <= centralDirectoryEnd && offset + 46 <= bytes.length) {
-    const view = new DataView(bytes.buffer, bytes.byteOffset + offset);
-    if (view.getUint32(0, true) !== 0x02014b50) break;
-    const compression = view.getUint16(10, true);
-    const compressedSize = view.getUint32(20, true);
-    const uncompressedSize = view.getUint32(24, true);
-    const fileNameLength = view.getUint16(28, true);
-    const extraLength = view.getUint16(30, true);
-    const commentLength = view.getUint16(32, true);
-    const localHeaderOffset = view.getUint32(42, true);
-    const nameStart = offset + 46;
-    const fileName = decoder.decode(bytes.slice(nameStart, nameStart + fileNameLength));
-    if (fileName === "word/document.xml") {
-      const local = new DataView(bytes.buffer, bytes.byteOffset + localHeaderOffset);
-      if (local.getUint32(0, true) !== 0x04034b50) return "";
-      const localNameLength = local.getUint16(26, true);
-      const localExtraLength = local.getUint16(28, true);
-      const dataStart = localHeaderOffset + 30 + localNameLength + localExtraLength;
-      const dataEnd = dataStart + compressedSize;
-      const compressed = bytes.slice(dataStart, dataEnd);
-      const data = compression === 0
-        ? compressed
-        : compression === 8
-          ? await inflateZipEntry(compressed)
-          : new Uint8Array();
-      const xml = decoder.decode(data.slice(0, uncompressedSize || undefined));
-      return decodeXmlText(xml);
-    }
-    offset = nameStart + fileNameLength + extraLength + commentLength;
-  }
-  return "";
-}
-
-async function prepareKnowledgeFile(file: File): Promise<PreparedKnowledgeFile> {
-  try {
-    if (/\.(txt|md)$/i.test(file.name) || /^text\//i.test(file.type)) {
-      return { name: file.name, content: (await file.text()).trim() };
-    }
-    if (/\.pdf$/i.test(file.name) || file.type === "application/pdf") {
-      const { extractPdfText } = await import("@/lib/knowledge-pdf");
-      return { name: file.name, content: await extractPdfText(new Uint8Array(await file.arrayBuffer())) };
-    }
-    if (/\.docx$/i.test(file.name)) {
-      const content = (await extractDocxText(file)).trim();
-      return {
-        name: file.name,
-        content,
-        error: content ? undefined : "No text could be extracted from this DOCX file.",
-      };
-    }
-    return {
-      name: file.name,
-      content: "",
-      error: "Only PDF, TXT, MD, and DOCX files can be imported. Convert this file to a supported format first.",
-    };
-  } catch (caught) {
-    return {
-      name: file.name,
-      content: "",
-      error: caught instanceof Error ? caught.message : String(caught),
-    };
-  }
 }
 
 function AgentConfigurationFields({

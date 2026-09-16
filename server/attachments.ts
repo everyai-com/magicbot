@@ -95,6 +95,20 @@ export function readAttachment(name: string): { bytes: Buffer; mime: string } | 
   }
 }
 
+/** Read a document attachment back for the knowledge importer. The image
+ * route above is deliberately image-only; this keeps the same bare-name
+ * discipline and admits only the formats prepareKnowledgeFile can extract.
+ * Callers serve it as octet-stream + nosniff, never by its own type, so a
+ * crafted extension can't turn the route into a rendering sink. */
+export function readDocumentAttachment(name: string): Buffer | null {
+  if (!/^[A-Za-z0-9-]+\.(txt|md|pdf|docx)$/.test(name)) return null;
+  try {
+    return readFileSync(join(ATTACHMENTS_DIR, name));
+  } catch {
+    return null;
+  }
+}
+
 function mimeForExt(ext: string): string {
   switch (ext) {
     case ".png":

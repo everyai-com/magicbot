@@ -790,6 +790,37 @@ describe("harness HTTP API", () => {
     expect(tooBig.status).toBe(413);
   });
 
+  it("serves document attachments for the knowledge importer, and only those", async () => {
+    const text = Buffer.from("Pricing: standard plan is 4999/month.");
+    const saved = await fetch(`${BASE}/api/file-attachments?name=kb-probe.txt`, {
+      method: "POST",
+      headers: { "content-type": "text/plain" },
+      body: new Uint8Array(text),
+    });
+    expect(saved.status).toBe(201);
+    const { path: savedPath } = (await saved.json()) as { path: string };
+    const name = savedPath.replaceAll("\\", "/").split("/").pop();
+
+    const served = await fetch(`${BASE}/api/file-attachments/${name}`);
+    expect(served.status).toBe(200);
+    // never served as its own type: the client parses it, the browser must not
+    expect(served.headers.get("content-type")).toBe("application/octet-stream");
+    expect(served.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(Buffer.from(await served.arrayBuffer()).equals(text)).toBe(true);
+
+    // the image route still refuses documents, and this route refuses images
+    expect((await fetch(`${BASE}/api/attachments/${name}`)).status).toBe(404);
+    const html = await fetch(`${BASE}/api/file-attachments?name=probe.html`, {
+      method: "POST",
+      headers: { "content-type": "text/html" },
+      body: new Uint8Array(Buffer.from("<script>alert(1)</script>")),
+    });
+    expect(html.status).toBe(201);
+    const htmlName = ((await html.json()) as { path: string }).path.replaceAll("\\", "/").split("/").pop();
+    expect((await fetch(`${BASE}/api/file-attachments/${htmlName}`)).status).toBe(404);
+    expect((await fetch(`${BASE}/api/file-attachments/..%2F..%2Fconfig.json`)).status).toBe(404);
+  });
+
   it("persists only app-owned bot avatars and supported crop shapes", async () => {
     const created = await api("POST", "/api/bots");
     const bot = created.body.bot;

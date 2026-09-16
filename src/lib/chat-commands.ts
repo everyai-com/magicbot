@@ -1,6 +1,6 @@
 export const chatCommands = [
   { name: 'create', description: 'Ask the Chief to create an agent: /create sales assistant' },
-  { name: 'attach', description: 'Send files to a bot: /attach @Bot Name instructions' },
+  { name: 'attach', description: "Add files to a bot's knowledge base: /attach @Bot Name notes" },
   { name: 'campaign', description: 'Save WhatsApp draft: /campaign name | audience | template' },
   { name: 'output', description: 'Get campaign results: /output $Campaign Name' },
   { name: 'summarize', description: 'Summarize this conversation or attached files' },
@@ -20,6 +20,56 @@ export function attachmentTarget<T extends { id: string; name: string }>(args: s
   if (!longest) throw new Error('Choose a bot with /attach @Bot Name, then attach a file.');
   if (matches.filter(bot => bot.name.toLowerCase() === longest.name.toLowerCase()).length > 1) throw new Error('More than one bot has that name. Rename the target bot to a unique name first.');
   return { bot: longest, instructions: args.slice(longest.name.length + 1).trim() };
+}
+
+export interface AttachmentRequest<T> {
+  bot: T;
+  /** what to title the entry with; empty for a tagged request */
+  instructions: string;
+  /** true when the message led with /attach — the documented command form */
+  explicit: boolean;
+}
+
+/** Resolve a knowledge-base attach request from a composer message. People
+ * write it three ways and each is unambiguous once a file chip is attached:
+ *   "/attach @Bot notes"                 — the command form
+ *   "@Bot … /attach this file …"         — a tagged message carrying the word
+ *   "@Bot … add this to the knowledge base" — plain description of the action
+ * Returns null when the message is not an attach request. Throws a
+ * user-facing reason when /attach was typed but the target bot is unclear. */
+export function resolveAttachmentTarget<T extends { id: string; name: string }>(
+  text: string,
+  bots: T[],
+  fallback?: T,
+): AttachmentRequest<T> | null {
+  const command = parseChatCommand(text);
+  if (command?.name === "attach") {
+    return { ...attachmentTarget(command.args, bots), explicit: true };
+  }
+  if (command) return null;
+  const invoked = /(?:^|\s)\/attach(?:\s|$)/.test(text);
+  const described = /\bknowledge\s*base\b/i.test(text);
+  if (!invoked && !described) return null;
+
+  // A leading tag names the bot the file should land on; otherwise fall back
+  // to the thread the user is already typing in (a 1:1 bot chat).
+  const target = taggedBot(text, bots) ?? fallback;
+  if (target) return { bot: target, instructions: "", explicit: false };
+  // Typed as a command but we can't tell which bot: say so. Described in
+  // prose: leave it alone rather than blocking the message.
+  if (invoked) throw new Error("Choose a bot for /attach, for example: /attach @Bot Name notes");
+  return null;
+}
+
+/** The bot a leading `@Name` tag points at, or null if there isn't one we
+ * can resolve. Never throws — callers fall back to the current thread. */
+function taggedBot<T extends { id: string; name: string }>(text: string, bots: T[]): T | null {
+  if (!text.trimStart().startsWith("@")) return null;
+  try {
+    return attachmentTarget(text, bots).bot;
+  } catch {
+    return null;
+  }
 }
 
 export function campaignDraft(args: string, audiences: Record<string, unknown>[], templates: Record<string, unknown>[]) {

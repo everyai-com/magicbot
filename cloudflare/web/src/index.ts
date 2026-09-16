@@ -435,11 +435,12 @@ async function platformAuthorization(
 
 async function platformJson(
   path: string,
-  options: { method?: string; authorization?: string | string[] | null; body?: unknown } = {},
+  options: { method?: string; authorization?: string | string[] | null; body?: unknown; timeoutMs?: number } = {},
 ): Promise<unknown> {
   const bearer = usableBearer(options.authorization);
   if (!bearer) throw Object.assign(new Error("Sign in to load connected MagicTeams resources"), { status: 401 });
   const response = await fetch(betterAuthApiUrl(path), {
+    signal: AbortSignal.timeout(options.timeoutMs ?? 25_000),
     method: options.method ?? "GET",
     headers: { authorization: bearer, "content-type": "application/json" },
     body: options.body === undefined ? undefined : JSON.stringify(options.body),
@@ -452,6 +453,85 @@ async function platformJson(
     throw Object.assign(new Error(message), { status: response.status });
   }
   return body;
+}
+
+async function ultravoxGetJson(env: Env, userId: string, path: string): Promise<unknown> {
+  const key = await ultravoxApiKey(env, userId);
+  if (!key) throw Object.assign(new Error("Ultravox API key is not configured in the backend"), { status: 409 });
+  const response = await fetch(`${ULTRAVOX_API}${path}`, { headers: { "X-API-Key": key } });
+  const contentType = response.headers.get("content-type") ?? "";
+  const body = contentType.includes("application/json") ? await response.json().catch(() => ({})) : await response.text().catch(() => "");
+  if (!response.ok) throw Object.assign(new Error(ultravoxMessage(response.status, body)), { status: response.status });
+  return body;
+}
+
+function ultravoxResults(value: unknown): Record<string, unknown>[] {
+  if (value && typeof value === "object" && Array.isArray((value as { results?: unknown }).results)) {
+    return (value as { results: unknown[] }).results.filter((row): row is Record<string, unknown> => !!row && typeof row === "object");
+  }
+  return [];
+}
+
+const ULTRAVOX_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function pruneLiveCall(call: Record<string, unknown>): Record<string, unknown> {
+  const pruned: Record<string, unknown> = {};
+  for (const field of ["callId", "created", "joined", "ended", "endReason", "billedDuration",
+    "billingStatus", "summary", "shortSummary", "model", "voice", "medium", "clientVersion", "metadata",
+    "to", "from", "to_number", "from_number", "recipient", "direction"]) {
+    if (call[field] !== undefined) pruned[field] = call[field];
+  }
+  return pruned;
+}
+
+async function matchUltravoxCall(
+  env: Env,
+  userId: string,
+  platformAgentId: string,
+  atMs: number,
+  authorization: string | null,
+): Promise<Record<string, unknown>> {
+  const nearestWithin = (calls: Record<string, unknown>[]): Record<string, unknown> | null => {
+    let best: Record<string, unknown> | null = null;
+    let bestDiff = Number.POSITIVE_INFINITY;
+    for (const call of calls) {
+      const created = typeof call.created === "string" ? Date.parse(call.created) : NaN;
+      if (!Number.isFinite(created)) continue;
+      const diff = Math.abs(created - atMs);
+      if (diff < bestDiff) {
+        bestDiff = diff;
+        best = call;
+      }
+    }
+    return best && bestDiff <= 10 * 60 * 1000 ? best : null;
+  };
+  const listAgentCalls = async (ultravoxAgentId: string): Promise<Record<string, unknown>[]> => {
+    const body = await ultravoxGetJson(env, userId, `/agents/${encodeURIComponent(ultravoxAgentId)}/calls?pageSize=25`);
+    return ultravoxResults(body);
+  };
+  const id = platformAgentId.trim();
+  if (ULTRAVOX_UUID.test(id)) {
+    const direct = nearestWithin(await listAgentCalls(id));
+    if (direct) return pruneLiveCall(direct);
+  } else {
+    try {
+      const agent = await platformJson(`/api/agents/${encodeURIComponent(id)}`, { authorization: authorization ?? undefined, timeoutMs: 8000 });
+      const record = (agent && typeof agent === "object"
+        ? ((agent as Record<string, unknown>).agent ?? (agent as Record<string, unknown>).data ?? agent)
+        : {}) as Record<string, unknown>;
+      const resolved = record.ultravox_agent_id ?? record.ultravoxAgentId;
+      if (typeof resolved === "string" && ULTRAVOX_UUID.test(resolved.trim())) {
+        const scoped = nearestWithin(await listAgentCalls(resolved.trim()));
+        if (scoped) return pruneLiveCall(scoped);
+      }
+    } catch {
+      // Fall through to the workspace-wide list below.
+    }
+  }
+  const recent = ultravoxResults(await ultravoxGetJson(env, userId, "/calls?pageSize=50"));
+  const global = nearestWithin(recent);
+  if (global) return pruneLiveCall(global);
+  throw Object.assign(new Error("No matching live call found near this history entry."), { status: 404 });
 }
 
 async function createUltravoxDemoCall(
@@ -2013,6 +2093,200 @@ async function api(request: Request, env: Env, user: User, path: string): Promis
     const match = path.match(/^\/api\/ultravox\/voices\/([\w-]+)\/preview$/);
     if (match && request.method === "GET") return previewUltravoxVoice(env, user.id, match[1]);
   }
+  // Live call detail for the history view. History rows come from the
+  // platform, whose status can lag (a finished call still shows
+  // "initiated"); these re-read Ultravox directly.
+  {
+    const match = path.match(/^\/api\/ultravox\/calls\/([\w-]+)\/recording$/);
+    if (match && request.method === "GET") {
+      try {
+        const key = await ultravoxApiKey(env, user.id);
+        if (!key) return json({ error: "Ultravox API key is not configured in the backend" }, 409);
+        if (!/^[\w-]+$/.test(match[1])) return json({ error: "callId must be a valid call id" }, 400);
+        const redirect = await fetch(`${ULTRAVOX_API}/calls/${encodeURIComponent(match[1])}/recording`, {
+          headers: { "X-API-Key": key },
+          redirect: "manual",
+        });
+        const location = redirect.headers.get("location") ?? "";
+        if ((redirect.status === 301 || redirect.status === 302 || redirect.status === 307) && location) {
+          const audio = await fetch(location);
+          if (!audio.ok) return json({ error: "Ultravox recording is not available yet" }, 502);
+          const lower = location.split("?")[0].toLowerCase();
+          const mime = lower.endsWith(".mp3") ? "audio/mpeg" : lower.endsWith(".ogg") ? "audio/ogg" : "audio/wav";
+          const bytes = new Uint8Array(await audio.arrayBuffer());
+          const total = bytes.length;
+          // Players seek with Range requests; answer slices so seeking works.
+          const range = (request.headers.get("range") ?? "").match(/^bytes=(\d*)-(\d*)$/);
+          if (range && (range[1] || range[2])) {
+            let start = range[1] ? parseInt(range[1], 10) : 0;
+            let end = range[2] ? parseInt(range[2], 10) : total - 1;
+            if (Number.isNaN(start)) start = 0;
+            if (Number.isNaN(end)) end = total - 1;
+            if (start >= total || end >= total || start > end) {
+              return new Response(null, { status: 416, headers: { "content-range": `bytes */${total}` } });
+            }
+            return new Response(bytes.slice(start, end + 1), {
+              status: 206,
+              headers: {
+                "content-type": mime,
+                "content-length": String(end - start + 1),
+                "content-range": `bytes ${start}-${end}/${total}`,
+                "accept-ranges": "bytes",
+                "cache-control": "no-store",
+              },
+            });
+          }
+          return new Response(bytes, {
+            headers: {
+              "content-type": mime,
+              "content-length": String(total),
+              "accept-ranges": "bytes",
+              "cache-control": "no-store",
+            },
+          });
+        }
+        if (redirect.status === 404) return json({ error: "No recording is available for this call yet" }, 404);
+        return json({ error: `Ultravox returned ${redirect.status}` }, redirect.status);
+      } catch (error) {
+        return json({ error: error instanceof Error ? error.message : String(error) }, 502);
+      }
+    }
+  }
+  {
+    const match = path.match(/^\/api\/ultravox\/calls\/([\w-]+)\/messages$/);
+    if (match && request.method === "GET") {
+      try {
+        if (!/^[\w-]+$/.test(match[1])) return json({ error: "callId must be a valid call id" }, 400);
+        const messages: Array<{ role: string; text: string; start: string; end: string }> = [];
+        let cursor = "";
+        for (let page = 0; page < 5; page += 1) {
+          const body = await ultravoxGetJson(env, user.id,
+            `/calls/${encodeURIComponent(match[1])}/messages?pageSize=100${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`);
+          for (const row of ultravoxResults(body)) {
+            const text = typeof row.text === "string" ? row.text : "";
+            if (!text.trim()) continue;
+            const span = (row.timespan && typeof row.timespan === "object" ? row.timespan : {}) as Record<string, unknown>;
+            messages.push({
+              role: row.role === "MESSAGE_ROLE_AGENT" ? "agent" : "user",
+              text,
+              start: typeof span.start === "string" ? span.start : "",
+              end: typeof span.end === "string" ? span.end : "",
+            });
+          }
+          const next = body && typeof body === "object" ? (body as { next?: unknown }).next : null;
+          if (typeof next !== "string" || !next) break;
+          try {
+            cursor = new URL(next).searchParams.get("cursor") ?? "";
+          } catch {
+            break;
+          }
+          if (!cursor) break;
+        }
+        return json({ messages });
+      } catch (error) {
+        const status = error && typeof error === "object" && typeof (error as { status?: unknown }).status === "number"
+          ? (error as { status: number }).status
+          : 502;
+        return json({ error: error instanceof Error ? error.message : String(error) }, status);
+      }
+    }
+  }
+  {
+    const match = path.match(/^\/api\/ultravox\/calls\/([\w-]+)$/);
+    if (match && request.method === "GET") {
+      try {
+        if (!/^[\w-]+$/.test(match[1])) return json({ error: "callId must be a valid call id" }, 400);
+        return json({ call: await ultravoxGetJson(env, user.id, `/calls/${encodeURIComponent(match[1])}`) });
+      } catch (error) {
+        const status = error && typeof error === "object" && typeof (error as { status?: unknown }).status === "number"
+          ? (error as { status: number }).status
+          : 502;
+        return json({ error: error instanceof Error ? error.message : String(error) }, status);
+      }
+    }
+  }
+  if (request.method === "POST" && path === "/api/ultravox/match-calls") {
+    const authorization = request.headers.get("authorization");
+    const platformAuth = await platformAuthorization(env, user.id, authorization);
+    const body = await request.json<{ items?: unknown }>().catch(() => ({ items: [] as unknown }));
+    const items = Array.isArray(body.items) ? (body.items as Array<{ key?: unknown; platformAgentId?: unknown; at?: unknown }>).slice(0, 50) : [];
+    const results = await Promise.all(items.map(async (item) => {
+      const key = String(item?.key ?? "");
+      const platformAgentId = String(item?.platformAgentId ?? "").trim();
+      const atMs = Date.parse(String(item?.at ?? ""));
+      if (!key || !platformAgentId || !Number.isFinite(atMs)) return { key, matched: false };
+      try {
+        return { key, matched: true, call: await matchUltravoxCall(env, user.id, platformAgentId, atMs, platformAuth) };
+      } catch (error) {
+        return { key, matched: false, error: error instanceof Error ? error.message : String(error) };
+      }
+    }));
+    return json({ results });
+  }
+  if (request.method === "POST" && path === "/api/ultravox/demo-calls") {
+    const authorization = request.headers.get("authorization");
+    const platformAuth = await platformAuthorization(env, user.id, authorization);
+    const body = await request.json<{ agentIds?: unknown }>().catch(() => ({ agentIds: [] as unknown }));
+    const rawIds = Array.isArray(body.agentIds) ? body.agentIds : [];
+    const agentIds = [...new Set(
+      rawIds.map((id) => String(id ?? "").trim()).filter((id) => id.length > 0),
+    )].slice(0, 20);
+    const isWebCall = (call: Record<string, unknown>): boolean => {
+      const medium = call.medium;
+      const keys = medium && typeof medium === "object" ? Object.keys(medium).join(",") : String(medium ?? "");
+      return /webrtc/i.test(keys);
+    };
+    const agents = await Promise.all(agentIds.map(async (platformAgentId: string) => {
+      try {
+        let ultravoxAgentId = "";
+        let agentName = "";
+        if (ULTRAVOX_UUID.test(platformAgentId)) {
+          ultravoxAgentId = platformAgentId;
+          try {
+            const agent = await ultravoxGetJson(env, user.id, `/agents/${encodeURIComponent(ultravoxAgentId)}`) as Record<string, unknown>;
+            const name = agent.name ?? agent.title;
+            agentName = typeof name === "string" ? name.trim() : "";
+          } catch {
+            // Name stays empty; calls still list.
+          }
+        } else {
+          const agent = await platformJson(`/api/agents/${encodeURIComponent(platformAgentId)}`, { authorization: platformAuth ?? undefined, timeoutMs: 8000 });
+          const record = (agent && typeof agent === "object"
+            ? ((agent as Record<string, unknown>).agent ?? (agent as Record<string, unknown>).data ?? agent)
+            : {}) as Record<string, unknown>;
+          const resolved = record.ultravox_agent_id ?? record.ultravoxAgentId;
+          if (typeof resolved !== "string" || !ULTRAVOX_UUID.test(resolved.trim())) {
+            return { platformAgentId, agentName: "", calls: [] };
+          }
+          ultravoxAgentId = resolved.trim();
+          const name = record.name ?? record.title;
+          agentName = typeof name === "string" ? name.trim() : "";
+        }
+        const calls = ultravoxResults(await ultravoxGetJson(env, user.id, `/agents/${encodeURIComponent(ultravoxAgentId)}/calls?pageSize=25`))
+          .filter(isWebCall)
+          .map(pruneLiveCall);
+        return { platformAgentId, agentName, calls };
+      } catch (error) {
+        return { platformAgentId, agentName: "", calls: [], error: error instanceof Error ? error.message : String(error) };
+      }
+    }));
+    let unassigned: Record<string, unknown>[] = [];
+    try {
+      const seen = new Set<string>();
+      for (const entry of agents) {
+        for (const call of entry.calls) {
+          if (typeof call.callId === "string") seen.add(call.callId);
+        }
+      }
+      unassigned = ultravoxResults(await ultravoxGetJson(env, user.id, "/calls?pageSize=50"))
+        .filter((call) => isWebCall(call) && typeof call.callId === "string" && !seen.has(call.callId))
+        .slice(0, 25)
+        .map(pruneLiveCall);
+    } catch {
+      unassigned = [];
+    }
+    return json({ agents, unassigned });
+  }
   {
     const match = path.match(/^\/api\/platform\/agents\/([^/]+)\/demo-call$/);
     if (match && request.method === "POST") {
@@ -2683,6 +2957,23 @@ async function api(request: Request, env: Env, user: User, path: string): Promis
     const messages = appendTurn(bot, text, reply, body.clientMessageId);
     await saveBot(env, user.id, bot);
     return json({ threadId: bot.threadId, messages });
+  }
+  // Read-only campaign/history proxy. Same allowlist as the local dev
+  // server; writes stay local-only. Uses the stored platform token so
+  // history works with a hosted login.
+  if (request.method === "GET" && path.startsWith("/api/campaign-workspace/")) {
+    const remote = campaignWorkspaceRoute("GET", path.slice("/api/campaign-workspace/".length));
+    if (!remote) return json({ error: "Unknown campaign action" }, 404);
+    const platformAuth = await platformAuthorization(env, user.id, request.headers.get("authorization"));
+    if (!platformAuth) return json({ error: "Sign in to load connected MagicTeams resources" }, 401);
+    try {
+      return json(await platformJson(remote, { authorization: platformAuth }), 200);
+    } catch (error) {
+      const status = error && typeof error === "object" && typeof (error as { status?: unknown }).status === "number"
+        ? (error as { status: number }).status
+        : 502;
+      return json({ error: error instanceof Error ? error.message : String(error) }, status);
+    }
   }
   return json({ error: "This feature is not available in the hosted version yet" }, 501);
 }
