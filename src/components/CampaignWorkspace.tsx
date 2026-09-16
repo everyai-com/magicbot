@@ -4,6 +4,8 @@ import { prepareEmailContacts } from "@/lib/email-campaign";
 import { EmailTemplates } from "./EmailTemplates";
 import { SmsTemplates } from "./SmsTemplates";
 import { CampaignOutcomes } from "./CampaignOutcomes";
+import { CampaignOutcomeList } from "./CampaignOutcomeList";
+import { outcomeBreakdown, outcomeCountsFor, summaryRows, type OutcomeCount } from "@/lib/campaign-outcome-summary";
 import { matchOutcomeContact } from "@/lib/campaign-outcomes";
 import { parseCampaignCsv } from "@/lib/campaign-csv";
 import { Phone, MessageSquare, Mail, MessageCircle, ChevronLeft, ChevronRight, FileSpreadsheet, Megaphone, LayoutTemplate, ChartColumn, Upload, MoreHorizontal } from "lucide-react";
@@ -144,6 +146,7 @@ function CampaignDetail({ channel, active, onBack }: { channel: Channel; active:
   const [outcomeId, setOutcomeId] = useState("");
   const [outcomeRows, setOutcomeRows] = useState<Row[]>([]);
   const [outcomeResults, setOutcomeResults] = useState<string[]>([]);
+  const [outcomeSummary, setOutcomeSummary] = useState<OutcomeCount[]>([]);
   const loadedOutcomeId = useRef("");
   const [outcomeLoading, setOutcomeLoading] = useState(false);
   const [outcomeError, setOutcomeError] = useState("");
@@ -250,7 +253,10 @@ function CampaignDetail({ channel, active, onBack }: { channel: Channel; active:
     if (channel === "whatsapp") return () => window.removeEventListener("campaign-workspace-changed", refresh);
     window.addEventListener("focus", refresh);
     document.addEventListener("visibilitychange", refresh);
-    const timer = window.setInterval(refresh, 15000);
+    // Outcomes are watched while a campaign dials: the operator has to see the
+    // callee pick up (Live) and see it end without touching anything, so this
+    // tab polls on a call's timescale rather than a page's.
+    const timer = window.setInterval(refresh, tab === "Outcomes" ? 4000 : 15000);
     return () => {
       window.removeEventListener("campaign-workspace-changed", refresh);
       window.removeEventListener("focus", refresh);
@@ -258,6 +264,16 @@ function CampaignDetail({ channel, active, onBack }: { channel: Channel; active:
       window.clearInterval(timer);
     };
   }, [active, channel, tab]);
+  // Per-campaign counts for the Outcomes list. The platform settles open calls
+  // on this read, so every tick also refreshes the provider truth behind it.
+  useEffect(() => {
+    if (!active || tab !== "Outcomes") return;
+    let alive = true;
+    request("call-outcomes/summary")
+      .then((data) => { if (alive) setOutcomeSummary(summaryRows(data)); })
+      .catch(() => { if (alive) setOutcomeSummary([]); });
+    return () => { alive = false; };
+  }, [active, tab, revision]);
   // Read only campaign status while runs are active; keep the rest of the page stable.
   const hasRunningWhatsapp = channel === "whatsapp" && campaigns.some(c => String(c.status).toLowerCase() === "active");
   useEffect(() => {
@@ -879,35 +895,46 @@ function CampaignDetail({ channel, active, onBack }: { channel: Channel; active:
           })}>{busy ? "Deleting…" : "Delete permanently"}</button><button type="button" className={control} onClick={() => setOutcomeDeleteId(null)}>Cancel</button></div>
         </div>}
 
-        {!outcomeId ? <div className="grid gap-2 sm:grid-cols-2">{outcomeCampaigns.map((row) => {
+        {!outcomeId && renamingId && outcomeCampaigns.some((row) => recordId(row) === renamingId) ? <form className="rounded-xl border border-hairline/40 bg-inset p-3" onSubmit={(event) => {
+          event.preventDefault();
+          const id = renamingId;
+          void run(async () => {
+            const name = campaignName.trim();
+            if (!name) throw new Error("Enter a campaign name.");
+            await request(root + "/" + encodeURIComponent(id), "PATCH", channel === "voice" ? { venue_name: name } : { name });
+            setCampaigns((old) => old.map((campaign) => recordId(campaign) === id ? { ...campaign, ...(channel === "voice" ? { venue_name: name } : {}), name } : campaign));
+            setRenamingId(null); setNotice("Campaign name updated.");
+          });
+        }}>
+          <label className="text-xs text-ink-secondary">Campaign name<input autoFocus className={control + " mt-1 w-full min-w-0"} value={campaignName} onChange={(event) => setCampaignName(event.target.value)} onKeyDown={(event) => { if (event.key === "Escape") { event.stopPropagation(); setRenamingId(null); } }} required /></label>
+          <div className="mt-2 flex gap-2"><button type="submit" className={button}>Save</button><button type="button" className={control} onClick={() => setRenamingId(null)}>Cancel</button></div>
+        </form> : !outcomeId ? (channel === "voice"
+          ? <CampaignOutcomeList channel={channel} campaigns={outcomeCampaigns} summary={outcomeSummary} menu={campaignMenu} menuRef={campaignMenuRef} onMenu={setCampaignMenu}
+              onOpen={(campaign) => { setCampaignMenu(null); setOutcomeRows([]); setOutcomeId(recordId(campaign)); }}
+              onRename={(campaign) => { setRenamingId(recordId(campaign)); setCampaignName(String(campaign.name ?? campaign.venue_name ?? recordId(campaign))); }}
+              onDelete={(campaign) => setOutcomeDeleteId(recordId(campaign))} />
+          : <div className="grid gap-2 sm:grid-cols-2">{outcomeCampaigns.map((row) => {
           const id = recordId(row);
           const title = String(row.name ?? row.venue_name ?? id);
           return <div key={id} className="relative flex min-h-20 min-w-0 items-center rounded-lg border border-hairline/40 bg-inset">
-            {renamingId === id ? <form className="min-w-0 flex-1 p-3" onSubmit={(event) => {
-              event.preventDefault();
-              void run(async () => {
-                const name = campaignName.trim();
-                if (!name) throw new Error("Enter a campaign name.");
-                await request(root + "/" + encodeURIComponent(id), "PATCH", channel === "voice" ? { venue_name: name } : { name });
-                setCampaigns((old) => old.map((campaign) => recordId(campaign) === id ? { ...campaign, ...(channel === "voice" ? { venue_name: name } : {}), name } : campaign));
-                setRenamingId(null); setNotice("Campaign name updated.");
-              });
-            }}>
-              <label className="text-xs text-ink-secondary">Campaign name<input autoFocus className={control + " mt-1 w-full min-w-0"} value={campaignName} onChange={(event) => setCampaignName(event.target.value)} onKeyDown={(event) => { if (event.key === "Escape") { event.stopPropagation(); setRenamingId(null); } }} required /></label>
-              <div className="mt-2 flex gap-2"><button type="submit" className={button}>Save</button><button type="button" className={control} onClick={() => setRenamingId(null)}>Cancel</button></div>
-            </form> : <>
-            <button type="button" onClick={() => { setCampaignMenu(null); setOutcomeRows([]); setOutcomeId(id); }} className="min-w-0 flex-1 rounded-lg px-3 py-5 text-left text-[13px] hover:bg-control/30 focus-visible:outline-2 focus-visible:outline-accent"><span className="block break-words font-medium">{title}</span></button>            </>}
+            <button type="button" onClick={() => { setCampaignMenu(null); setOutcomeRows([]); setOutcomeId(id); }} className="min-w-0 flex-1 rounded-lg px-3 py-5 text-left text-[13px] hover:bg-control/30 focus-visible:outline-2 focus-visible:outline-accent"><span className="block break-words font-medium">{title}</span></button>
 
-            {<div ref={campaignMenu === id ? campaignMenuRef : undefined} className="relative mr-2 shrink-0" onKeyDown={(event) => { if (event.key === "Escape") { event.stopPropagation(); setCampaignMenu(null); } }}>
+            <div ref={campaignMenu === id ? campaignMenuRef : undefined} className="relative mr-2 shrink-0" onKeyDown={(event) => { if (event.key === "Escape") { event.stopPropagation(); setCampaignMenu(null); } }}>
               <button type="button" aria-label={`Actions for ${title}`} aria-expanded={campaignMenu === id} className="rounded-md p-2 text-ink-secondary hover:bg-control hover:text-ink" onClick={() => setCampaignMenu(campaignMenu === id ? null : id)}><MoreHorizontal size={18} /></button>
               {campaignMenu === id && <div className="absolute right-0 top-full z-20 mt-1 flex min-w-32 flex-col rounded-lg border border-hairline/50 bg-panel p-1 shadow-xl">
                 <button type="button" className="rounded px-3 py-2 text-left text-sm hover:bg-control" onClick={() => { setCampaignMenu(null); setRenamingId(id); setCampaignName(title); }}>Edit</button>
                 <button type="button" className="rounded px-3 py-2 text-left text-sm text-danger hover:bg-control" onClick={() => { setCampaignMenu(null); setOutcomeDeleteId(id); }}>Delete</button>
               </div>}
-            </div>}
+            </div>
           </div>;
-        })}{!loading && !outcomeCampaigns.length && <p className="text-sm text-ink-secondary">{(channel === "sms" || channel === "whatsapp") ? "No completed campaigns yet. Campaigns appear here after all recipients have been processed." : "No campaigns yet."}</p>}</div> : <Card title={String(campaigns.find((row) => recordId(row) === outcomeId)?.name ?? campaigns.find((row) => recordId(row) === outcomeId)?.venue_name ?? "Campaign outcomes")}>
+        })}{!loading && !outcomeCampaigns.length && <p className="text-sm text-ink-secondary">{(channel === "sms" || channel === "whatsapp") ? "No completed campaigns yet. Campaigns appear here after all recipients have been processed." : "No campaigns yet."}</p>}</div>) : <Card title={String(campaigns.find((row) => recordId(row) === outcomeId)?.name ?? campaigns.find((row) => recordId(row) === outcomeId)?.venue_name ?? "Campaign outcomes")}>
           <div className="min-w-0 space-y-3">
+            {/* The same reading as the campaign's row in the list, so the detail
+                never disagrees with what the operator just clicked. */}
+            {channel === "voice" && (outcomeSummary.length > 0 || outcomeRows.length > 0) && (() => {
+              const counts = outcomeCountsFor(outcomeSummary, outcomeId);
+              return <p className="text-[13px] text-ink-secondary">{outcomeBreakdown(counts)}</p>;
+            })()}
             {outcomeLoading && <p role="status" className="text-sm text-ink-secondary">Loading outcomes…</p>}
             {outcomeError && <p role="alert" className="text-sm text-danger">{outcomeError}</p>}
             {!outcomeLoading && !outcomeError && !outcomeRows.length && <p className="text-sm text-ink-secondary">No outcomes recorded for this campaign yet.</p>}

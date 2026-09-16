@@ -7,6 +7,7 @@ export function campaignWorkspaceRoute(method: string, path: string): string | n
       /^campaign-configs\/phone-configs$/, /^agents$/, /^phone-configs$/, /^campaigns$/,
       new RegExp(`^campaigns/${id}$`),
       new RegExp(`^(contacts|call-outcomes)/by-campaign/${id}$`),
+      /^call-outcomes\/summary$/,
       /^messaging\/(sms|gmail)-(campaigns|templates)$/,
       /^messaging\/gmail-campaigns\/accounts$/,
       new RegExp(`^messaging/(sms|gmail)-campaigns/completed(?:/${id})?$`),

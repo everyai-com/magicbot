@@ -2,15 +2,35 @@ import { createPortal } from "react-dom";
 import { OutcomeExport } from "./OutcomeExport";
 import { Search, Clock } from "lucide-react";
 import { useState } from "react";
+import { outcomeStatus, type OutcomeTone } from "@/lib/campaign-outcome-summary";
+
 type Row = Record<string, unknown>;
+
+/** One look per result, shared with the campaign list so a call reads the same in both. */
+const toneClass = {
+  live: "bg-success/15 text-success",
+  positive: "bg-success/15 text-success",
+  voicemail: "bg-accent/15 text-accent",
+  warning: "bg-warning/15 text-warning",
+  danger: "bg-danger/15 text-danger",
+  neutral: "bg-control text-ink-secondary",
+} satisfies Record<OutcomeTone, string>;
+
+export function ResultPill({ value }: { value: unknown }) {
+  const status = outcomeStatus(value);
+  return <span className={"inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium " + toneClass[status.tone]}>
+    {status.tone === "live" && <span className="size-1.5 animate-pulse rounded-full bg-success" />}{status.label}
+  </span>;
+}
+
 export function CampaignOutcomes({ rows, onExport, onSelectRow, agentId, campaignName, exportTarget, resultValues, showErrorSummary = true }: { showErrorSummary?: boolean; resultValues?: string[]; exportTarget?: HTMLDivElement | null; rows: Row[]; agentId?: string; campaignName: string; onExport: (rows: Row[]) => void; onSelectRow?: (index: number) => void }) {
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState("All Results");
-  const normalize = (value: unknown) => String(value ?? "").trim().toLowerCase().replace(/[ _-]+/g, "");
+  const resultOf = (index: number, row: Row) => resultValues?.[index] ?? row.Result;
   const query = search.trim().toLowerCase();
   const digits = query.replace(/\D/g, "");
-  const filtered = rows.filter((row, index) => (filter === "All Results" || normalize(resultValues?.[index] ?? row.Result) === normalize(filter)) && (!query || Object.values(row).some((value) => String(value ?? "").toLowerCase().includes(query) || (digits.length > 0 && /^[+\d\s().-]+$/.test(query) && String(value ?? "").replace(/\D/g, "").includes(digits)))));
-  const resultOptions = resultValues ? ["All Results", ...new Set(resultValues.filter(Boolean))] : ["All Results", "Answered", "Voicemail", "No Answer", "Failed", "Pending"];
+  const filtered = rows.filter((row, index) => (filter === "All Results" || outcomeStatus(resultOf(index, row)).label === filter) && (!query || Object.values(row).some((value) => String(value ?? "").toLowerCase().includes(query) || (digits.length > 0 && /^[+\d\s().-]+$/.test(query) && String(value ?? "").replace(/\D/g, "").includes(digits)))));
+  const resultOptions = ["All Results", ...new Set(rows.map((row, index) => outcomeStatus(resultOf(index, row)).label).filter(Boolean))];
   const columns = [...new Set(rows.flatMap(Object.keys))];
   const [hidden, setHidden] = useState<string[]>([]);
   const shown = columns.filter((column) => !hidden.includes(column));
@@ -28,7 +48,7 @@ export function CampaignOutcomes({ rows, onExport, onSelectRow, agentId, campaig
     <div className="w-full min-w-0 max-w-full overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden rounded-xl border border-hairline/40 bg-panel/30" tabIndex={0} role="region" aria-label="Scrollable campaign outcomes"><table className="w-max min-w-full text-left text-[13px]">
       <caption className="sr-only">Campaign outcomes and configured contact fields</caption>
       <thead className="border-b border-hairline/40 text-ink-secondary"><tr>{shown.map((key) => <th key={key} className="whitespace-nowrap px-4 py-3.5 font-medium">{key}</th>)}</tr></thead>
-      <tbody>{filtered.map((row, i) => <tr key={i} onClick={onSelectRow ? () => onSelectRow(rows.indexOf(row)) : undefined} className={"border-b border-hairline/30 last:border-0" + (onSelectRow ? " cursor-pointer transition-colors hover:bg-raised/50" : "")}>{shown.map((key) => <td key={key} className="whitespace-nowrap px-4 py-5 align-top">{key === "Result" ? <span className={"inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium " + (normalize(row[key]) === "live" ? "bg-success/15 text-success" : normalize(row[key]) === "voicemail" ? "bg-accent/15 text-accent" : normalize(row[key]) === "answered" ? "bg-success/15 text-success" : normalize(row[key]) === "failed" ? "bg-danger/15 text-danger" : "bg-control text-ink-secondary")}>{normalize(row[key]) === "live" && <span className="size-1.5 animate-pulse rounded-full bg-success" />}{text(row[key])}</span> : (key === "Transcript" || key === "AI Summary" || key === "Error") && row[key] ? <details onClick={(e) => e.stopPropagation()}><summary className="cursor-pointer text-accent">View</summary><p className="mt-2 max-w-sm whitespace-pre-wrap break-words">{text(row[key])}</p></details> : key === "Duration" && row[key] != null ? <span className="inline-flex items-center gap-1.5"><Clock size={13} className="text-ink-secondary" />{text(row[key])}</span> : key === "Contact" ? <span className="font-medium">{text(row[key])}</span> : text(row[key])}</td>)}</tr>)}</tbody>
+      <tbody>{filtered.map((row, i) => <tr key={i} onClick={onSelectRow ? () => onSelectRow(rows.indexOf(row)) : undefined} className={"border-b border-hairline/30 last:border-0" + (onSelectRow ? " cursor-pointer transition-colors hover:bg-raised/50" : "")}>{shown.map((key) => <td key={key} className="whitespace-nowrap px-4 py-5 align-top">{key === "Result" ? <ResultPill value={row[key]} /> : (key === "Transcript" || key === "AI Summary" || key === "Error") && row[key] ? <details onClick={(e) => e.stopPropagation()}><summary className="cursor-pointer text-accent">View</summary><p className="mt-2 max-w-sm whitespace-pre-wrap break-words">{text(row[key])}</p></details> : key === "Duration" && row[key] != null ? <span className="inline-flex items-center gap-1.5"><Clock size={13} className="text-ink-secondary" />{text(row[key])}</span> : key === "Contact" ? <span className="font-medium">{text(row[key])}</span> : text(row[key])}</td>)}</tr>)}</tbody>
     </table></div>
     {!filtered.length && <p className="text-sm text-ink-secondary">No outcomes match this filter.</p>}
     <details className="text-xs text-ink-secondary"><summary className="cursor-pointer">Visible columns</summary><div className="mt-2 flex flex-wrap gap-3">{columns.map((column) => <label key={column} className="flex items-center gap-1"><input type="checkbox" checked={!hidden.includes(column)} onChange={(e) => setHidden((old) => e.target.checked ? old.filter((key) => key !== column) : [...old, column])} />{column}</label>)}</div></details>

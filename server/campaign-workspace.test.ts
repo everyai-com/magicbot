@@ -52,6 +52,13 @@ it("permits contact-saving routes for all four campaign channels", () => {
   }
 });
 
+it("allows the per-campaign outcome summary the Outcomes list reads, and nothing wider", () => {
+  expect(campaignWorkspaceRoute("GET", "call-outcomes/summary")).toBe("/api/call-outcomes/summary");
+  expect(campaignWorkspaceRoute("POST", "call-outcomes/summary")).toBeNull();
+  expect(campaignWorkspaceRoute("GET", "call-outcomes/summary/../../users")).toBeNull();
+  expect(campaignWorkspaceRoute("GET", "call-outcomes")).toBeNull();
+});
+
 it('allows reading the signed-in balance but rejects balance writes', () => {
   expect(campaignWorkspaceRoute('GET', 'billing/balance')).toBe('/api/billing/balance');
   expect(campaignWorkspaceRoute('POST', 'billing/balance')).toBeNull();
