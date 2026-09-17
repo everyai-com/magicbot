@@ -15,13 +15,17 @@ export interface WebhookIngress {
   baseUrl: string;
 }
 
-function json(res: ServerResponse, status: number, body: JsonValue): void {
+function json(res: ServerResponse, status: number, body: JsonValue, closeAfter = false): void {
   res.writeHead(status, {
     "content-type": "application/json",
     "cache-control": "no-store",
     "x-content-type-options": "nosniff",
+    // a refused body is not worth another round trip: say so and hang up
+    connection: closeAfter ? "close" : "keep-alive",
   });
-  res.end(JSON.stringify(body));
+  // The answer goes out first, then the socket: destroying it any earlier
+  // means the sender never learns why it was refused.
+  res.end(JSON.stringify(body), closeAfter ? () => res.socket?.destroy() : undefined);
 }
 
 function readRawBody(req: IncomingMessage): Promise<string> {
@@ -37,7 +41,14 @@ function readRawBody(req: IncomingMessage): Promise<string> {
     req.on("data", (chunk) => {
       if (done) return;
       bytes += Buffer.byteLength(chunk);
-      if (bytes > MAX_WEBHOOK_BODY_BYTES) return fail(413, "Webhook body is too large");
+      if (bytes > MAX_WEBHOOK_BODY_BYTES) {
+        // Stop consuming what we have already refused. The socket itself is
+        // closed after the 413 reaches the sender (see json's closeAfter) —
+        // without that, it was free to keep pushing the rest of its declared
+        // Content-Length until Node's requestTimeout eventually cut it off.
+        req.pause();
+        return fail(413, "Webhook body is too large");
+      }
       raw += chunk;
     });
     req.on("end", () => {
@@ -97,7 +108,15 @@ function eventName(req: IncomingMessage): string | undefined {
 
 export function createWebhookIngressHandler(manager: WebhookManager) {
   return async (req: IncomingMessage, res: ServerResponse) => {
-    const url = new URL(req.url ?? "/", "http://localhost");
+    // Node's HTTP parser accepts request targets the URL constructor refuses
+    // (`//[`). This parse used to sit outside every error boundary, so one
+    // unauthenticated request ended the process that owns this listener.
+    let url: URL;
+    try {
+      url = new URL(req.url ?? "/", "http://localhost");
+    } catch {
+      return json(res, 400, { error: "Malformed request target" });
+    }
     if (req.method === "GET" && url.pathname === "/health") {
       return json(res, 200, { app: "magicbots-webhooks", ready: true });
     }
@@ -106,7 +125,18 @@ export function createWebhookIngressHandler(manager: WebhookManager) {
     if (req.method !== "POST") return json(res, 405, { error: "Webhooks accept POST requests" });
 
     try {
-      const pathSecret = match[2] ? decodeURIComponent(match[2]) : "";
+      // decodeURIComponent throws on a half-formed escape ("%", "%E0%A4%A").
+      // That is a malformed credential, not a server fault: answering 500 here
+      // told a caller which of the two it had sent, and the rejection never
+      // reached the attempt log because only 400 and 413 were recorded.
+      let pathSecret = "";
+      if (match[2]) {
+        try {
+          pathSecret = decodeURIComponent(match[2]);
+        } catch {
+          pathSecret = "\u0000malformed";
+        }
+      }
       const secret = pathSecret || bearerSecret(req);
       // Reject bad capability URLs before buffering or parsing attacker input.
       if (!manager.authorize(match[1], secret)) {
@@ -142,7 +172,7 @@ export function createWebhookIngressHandler(manager: WebhookManager) {
           deliveryId: deliveryId(req),
         });
       }
-      return json(res, status, { error: message });
+      return json(res, status, { error: message }, status === 413);
     }
   };
 }

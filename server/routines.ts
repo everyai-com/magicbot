@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
+import { writeFileAtomic } from "./atomic.ts";
 import { DATA_DIR } from "./config.ts";
 import type { RuntimeEvent } from "./contracts.ts";
 
@@ -573,8 +574,15 @@ export class RoutineManager {
 
   private save() {
     mkdirSync(dirname(this.file), { recursive: true });
-    const temp = `${this.file}.tmp`;
-    writeFileSync(temp, JSON.stringify({ version: 1, routines: this.routines, runs: this.runs } satisfies RoutineFile, null, 2));
-    renameSync(temp, this.file);
+    // writeFileAtomic, not a hand-rolled `<file>.tmp` + rename: the fixed temp
+    // name was guessable and followed a symlink, and because rename(2) moves
+    // the LINK over the target, one planted file redirected every later save
+    // as well. 0600 because routines hold scheduled prompts, like every
+    // sibling state file.
+    writeFileAtomic(
+      this.file,
+      JSON.stringify({ version: 1, routines: this.routines, runs: this.runs } satisfies RoutineFile, null, 2),
+      { mode: 0o600 },
+    );
   }
 }

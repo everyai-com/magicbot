@@ -167,8 +167,119 @@ posixOnly("unattended turns keep asking", () => {
       expect(card.card.requestId).toBeTruthy();
       // and it must not already be answered
       expect(card.card.answered).toBeUndefined();
+      // the card must say why it actually stopped. `echo hi` is not
+      // destructive; the reason is that nobody started this turn.
+      expect(card.card.held).toBe("Nobody started this turn, so auto mode stopped to ask.");
     },
     60_000,
+  );
+
+  it(
+    "still asks a human when a schedule starts the turn, even with auto mode on",
+    async () => {
+      // The sibling of the webhook case above, and the one the 3am comment is
+      // actually about: a calendar routine fires with nobody at the keyboard.
+      // A fresh bot, so no mark can be inherited from an earlier run.
+      const bot = (await api("POST", "/api/bots")).body.bot;
+      expect(
+        (
+          await api("PATCH", `/api/bots/${bot.id}`, {
+            name: "Nightly",
+            autoApprove: true,
+            modelSelection: { instanceId: "grok", model: "fake-model" },
+          })
+        ).status,
+      ).toBe(200);
+
+      const routine = await api("POST", "/api/routines", {
+        name: "Nightly build",
+        prompt: "Handle the nightly build",
+        botId: bot.id,
+        runOn: "bot",
+        enabled: true,
+        schedule: { type: "once", at: Date.now() + 1_000 },
+      });
+      expect(routine.status).toBe(201);
+
+      // the scheduler owns the timing, so wait for the run it creates
+      const deadline = Date.now() + 40_000;
+      let run: { id: string; triggerSource?: string; threadId?: string } | undefined;
+      while (Date.now() < deadline && !run?.threadId) {
+        const { body } = await api("GET", "/api/routines");
+        run = (body.runs ?? []).find((r: { botId: string }) => r.botId === bot.id);
+        if (!run?.threadId) await new Promise((r) => setTimeout(r, 250));
+      }
+      expect(run?.triggerSource, "the run was not schedule-triggered").toBe("schedule");
+      const threadId = run?.threadId ?? "";
+      expect(threadId, "the routine never started a task").toBeTruthy();
+
+      const card = await waitForCard(threadId);
+      expect(card, "a scheduled turn auto-approved instead of asking").not.toBeNull();
+      expect(card.card.answered).toBeUndefined();
+    },
+    90_000,
+  );
+
+  it(
+    "treats a room message as the person typing it, not as leftover automation",
+    async () => {
+      // Room turns bypass startTurn, so they neither set nor clear the mark —
+      // and isUnattended refreshes its TTL on every positive read, so one
+      // earlier webhook made every later room message look unattended forever.
+      const bot = (await api("POST", "/api/bots")).body.bot;
+      await api("PATCH", `/api/bots/${bot.id}`, {
+        name: "RoomMember",
+        autoApprove: true,
+        modelSelection: { instanceId: "grok", model: "fake-model" },
+      });
+      const room = (await api("POST", "/api/groups", { name: "Standup", memberIds: [bot.id] })).body.group;
+      expect((await api("PATCH", `/api/groups/${room.id}/setup`, { action: "skip" })).status).toBe(200);
+
+      // a webhook first, so the bot carries an unattended mark
+      const hook = await api("POST", "/api/webhooks", {
+        name: "Marker",
+        prompt: "Handle the event",
+        botId: bot.id,
+        runOn: "bot",
+      });
+      const delivered = await fetch(hook.body.credential.url, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ event: "marker" }),
+      });
+      // SAFETY: the ingress answers 202 with this exact shape, pinned by
+      // webhook-ingress.test.ts.
+      const { runId } = (await delivered.json()) as { runId: string };
+      const hookThread = (await waitForRunThread(runId)) ?? "";
+      const hookCard = await waitForCard(hookThread);
+      expect(hookCard, "the webhook turn should have carded").not.toBeNull();
+      await api("POST", `/api/threads/${hookThread}/respond`, {
+        requestId: hookCard.card.requestId,
+        behavior: "deny",
+      });
+
+      // now a person types in the room: their turn must not inherit that mark
+      const idle = Date.now() + 30_000;
+      while (Date.now() < idle && (await api("GET", "/api/bots")).body.bots.find((b: { id: string }) => b.id === bot.id)?.busy) {
+        await new Promise((r) => setTimeout(r, 250));
+      }
+      expect((await api("POST", `/api/groups/${room.id}/messages`, { text: "please run the check" })).status).toBe(202);
+
+      const deadline = Date.now() + 40_000;
+      let outcome: string | null = null;
+      while (Date.now() < deadline && !outcome) {
+        const { body } = await api("GET", `/api/threads/${room.threadId}/messages`);
+        const messages = body.messages ?? [];
+        if (messages.some((m: { kind: string; tool?: { name?: string } }) => /auto-approved/i.test(m.tool?.name ?? ""))) {
+          outcome = "auto-approved";
+        } else if (messages.some((m: { kind: string; card?: { requestId?: string } }) => m.kind === "options" && m.card?.requestId)) {
+          outcome = "carded";
+        } else await new Promise((r) => setTimeout(r, 250));
+      }
+      expect(outcome, "the room turn never produced a permission decision").not.toBeNull();
+      expect(outcome, "a room message the person typed was treated as unattended").toBe("auto-approved");
+    },
+    120_000,
   );
 
   it(

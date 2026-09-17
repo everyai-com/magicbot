@@ -200,4 +200,40 @@ describe("WebhookManager", () => {
     }
     expect(() => h.manager.receive(webhook.endpointId, secret, { payload: { overflow: true }, eventName: "push" })).toThrow("rate limit");
   });
+
+  // Delivery receipts are keyed per endpoint but were kept in ONE list capped
+  // globally, so a busy webhook evicted a quiet one's receipts and the quiet
+  // one's provider retry ran the task a second time. Providers retry for hours
+  // (GitHub) or days (Stripe), so the window is ordinary traffic, not abuse.
+  it("does not forget one webhook's deliveries because another one is busy", () => {
+    const h = harness();
+    const quiet = create(h.manager);
+    const busy = create(h.manager);
+
+    const first = h.manager.receive(quiet.webhook.endpointId, quiet.secret, {
+      payload: { id: 1 },
+      deliveryId: "quiet-original",
+    });
+    expect(first.duplicate).toBe(false);
+
+    // the other webhook takes ordinary traffic, within its own rate limit
+    let clock = new Date("2026-08-16T10:00:00.000Z").getTime();
+    for (let index = 0; index < 2_100; index++) {
+      if (index % 10 === 0) {
+        clock += 61_000;
+        h.setNow(clock);
+      }
+      h.manager.receive(busy.webhook.endpointId, busy.secret, {
+        payload: { index },
+        deliveryId: `busy-${index}`,
+      });
+    }
+
+    const retry = h.manager.receive(quiet.webhook.endpointId, quiet.secret, {
+      payload: { id: 1 },
+      deliveryId: "quiet-original",
+    });
+    expect(retry.duplicate, "the provider's retry ran the task a second time").toBe(true);
+    expect(retry.runId).toBe(first.runId);
+  });
 });

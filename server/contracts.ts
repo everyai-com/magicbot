@@ -34,6 +34,12 @@ export class ProviderError extends Error {
 export const EFFORT_LEVELS = ["none", "low", "medium", "high", "xhigh", "max"] as const;
 export type EffortLevel = (typeof EFFORT_LEVELS)[number];
 
+/** Ceiling on a `request.opened` summary. Generous rather than tight: the
+ * guards need the whole command, and a command longer than this is already
+ * pathological — but a tool whose input is a file's entire contents must not
+ * put that on the bus, in the transcript, and in the decision log unbounded. */
+export const MAX_REQUEST_SUMMARY = 10_000;
+
 /** Narrow untrusted API/config input before it becomes a model selection. */
 export function isEffortLevel(value: unknown): value is EffortLevel {
   return typeof value === "string" && (EFFORT_LEVELS as readonly string[]).includes(value);
@@ -115,6 +121,11 @@ export type RuntimeEvent = RuntimeEventBase &
         type: "request.opened";
         requestType: "permission" | "question";
         tool: string;
+        /** The request as the engine will run it, NOT a display string. The
+         * harness decides policy from this, so a driver that shortens it hides
+         * the tail of a command from the guards while the engine still runs the
+         * whole thing. Bounded by MAX_REQUEST_SUMMARY; the card shortens it for
+         * display at render time. */
         summary: string;
         choices?: string[];
         approvalScope?: "local-computer";

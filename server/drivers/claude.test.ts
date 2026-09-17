@@ -16,6 +16,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ensureDirs } from "../config.ts";
 import type { ProviderInstance } from "../contracts.ts";
 import { recordEvents, type EventRecorder } from "../testing/events.ts";
+import { looksDestructive } from "../auto-approve.ts";
 import { ClaudeDriver, permissionSocketPath } from "./claude.ts";
 import { removeTempDir } from "../testing/cleanup.ts";
 
@@ -730,6 +731,33 @@ describe("ClaudeDriver turns (fake CLI)", () => {
 
     conn.end();
     await instance.adapter.interruptTurn("t-perm-abc");
+    await recorder.until((e) => e.type === "turn.completed");
+  });
+
+  // The harness decides policy from `summary`. Truncating it here hides a
+  // destructive suffix from the guard while the CLI still runs the whole
+  // command, so the event carries the command entire and the card shortens it
+  // for display instead.
+  it("carries the whole command to the harness, not a display-length prefix", async () => {
+    await create("hang");
+    await instance.adapter.sendTurn({ threadId: "t-perm-long", text: "go" });
+    await recorder.until((e) => e.type === "session.started");
+
+    const conn = connect(permissionSocketPath("t-perm-long"));
+    await new Promise<void>((resolve, reject) => {
+      conn.on("connect", resolve);
+      conn.on("error", reject);
+    });
+    const command = `echo ${"a".repeat(210)}; rm -rf /tmp/important`;
+    conn.write(JSON.stringify({ t: "ask", id: "ask-long", tool: "Bash", input: { command } }) + "\n");
+
+    const opened = await recorder.until((e) => e.type === "request.opened" && e.requestId === "ask-long");
+    expect(opened).toMatchObject({ summary: command });
+    // and the guard sees the destructive tail the CLI would actually run
+    expect(opened.type === "request.opened" && looksDestructive(opened.summary)).toBe(true);
+
+    conn.end();
+    await instance.adapter.interruptTurn("t-perm-long");
     await recorder.until((e) => e.type === "turn.completed");
   });
 

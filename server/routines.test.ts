@@ -1,6 +1,6 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { lstatSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { nextOccurrence, RoutineManager, type RoutineManagerOptions } from "./routines.ts";
@@ -329,5 +329,40 @@ describe("RoutineManager", () => {
     await h.manager.tick();
     expect(h.manager.listRuns()[0]).toMatchObject({ status: "missed" });
     expect(h.started).toHaveLength(0);
+  });
+
+  // The save used a fixed `<file>.tmp` name with no O_EXCL and no O_NOFOLLOW,
+  // so a pre-planted link took the write — and because rename(2) moves the
+  // LINK over the target, every later save went to the attacker's file too.
+  // One-shot planting, permanent redirection.
+  it.skipIf(process.platform === "win32")("does not save through a pre-planted temp symlink", () => {
+    const h = harness();
+    const file = h.options.file!;
+    const victim = join(dirname(file), "victim.txt");
+    writeFileSync(victim, "ORIGINAL");
+    symlinkSync(victim, `${file}.tmp`);
+
+    h.manager.create({
+      name: "Nightly",
+      prompt: "go",
+      botId: "bot-1",
+      schedule: { type: "once", at: new Date(2026, 7, 17, 9, 0).getTime() },
+    });
+
+    expect(readFileSync(victim, "utf8")).toBe("ORIGINAL");
+    expect(lstatSync(file).isSymbolicLink()).toBe(false);
+    expect(JSON.parse(readFileSync(file, "utf8")).routines).toHaveLength(1);
+  });
+
+  // Routines hold scheduled prompts; every sibling state file is 0600.
+  it.skipIf(process.platform === "win32")("writes the routines file private to the user", () => {
+    const h = harness();
+    h.manager.create({
+      name: "Nightly",
+      prompt: "go",
+      botId: "bot-1",
+      schedule: { type: "once", at: new Date(2026, 7, 17, 9, 0).getTime() },
+    });
+    expect(statSync(h.options.file!).mode & 0o777).toBe(0o600);
   });
 });

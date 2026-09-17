@@ -11,7 +11,7 @@ import { z } from "zod";
 import { botAvatarUrlFromStoredPath } from "../shared/bot-avatar.ts";
 import { BOT_PERSONALITIES } from "../shared/bot-personality.ts";
 
-import { approvalKey, autoVerdict } from "./auto-approve.ts";
+import { approvalKey, autoVerdict, type AutoVerdict } from "./auto-approve.ts";
 import { appendDecision, readDecisions } from "./decision-log.ts";
 import { validateBotCwd } from "./bot-cwd.ts";
 import {
@@ -88,6 +88,7 @@ import {
   roomResponders,
   sectionKey,
   Store,
+  type BotRecord,
   type GroupDefaultResponder,
   type GroupRecord,
   type Message,
@@ -468,6 +469,81 @@ const askMessageByRequest = new Map<string, string>(); // threadId:requestId -> 
  * the engine has no asks — is fail-closed: the action was never run. The
  * card is settled and a chip says so, instead of the answer vanishing into
  * a 500 while the card sits open forever. */
+/** The one-line "why did this stop?" on an approval card. Undefined when
+ * nothing was granted in the first place — then the card is simply the normal
+ * way a permission is asked, and saying "it stopped" would be noise. */
+function heldReason(verdict: AutoVerdict | null): string | undefined {
+  switch (verdict?.source) {
+    case "unattended-block":
+      return "Nobody started this turn, so auto mode stopped to ask.";
+    case "local-computer-block":
+      return "This controls your computer, so it stopped to ask.";
+    case "destructive-guard":
+      return "This looked destructive, so auto mode stopped to ask.";
+    case "sensitive-guard":
+      return "This touches credentials, so auto mode stopped to ask.";
+    default:
+      return undefined;
+  }
+}
+
+/** How an answer reached us, for the audit row only.
+ *
+ * Browsers set Sec-Fetch-* on every request and an Origin on a non-GET, and
+ * page scripts cannot change them; `curl` and a bot's tool call send neither.
+ * This does NOT authenticate anything — a deliberate script can set the same
+ * headers — it stops the log from calling every answer a person's by default. */
+function answeredVia(req: IncomingMessage): "user" | "api" {
+  const raw = req.headers["sec-fetch-site"];
+  const site = Array.isArray(raw) ? raw[0] : raw;
+  if (site) return "user";
+  // The companion sidecar authenticates a paired device before forwarding, and
+  // strips Origin on the way through, so this is how a person answering on
+  // their phone is told apart from a script.
+  if (req.headers["x-magicbots-client"] === "companion") return "user";
+  const origin = req.headers.origin;
+  return origin && isAllowedOrigin(origin) ? "user" : "api";
+}
+
+interface PermissionSnapshot {
+  autoApprove: boolean;
+  approvePeerComms: boolean;
+  alwaysAllow: string[];
+}
+
+const permissionSnapshot = (bot: BotRecord | null | undefined): PermissionSnapshot => ({
+  autoApprove: bot?.autoApprove === true,
+  approvePeerComms: bot?.approvePeerComms === true,
+  alwaysAllow: [...(bot?.alwaysAllow ?? [])],
+});
+
+/** Write down a widening of what this bot may do without a human.
+ *
+ * These three fields decide what runs unattended, and the loopback API cannot
+ * authenticate its caller (see answeredVia). Narrowings are not logged: taking
+ * a permission away is never the thing an auditor is hunting for. */
+function logPermissionChange(
+  before: PermissionSnapshot,
+  after: BotRecord,
+  via: "user" | "api",
+): void {
+  const widened: string[] = [];
+  if (!before.autoApprove && after.autoApprove) widened.push("autoApprove on");
+  if (before.approvePeerComms && !after.approvePeerComms) widened.push("approvePeerComms off");
+  const had = new Set(before.alwaysAllow);
+  const added = (after.alwaysAllow ?? []).filter((key: string) => !had.has(key));
+  if (added.length) widened.push(`alwaysAllow +${added.join(", ")}`);
+  if (!widened.length) return;
+  appendDecision(DATA_DIR, {
+    threadId: after.threadId,
+    botId: after.id,
+    botName: after.name,
+    summary: widened.join("; "),
+    decision: "settings-changed",
+    source: via,
+  });
+}
+
 async function answerRequest(
   threadId: string,
   instanceId: string,
@@ -475,6 +551,7 @@ async function answerRequest(
   behavior: "allow" | "deny" | "answer",
   message?: string,
   decidedFor?: { id: string; name: string },
+  via: "user" | "api" = "api",
 ): Promise<RequestOutcome> {
   // Snapshot the card BEFORE delivering the answer: a delivered answer
   // resolves the request synchronously through the fold, which consumes
@@ -511,7 +588,7 @@ async function answerRequest(
       tool: card?.tool,
       summary: card?.subtitle,
       decision: behavior === "allow" ? "user-approved" : "user-denied",
-      source: "user",
+      source: via,
     });
   }
   if (outcome === "unavailable") {
@@ -651,6 +728,13 @@ bus.subscribe((event: RuntimeEvent) => {
 // stale mark only ever means "ask a human", so this fails closed.
 const unattendedBots = new Map<string, number>();
 const UNATTENDED_TTL_MS = 30 * 60_000;
+
+/** Approval cards show one line. The event carries the request WHOLE, because
+ * that is what the guards read (server/contracts.ts) — shortening happens here,
+ * at the point of display, and nowhere earlier. */
+const CARD_SUBTITLE_CHARS = 200;
+const cardSubtitle = (summary: string) =>
+  summary.length > CARD_SUBTITLE_CHARS ? `${summary.slice(0, CARD_SUBTITLE_CHARS)}…` : summary;
 
 function markUnattended(botId: string) {
   unattendedBots.set(botId, Date.now());
@@ -865,13 +949,13 @@ bus.subscribe((event: RuntimeEvent) => {
               kind: "options",
               card: {
                 title: "Approval needed",
-                subtitle: summary,
+                subtitle: cardSubtitle(summary),
                 options: ["Allow", "Deny"],
                 requestId,
                 tool,
                 allowKey: event.approvalScope
                   ? undefined
-                  : approvalKey(tool, summary, event.approvalScope),
+                  : (approvalKey(tool, summary, event.approvalScope) ?? undefined),
                 held: "Auto mode couldn't answer this one.",
                 approvalScope: event.approvalScope,
               },
@@ -902,7 +986,7 @@ bus.subscribe((event: RuntimeEvent) => {
               : permission
                 ? "Approval needed"
                 : "Your bot has a question",
-          subtitle: event.summary,
+          subtitle: cardSubtitle(event.summary),
           options: event.choices?.length ? event.choices : permission ? ["Allow", "Deny"] : [],
           requestId: event.requestId,
           tool: permission ? event.tool : undefined,
@@ -910,13 +994,14 @@ bus.subscribe((event: RuntimeEvent) => {
           // client and server can never derive it differently
           allowKey:
             permission && !event.approvalScope
-              ? approvalKey(event.tool, event.summary, event.approvalScope)
+              ? (approvalKey(event.tool, event.summary, event.approvalScope) ?? undefined)
               : undefined,
-          // in auto mode a card can only mean the guard stopped it — say so
-          held:
-            permission && asker?.autoApprove
-              ? "This looked destructive, so auto mode stopped to ask."
-              : undefined,
+          // Why this stopped, from the verdict that actually decided it. The
+          // old text named the destructive guard for every card an auto-mode
+          // bot raised — but a grant outranks the guards, so an unattended
+          // turn always lands on unattended-block and the human was told a
+          // guard fired that did not.
+          held: permission ? heldReason(verdict) : undefined,
           approvalScope: event.approvalScope,
         },
       });
@@ -1168,7 +1253,7 @@ bus.subscribe((event: RuntimeEvent) => {
   // firing it later: the user who hit Stop does not expect the delegations
   // that turn queued to run anyway, minutes later, on an unrelated turn.
   if (!event.ok) return void discardDelegations(commsBus, event.threadId);
-  drainDelegations(commsBus, approvalBus, event.threadId, runDelegatedTurn);
+  drainDelegations(commsBus, approvalBus, event.threadId, runDelegatedTurn, isUnattended);
 });
 
 // ── steer-queue drain: messages sent while the bot was busy ────────────
@@ -1342,10 +1427,14 @@ async function startTurn(
   if (!bot) throw Object.assign(new Error("no such bot"), { status: 404 });
   if (bot.busy) throw Object.assign(new Error("the bot is already working — interrupt it first"), { status: 409 });
   const threadId = opts?.threadId ?? bot.threadId;
-  // a webhook turn, or one inherited from a bot already running unattended
-  if (opts?.automationSource === "webhook" || opts?.unattended) markUnattended(bot.id);
-  // a person typing into this bot ends the unattended window immediately
-  else if (opts?.automationSource === undefined && !opts?.commsDepth && !opts?.connectorContinuation) clearUnattended(bot.id);
+  // Any turn a person did not start: a webhook delivery, a calendar routine,
+  // or one inherited from a bot already running unattended. Listing the
+  // triggers that ARE unattended is how "schedule" got missed — a 3am routine
+  // ran with auto mode answering for the absent human — so the test is
+  // inverted: every automation source counts except the one a person presses.
+  if ((opts?.automationSource && opts.automationSource !== "manual") || opts?.unattended) markUnattended(bot.id);
+  // a person typing into this bot — or pressing Run now — ends the window
+  else if (!opts?.commsDepth && !opts?.connectorContinuation) clearUnattended(bot.id);
   const task = store.taskByThread(bot.id, threadId);
   if (!task) throw Object.assign(new Error("no such task"), { status: 404 });
   const commsDepth = opts?.commsDepth ?? 0;
@@ -1858,7 +1947,7 @@ _loadPending();
 {
   const leftover = pendingThreads();
   if (leftover.length) console.log(`delegations: ${leftover.length} thread(s) with queued handoffs from a previous run — draining`);
-  for (const threadId of leftover) drainDelegations(commsBus, approvalBus, threadId, runDelegatedTurn);
+  for (const threadId of leftover) drainDelegations(commsBus, approvalBus, threadId, runDelegatedTurn, isUnattended);
 }
 
 async function runGroupMemberTurn(
@@ -2092,6 +2181,14 @@ function startGroupTurn(groupId: string, text: string) {
     }
     return;
   }
+
+  // A person typed this message, so the turns it starts are attended. Room
+  // turns bypass startTurn, which is where that mark is otherwise cleared —
+  // and because isUnattended refreshes its TTL on every positive read, one
+  // earlier webhook would otherwise make every later room message look
+  // unattended for good. Only the responders: a chained hop into a bot that is
+  // busy elsewhere keeps its own mark, which fails closed.
+  for (const responder of responders) clearUnattended(responder.id);
 
   const prev = groupQueues.get(groupId) ?? Promise.resolve();
   const next = prev.then(async () => {
@@ -2477,7 +2574,15 @@ function isAllowedOrigin(origin: string | undefined | null): boolean {
 }
 
 const server = createServer(async (req, res) => {
-  const url = new URL(req.url ?? "/", `http://localhost:${PORT}`);
+  // Node's HTTP parser accepts request targets the URL constructor refuses
+  // (`//[`). This parse used to sit outside the try below, so one malformed
+  // request ended the harness before any route or gate ran.
+  let url: URL;
+  try {
+    url = new URL(req.url ?? "/", `http://localhost:${PORT}`);
+  } catch {
+    return json(res, 400, { error: "malformed request target" });
+  }
   const path = url.pathname;
   const method = req.method ?? "GET";
   /** scratch for route matches, shared by every `path.match` below */
@@ -2568,6 +2673,7 @@ const server = createServer(async (req, res) => {
             message,
             "ask_bot",
             fromThreadId,
+            { unattended: isUnattended(from.id) },
           );
           if (verdict !== "allow") return json(res, 200, { error: "denied by user" });
           // The card may have been open for minutes. Re-read both records so
@@ -3716,9 +3822,18 @@ const server = createServer(async (req, res) => {
       if (body.hidden === true && existingBot?.chiefOfStaff && body.chiefOfStaff !== false) {
         return json(res, 400, { error: "choose another Chief of Staff before hiding this bot" });
       }
-      // the permission fields decide what runs unattended, so they are
+      // The permission fields decide what runs unattended, so they are
       // type-checked rather than copied through: a string alwaysAllow would
-      // still answer .includes() — with substring matches, not tool names
+      // still answer .includes() — with substring matches, not tool names.
+      //
+      // What this route is NOT is an authorization boundary. A bot's own tool
+      // call reaches this API as the same user on the same machine, with no
+      // way to tell it from the app's renderer — the acknowledgeLocalAuto
+      // check below fences one combination, and nothing fences the rest. A
+      // secret would not help either: anything the renderer can read, a shell
+      // running as that user can read too. So every widening is written to the
+      // decision log (logPermissionChange) instead, and a real boundary has to
+      // come from running engines somewhere this API is not reachable.
       if (body.autoApprove !== undefined) {
         if (typeof body.autoApprove !== "boolean") return json(res, 400, { error: "autoApprove must be true or false" });
         patch.autoApprove = body.autoApprove;
@@ -3760,8 +3875,12 @@ const server = createServer(async (req, res) => {
         body.chiefOfStaff !== false &&
         section !== undefined &&
         sectionKey(existingBot?.section) !== sectionKey(section);
+      // patchBot mutates the stored record, so `existingBot` would already
+      // carry the new values by the time it is compared — snapshot first.
+      const permissionsBefore = permissionSnapshot(existingBot);
       const bot = store.patchBot(m[1], patch);
       if (!bot) return json(res, 404, { error: "no such bot" });
+      logPermissionChange(permissionsBefore, bot, answeredVia(req));
       const chiefChanges =
         body.chiefOfStaff === true || chiefMovedSections
           ? store.setChiefOfStaff(bot.id)
@@ -3818,11 +3937,19 @@ const server = createServer(async (req, res) => {
       const target = perBotLocalVmTarget(bot.id);
       localVmIdles.get(target.key)?.cancel();
       localVmIdles.delete(target.key);
+      // EVERY thread the bot owned, not just its open conversation:
+      // store.deleteBot purges all of their transcripts, and these two logs
+      // (the provider protocol tee and the runtime event stream) hold the
+      // same material — prompts, tool output, reply text. Collected before
+      // the delete, because afterwards the task list is gone.
+      const ownedThreads = new Set([bot.threadId, ...(bot.tasks ?? []).map((task) => task.threadId)]);
       store.deleteBot(bot.id);
       for (const dir of [EVENTS_DIR, NATIVE_DIR]) {
-        try {
-          unlinkSync(join(dir, `${bot.threadId}.ndjson`));
-        } catch {}
+        for (const threadId of ownedThreads) {
+          try {
+            unlinkSync(join(dir, `${threadId}.ndjson`));
+          } catch {}
+        }
       }
       return json(res, 200, { ok: true });
     }
@@ -3846,7 +3973,20 @@ const server = createServer(async (req, res) => {
           error: `memory is capped at ${MEMORY_FILE_MAX_BYTES / 1024}KB — move longer notes into memory/<topic>.md files`,
         });
       }
-      writeMemoryFile(m[1], parsed.data.text);
+      try {
+        writeMemoryFile(m[1], parsed.data.text);
+      } catch (error) {
+        // MEMORY.md is a symlink: the write refuses to follow it rather than
+        // putting this text somewhere outside the bot's workspace.
+        // SAFETY: writeMemoryFile only ever rejects with a Node fs error, so
+        // reading `code` off it is the documented shape of that failure.
+        if ((error as NodeJS.ErrnoException)?.code === "ELOOP") {
+          return json(res, 409, {
+            error: "this bot's MEMORY.md is a link to another file — remove it and try again",
+          });
+        }
+        throw error;
+      }
       // truncated echoes back so the editor can warn about the load budget
       return json(res, 200, { ok: true, truncated: readMemoryFile(m[1]).truncated });
     }
@@ -3972,7 +4112,7 @@ const server = createServer(async (req, res) => {
       if (resolvePeerComms(approvalBus, String(body.requestId), behavior)) {
         return json(res, 200, { ok: true, outcome: behavior === "allow" ? "allowed-once" : "rejected" });
       }
-      const outcome = await answerRequest(bot.threadId, bot.modelSelection.instanceId, String(body.requestId), behavior, body.message, { id: bot.id, name: bot.name });
+      const outcome = await answerRequest(bot.threadId, bot.modelSelection.instanceId, String(body.requestId), behavior, body.message, { id: bot.id, name: bot.name }, answeredVia(req));
       return json(res, 200, { ok: true, outcome });
     }
     // Answer by THREAD, so a request raised inside a room can be answered
@@ -4003,7 +4143,7 @@ const server = createServer(async (req, res) => {
           (pending?.from ? store.bot(pending.from.botId) : undefined)
         : store.botByThread(threadId);
       if (!owner && !pending) return json(res, 404, { error: "nothing is waiting on an answer in this conversation" });
-      const outcome = await answerRequest(threadId, owner?.modelSelection.instanceId ?? "", requestId, behavior, body.message, owner ? { id: owner.id, name: owner.name } : undefined);
+      const outcome = await answerRequest(threadId, owner?.modelSelection.instanceId ?? "", requestId, behavior, body.message, owner ? { id: owner.id, name: owner.name } : undefined, answeredVia(req));
       return json(res, 200, { ok: true, outcome });
     }
     m = path.match(/^\/api\/bots\/([\w-]+)\/interrupt$/);

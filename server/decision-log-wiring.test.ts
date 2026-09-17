@@ -39,6 +39,18 @@ const api = async (method: string, path: string, body?: unknown): Promise<{ stat
   return { status: res.status, body: await res.json() };
 };
 
+/** `api`, plus the fetch metadata a browser sets on a same-origin request —
+ * what the app's own renderer looks like on the wire. A plain script or a
+ * bot's tool call carries none of it. */
+const uiApi = async (method: string, path: string, body: object): Promise<{ status: number; body: any }> => {
+  const res = await fetch(`${BASE}${path}`, {
+    method,
+    headers: { "content-type": "application/json", origin: BASE, "sec-fetch-site": "same-origin" },
+    body: JSON.stringify(body),
+  });
+  return { status: res.status, body: await res.json() };
+};
+
 /** Newest matching decision row, or null when none shows up in time. */
 async function waitForDecision(pred: (r: DecisionRow) => boolean, ms = 30_000): Promise<DecisionRow | null> {
   const deadline = Date.now() + ms;
@@ -192,7 +204,7 @@ posixOnly("authorization decisions are logged", () => {
       expect(shown!.botId).toBe(bot.id);
       expect(shown!.tool).toBe("shell");
 
-      const answered = await api("POST", `/api/bots/${bot.id}/respond`, { requestId, behavior: "allow" });
+      const answered = await uiApi("POST", `/api/bots/${bot.id}/respond`, { requestId, behavior: "allow" });
       expect(answered.status).toBe(200);
       expect(answered.body.outcome).not.toBe("unavailable");
 
@@ -206,6 +218,58 @@ posixOnly("authorization decisions are logged", () => {
     90_000,
   );
 
+  // The server cannot tell a person from a script on loopback — same user,
+  // same machine — so the log must not CLAIM a person. A browser sets fetch
+  // metadata it will not set for a script, so an answer that arrives without
+  // it is recorded as what it is: an API call.
+  it(
+    "records an answer with no browser provenance as an API call, not as the user",
+    async () => {
+      const bot = await makePermissionBot({ name: "Scripted" });
+      expect((await api("POST", `/api/bots/${bot.id}/messages`, { text: "run it" })).status).toBe(202);
+
+      const card = await waitForBotCard(bot.id);
+      expect(card, "no approval card ever appeared").not.toBeNull();
+      // SAFETY: waitForBotCard only returns a message whose card carries a
+      // requestId, and the expect above rules out null.
+      const requestId = card.card.requestId as string;
+
+      // exactly what a bot's own tool call can send
+      expect((await api("POST", `/api/bots/${bot.id}/respond`, { requestId, behavior: "allow" })).status).toBe(200);
+
+      const row = await waitForDecision((r) => r.decision === "user-approved" && r.requestId === requestId);
+      expect(row, "the answer never reached the decision log").not.toBeNull();
+      expect(row!.source, "an unattributed answer was logged as the user's").toBe("api");
+    },
+    90_000,
+  );
+
+  // Switching on auto mode, or widening a remembered grant, decides what runs
+  // without a human for every later turn. The loopback API cannot tell who
+  // asked, so the least it can do is write down that it happened.
+  it(
+    "logs a permission change, with the provenance of whoever made it",
+    async () => {
+      const bot = await makePermissionBot({ name: "Widened" });
+
+      expect((await api("PATCH", `/api/bots/${bot.id}`, { autoApprove: true })).status).toBe(200);
+      const row = await waitForDecision((r) => r.decision === "settings-changed" && r.botId === bot.id);
+      expect(row, "switching on auto mode left no audit row").not.toBeNull();
+      expect(row!.source).toBe("api");
+      expect(row!.summary).toContain("autoApprove");
+
+      expect(
+        (await api("PATCH", `/api/bots/${bot.id}`, { alwaysAllow: ["shell:curl", "shell:rm"] })).status,
+      ).toBe(200);
+      const grant = await waitForDecision(
+        (r) => r.decision === "settings-changed" && r.botId === bot.id && (r.summary ?? "").includes("alwaysAllow"),
+      );
+      expect(grant, "widening alwaysAllow left no audit row").not.toBeNull();
+      expect(grant!.summary).toContain("shell:curl");
+    },
+    90_000,
+  );
+
   it(
     "a human deny writes its row too",
     async () => {
@@ -215,7 +279,7 @@ posixOnly("authorization decisions are logged", () => {
       const card = await waitForBotCard(bot.id);
       expect(card).not.toBeNull();
       const requestId = card.card.requestId as string;
-      expect((await api("POST", `/api/bots/${bot.id}/respond`, { requestId, behavior: "deny" })).status).toBe(200);
+      expect((await uiApi("POST", `/api/bots/${bot.id}/respond`, { requestId, behavior: "deny" })).status).toBe(200);
 
       const user = await waitForDecision((r) => r.decision === "user-denied" && r.requestId === requestId);
       expect(user, "the denial never reached the decision log").not.toBeNull();

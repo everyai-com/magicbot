@@ -264,10 +264,30 @@ async function authenticate(request: Request, env: Env) {
   return row && row.disabled_at === null ? row : null;
 }
 
+/** Registrations allowed across all callers in REGISTRATION_WINDOW_MS. The
+ * per-caller limiter is keyed on the client address, which an attacker with a
+ * pool of addresses can still spread across; this is the ceiling that does not
+ * depend on the caller's identity at all. Every installation minted here can
+ * spend the operator's Composio key, so the ceiling is the thing that bounds
+ * the bill. */
+const REGISTRATION_CEILING = 500;
+const REGISTRATION_WINDOW_MS = 60 * 60_000;
+
 async function register(request: Request, env: Env) {
   if (env.REGISTRATION_MODE !== "open") return json({ error: "registration is temporarily closed" }, 503);
-  const fingerprint = `${request.headers.get("cf-connecting-ip") ?? "unknown"}|${request.headers.get("user-agent") ?? "unknown"}`;
-  if (!(await env.REGISTRATION_LIMITER.limit({ key: await sha256(fingerprint.slice(0, 512)) })).success) {
+  // Keyed on the client address ALONE. The User-Agent used to be part of this,
+  // and it is whatever the caller says it is — every variant got its own
+  // bucket, so the configured cap never engaged.
+  const address = request.headers.get("cf-connecting-ip") ?? "unknown";
+  if (!(await env.REGISTRATION_LIMITER.limit({ key: await sha256(address.slice(0, 512)) })).success) {
+    return json({ error: "too many registration attempts" }, 429);
+  }
+  const recent = await env.DB.prepare(
+    "SELECT count(*) AS recent FROM installations WHERE created_at > ?",
+  )
+    .bind(Date.now() - REGISTRATION_WINDOW_MS)
+    .first<{ recent: number }>();
+  if ((recent?.recent ?? 0) >= REGISTRATION_CEILING) {
     return json({ error: "too many registration attempts" }, 429);
   }
   const installationId = crypto.randomUUID();
@@ -711,5 +731,6 @@ export {
   ensureSession,
   normalizeAccountAlias,
   parseSession,
+  register,
   sha256,
 };

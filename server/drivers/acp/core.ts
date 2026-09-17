@@ -40,7 +40,7 @@ import type {
   SendTurnInput,
   ProviderErrorCode,
 } from "../../contracts.ts";
-import { newEventId, newId } from "../../contracts.ts";
+import { MAX_REQUEST_SUMMARY, newEventId, newId } from "../../contracts.ts";
 import { computerProxyEnv } from "../../container-computer.ts";
 import { augmentedPath } from "../../env-path.ts";
 
@@ -404,7 +404,9 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
           }
           const kind = String(toolCall.kind ?? "");
           const tool = kind === "execute" ? "shell" : kind === "edit" ? "edit" : kind || "tool";
-          const summary = String(toolCall.rawInput?.command ?? toolCall.title ?? tool).slice(0, 200);
+          // the request as the agent will run it — policy input, not a display
+          // string; the card shortens it for display (see MAX_REQUEST_SUMMARY)
+          const summary = String(toolCall.rawInput?.command ?? toolCall.title ?? tool).slice(0, MAX_REQUEST_SUMMARY);
           const requestId = newId();
           const finish = (behavior: string, source: "user" | "timeout" | "system" = "user") => {
             if (!asks.delete(requestId)) return;

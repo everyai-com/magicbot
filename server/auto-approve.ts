@@ -11,7 +11,8 @@
 // sandbox and the bot's own computer, not a regex.
 
 const DESTRUCTIVE = [
-  /\brm\s+(-[a-z]*\s+)*-[a-z]*[rf]/i, // rm -rf, rm -fr, rm -r -f
+  // rm -rf, rm -fr, rm -r -f, and the long spellings GNU accepts
+  /\brm\s+((-[a-z]*|--[a-z-]+)\s+)*(-[a-z]*[rf]|--(recursive|force))\b/i,
   /\bmkfs\b|\bdiskutil\s+erase|\bdd\s+[^|]*\bof=\/dev\//i,
   /\bshutdown\b|\breboot\b|\bhalt\b/i,
   /:\(\)\s*\{.*\}\s*;?\s*:/, // fork bomb
@@ -58,9 +59,22 @@ export function looksDestructive(text: string): boolean {
  * client so the two sides can never disagree about what was granted. */
 const COMMAND_TOOLS = new Set(["bash", "shell", "execute", "run_command", "computer_exec", "terminal"]);
 
-export function approvalKey(tool: string, summary: string, scope?: "local-computer"): string {
+/** Shell syntax that can start a second program: `&&`, `;`, a pipe, a
+ * background `&`, a substitution, a redirect, a newline. A command containing
+ * any of it is not described by its first word — `git status && curl … | sh`
+ * keys as `Bash:git` and inherits a grant the human gave to Git.
+ *
+ * Deliberately literal and deliberately over-eager: it does not parse quoting,
+ * so `git commit -m "a && b"` is refused a key too. That costs one extra card.
+ * The other direction hands over an unattended shell. */
+const RUNS_ANOTHER_PROGRAM = /[;&|`\n\r<>]|\$\(/;
+
+/** `null` when the request cannot be named narrowly enough to remember: no
+ * stored grant matches it, and its card offers no "always allow". */
+export function approvalKey(tool: string, summary: string, scope?: "local-computer"): string | null {
   const bare = tool.replace(/^mcp__[^_]+__/, "").toLowerCase();
   if (!COMMAND_TOOLS.has(bare)) return scope ? `${scope}:${tool}` : tool;
+  if (RUNS_ANOTHER_PROGRAM.test(summary)) return null;
   // first bare word of the command, skipping env assignments and sudo
   const words = summary.trim().split(/\s+/);
   let i = 0;
@@ -117,7 +131,10 @@ export function autoVerdict(
   // the guards outrank the grants, so an "always allow" can never widen
   // into them
   const destructive = matchFirst(DESTRUCTIVE, summary) ?? matchFirst(DESTRUCTIVE, tool);
-  const sensitive = destructive ? null : matchFirst(SENSITIVE, summary);
+  // both fields, like the destructive check above: a tool NAME can carry the
+  // path just as a summary can, and reading only one of them waved through
+  // what the other would have stopped
+  const sensitive = destructive ? null : (matchFirst(SENSITIVE, summary) ?? matchFirst(SENSITIVE, tool));
   // The grant is computed even when a hard block will refuse it: the row
   // worth auditing is "this WOULD have auto-approved, and only the block
   // stood in the way", which cannot be told apart from an ordinary
@@ -126,7 +143,7 @@ export function autoVerdict(
   const grant =
     destructive || sensitive
       ? null
-      : bot.alwaysAllow?.includes(key)
+      : key !== null && bot.alwaysAllow?.includes(key)
         ? { approve: `auto-approved ${key} (always allowed)`, source: "always-allow" as const, rule: key }
         : bot.autoApprove
           ? { approve: `auto-approved ${tool}`, source: "auto-mode" as const, rule: undefined }

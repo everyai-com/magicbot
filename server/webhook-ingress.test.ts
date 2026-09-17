@@ -1,4 +1,5 @@
 import { mkdtempSync, rmSync } from "node:fs";
+import { connect } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -94,6 +95,83 @@ describe("webhook-only ingress", () => {
     expect(await response.json()).toMatchObject({ accepted: true, captured: true });
     expect(queued).toHaveLength(before);
     expect(manager.list().find((webhook) => webhook.id === created.webhook.id)).toMatchObject({ verificationPending: false, enabled: false });
+  });
+
+  // Node's HTTP parser accepts request targets the URL constructor refuses.
+  // Parsing one outside the handler's error boundary took the whole harness
+  // down, from one unauthenticated request, before authentication ran.
+  it("answers a malformed request target and stays up", async () => {
+    const statusLine = (target: string) =>
+      new Promise<string>((resolve, reject) => {
+        const socket = connect(ingress.port, "127.0.0.1", () => {
+          socket.write(`POST ${target} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 0\r\n\r\n`);
+        });
+        let buf = "";
+        socket.on("data", (chunk) => {
+          buf += chunk;
+          if (buf.includes("\r\n")) {
+            socket.destroy();
+            resolve(buf.split("\r\n")[0]);
+          }
+        });
+        socket.on("error", reject);
+        socket.on("close", () => resolve(buf.split("\r\n")[0] ?? ""));
+      });
+
+    expect(await statusLine("//[")).toContain("400");
+    // and the listener is still serving
+    expect((await fetch(`${ingress.baseUrl}/health`)).status).toBe(200);
+  });
+
+  // decodeURIComponent throws on a half-formed escape. That threw inside the
+  // handler, so it answered 500 "URI malformed" where a wrong secret answers
+  // 401 — an oracle that tells a caller which of the two it sent — and the
+  // rejection never reached the attempt log, because only 400 and 413 did.
+  it("treats a malformed percent-escape in the secret as a bad secret", async () => {
+    const before = manager.listAttempts().length;
+    for (const target of [`/hooks/${endpointId}/%`, `/hooks/${endpointId}/%E0%A4%A`]) {
+      const response = await fetch(`${ingress.baseUrl}${target}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "{}",
+      });
+      expect(response.status, target).toBe(401);
+      expect(await response.json(), target).toEqual({ error: "Invalid webhook URL or secret" });
+    }
+    expect(manager.listAttempts().length, "the rejections were not recorded").toBe(before + 2);
+  });
+
+  // The cap is enforced by responding 413, but the connection was left open
+  // and the sender could keep pushing the rest of its declared body.
+  it("closes the connection after refusing an oversized body", async () => {
+    const credential = webhookCredential(ingress.baseUrl, endpointId, secret);
+    const path = new URL(credential.url).pathname;
+    let seen = "";
+    const result = await new Promise<{ status: string; closed: boolean }>((resolve) => {
+      const socket = connect(ingress.port, "127.0.0.1", () => {
+        socket.write(
+          `POST ${path} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: 10485760\r\n\r\n`,
+        );
+        const chunk = "a".repeat(16 * 1024);
+        const pump = setInterval(() => {
+          if (!socket.destroyed && socket.writable) socket.write(chunk);
+        }, 5);
+        socket.on("data", (d) => (seen ||= d.toString().split("\r\n")[0]));
+        socket.on("close", () => {
+          clearInterval(pump);
+          resolve({ status: seen, closed: true });
+        });
+        setTimeout(() => {
+          clearInterval(pump);
+          resolve({ status: seen, closed: socket.destroyed });
+        }, 3000);
+      });
+      // the server closing mid-write surfaces as ECONNRESET here, which is
+      // the outcome under test, not a failure
+      socket.on("error", () => resolve({ status: seen, closed: true }));
+    });
+    expect(result.status).toContain("413");
+    expect(result.closed, "the listener answered 413 but kept reading the body").toBe(true);
   });
 
   it("rejects invalid credentials, malformed JSON and oversized bodies", async () => {

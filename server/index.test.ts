@@ -5,6 +5,7 @@
 // the shadow-instance behavior end to end while it's at it.
 import { spawn, type ChildProcess } from "node:child_process";
 import { createServer, request, type Server } from "node:http";
+import { connect } from "node:net";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -2296,5 +2297,56 @@ describe("computer control API (who is driving)", () => {
   it("keeps the internal who-is-driving endpoint behind the boot token", async () => {
     const res = await fetch(`${BASE}/api/internal/computer-control?botId=${botId}`);
     expect(res.status).toBe(401);
+  });
+
+  // store.deleteBot purges the transcripts of EVERY thread a bot owns, but the
+  // log cleanup beside it named only bot.threadId — so the provider protocol
+  // tee and the runtime event stream for every task thread stayed on disk
+  // after the user deleted the bot. Those files hold prompts, tool output and
+  // reply text.
+  it("removes the event and native logs for every thread a deleted bot owned", async () => {
+    const bot = (await api("POST", "/api/bots")).body.bot;
+    const extra = await api("POST", `/api/bots/${bot.id}/tasks`);
+    expect(extra.status).toBe(201);
+    const threadIds: string[] = [bot.threadId, extra.body.task.threadId];
+    expect(threadIds[1]).toBeTruthy();
+
+    // the logs are appended by the bus and the driver tee; seed them directly
+    // so the test does not depend on a turn running
+    for (const dir of ["events", "native"]) {
+      mkdirSync(join(home, ".magicbots", dir), { recursive: true });
+      for (const threadId of threadIds) {
+        writeFileSync(join(home, ".magicbots", dir, `${threadId}.ndjson`), '{"at":"now"}\n');
+      }
+    }
+
+    expect((await api("DELETE", `/api/bots/${bot.id}`)).status).toBe(200);
+
+    for (const dir of ["events", "native"]) {
+      for (const threadId of threadIds) {
+        expect(
+          existsSync(join(home, ".magicbots", dir, `${threadId}.ndjson`)),
+          `${dir}/${threadId}.ndjson survived the delete`,
+        ).toBe(false);
+      }
+    }
+  });
+
+  // Node's HTTP parser accepts request targets the URL constructor refuses.
+  // Parsing one before the handler's error boundary ended the harness from a
+  // single unauthenticated request, so this pins both halves: a 400 back, and
+  // a server still answering afterwards.
+  it("answers a malformed request target and keeps serving", async () => {
+    const statusLine = await new Promise<string>((resolve, reject) => {
+      const socket = connect(PORT, "127.0.0.1", () => {
+        socket.write("GET //[ HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n");
+      });
+      let buf = "";
+      socket.on("data", (chunk) => (buf += chunk));
+      socket.on("error", reject);
+      socket.on("close", () => resolve(buf.split("\r\n")[0] ?? ""));
+    });
+    expect(statusLine).toContain("400");
+    expect((await api("GET", "/api/health")).status).toBe(200);
   });
 });

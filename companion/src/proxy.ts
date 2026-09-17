@@ -64,8 +64,12 @@ const readJson = (req: IncomingMessage, limit = 64 * 1024): Promise<Record<strin
     req.on("data", (chunk: Buffer) => {
       size += chunk.length;
       if (size > limit) {
+        // Pause rather than destroy: req and res share one socket, so tearing
+        // it down here took the 400 with it and the sender saw a bare
+        // connection reset instead of the reason. The response handler closes
+        // the connection once its answer is on the wire.
+        req.pause();
         reject(new Error("body too large"));
-        req.destroy();
         return;
       }
       chunks.push(chunk);
@@ -93,7 +97,7 @@ const readJson = (req: IncomingMessage, limit = 64 * 1024): Promise<Record<strin
  * with nothing to catch it. Dropping the socket is the only honest ending
  * left there: the device sees a truncated response and reconnects, which is
  * what it already does for any dropped connection. */
-const sendJson = (res: ServerResponse, status: number, body: unknown): void => {
+const sendJson = (res: ServerResponse, status: number, body: unknown, closeAfter = false): void => {
   if (res.headersSent) {
     res.destroy();
     return;
@@ -102,8 +106,12 @@ const sendJson = (res: ServerResponse, status: number, body: unknown): void => {
   res.writeHead(status, {
     "content-type": "application/json",
     "content-length": Buffer.byteLength(text),
+    // a refused body is not worth another round trip on this connection
+    connection: closeAfter ? "close" : "keep-alive",
   });
-  res.end(text);
+  // the answer goes out first, then the socket — the other order is what made
+  // an oversized body look like a network failure
+  res.end(text, closeAfter ? () => res.socket?.destroy() : undefined);
 };
 
 /** Headers worth carrying to the harness. An allowlist rather than a
@@ -111,7 +119,17 @@ const sendJson = (res: ServerResponse, status: number, body: unknown): void => {
  * is the sidecar's credential and means nothing to the harness, and hop-by-hop
  * headers are by definition not ours to relay. */
 const forwardHeaders = (req: IncomingMessage): Record<string, string> => {
-  const out: Record<string, string> = { accept: String(req.headers.accept ?? "*/*") };
+  // Say who this came from. The harness labels an approval answer by its
+  // provenance, and it cannot see a paired phone: `origin` must not travel
+  // (see above) and a phone sends no browser fetch metadata, so a person
+  // answering on their phone would otherwise be recorded as an unattributed
+  // API call. The proxy has already authenticated the device by the time it
+  // forwards anything. Like every header on a loopback API this is a claim,
+  // not proof — see answeredVia in server/index.ts.
+  const out: Record<string, string> = {
+    accept: String(req.headers.accept ?? "*/*"),
+    "x-magicbots-client": "companion",
+  };
   const contentType = req.headers["content-type"];
   if (contentType) out["content-type"] = String(contentType);
   // Last-Event-ID is how a reconnecting client asks for the gap. Dropping it
@@ -180,7 +198,7 @@ export function createProxyHandler(options: ProxyOptions) {
           if (hosts.length) response.hosts = hosts;
           return sendJson(res, 201, response);
         },
-        (error: Error) => sendJson(res, 400, { error: error.message }),
+        (error: Error) => sendJson(res, 400, { error: error.message }, true),
       );
       return;
     }

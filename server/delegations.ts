@@ -142,6 +142,10 @@ export function drainDelegations(
     sourceThreadId: string,
     channel?: GroupRecord,
   ) => void | Promise<void>,
+  /** Whether the sender is running a turn nobody started. A remembered
+   * peer-comms grant must not answer for an absent human, the same way auto
+   * mode does not — see requestPeerApproval. */
+  isUnattended: (botId: string) => boolean = () => false,
 ): void {
   if (drainingThreads.has(threadId)) return;
   const list = pendingDelegations.get(threadId);
@@ -157,7 +161,7 @@ export function drainDelegations(
   void (async () => {
     for (const item of snapshot) {
       try {
-        await processOne(bus, approvalBus, from, threadId, item, runTarget);
+        await processOne(bus, approvalBus, from, threadId, item, runTarget, isUnattended);
       } catch (error) {
         const why = error instanceof Error ? error.message : String(error);
         try {
@@ -223,6 +227,7 @@ async function processOne(
     sourceThreadId: string,
     channel?: GroupRecord,
   ) => void | Promise<void>,
+  isUnattended: (botId: string) => boolean,
 ): Promise<void> {
   let sender = from;
   let target = bus.store.bot(item.toBotId);
@@ -250,6 +255,7 @@ async function processOne(
       item.message,
       "delegate_bot",
       sourceThreadId,
+      { unattended: isUnattended(sender.id) },
     );
     if (verdict !== "allow") {
       bus.store.appendMessage(sourceThreadId, {

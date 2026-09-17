@@ -62,6 +62,23 @@ describe("team library", () => {
     expect(() => parseTeamCatalog(unsafe)).toThrow("safe catalog path");
   });
 
+  // The check compares literal segments, but the value is concatenated into a
+  // URL and fetch collapses percent-encoded dot segments the same way it
+  // collapses plain ones — so the teams/<slug>/ prefix that is supposed to pin
+  // an entry inside its own folder came off, and the fetch left the pinned
+  // repository entirely.
+  it("rejects encoded dot segments, not just literal ones", () => {
+    for (const encoded of [
+      "teams/engineering/%2e%2e/%2e%2e/%2e%2e/%2e%2e/evil.magicbots.json",
+      "teams/engineering/%2E%2E/evil.magicbots.json",
+      "teams/engineering/%2e%2e%2fevil.magicbots.json",
+    ]) {
+      const unsafe = structuredClone(catalog);
+      unsafe.teams[0]!.manifest = encoded;
+      expect(() => parseTeamCatalog(unsafe), encoded).toThrow("safe catalog path");
+    }
+  });
+
   it("accepts pre-rename catalogs and manifest paths", () => {
     const base = structuredClone(catalog);
     const legacy = {

@@ -551,12 +551,17 @@ export class Store {
     }
   }
 
+  // 0600 like every sibling state file: these hold the bot roster, titles,
+  // descriptions and per-bot permission grants. With no explicit mode they
+  // landed at the umask default inside a 0755 data directory.
   private saveBots() {
-    writeFileAtomic(BOTS_FILE, JSON.stringify(this.bots, null, 2));
+    writeFileAtomic(BOTS_FILE, JSON.stringify(this.bots, null, 2), { mode: 0o600 });
   }
 
   private saveGroups() {
-    writeFileAtomic(GROUPS_FILE, JSON.stringify(this.groups.map(({ busyBotId, ...g }) => g), null, 2));
+    writeFileAtomic(GROUPS_FILE, JSON.stringify(this.groups.map(({ busyBotId, ...g }) => g), null, 2), {
+      mode: 0o600,
+    });
   }
 
   // ── groups ────────────────────────────────────────────────────────────

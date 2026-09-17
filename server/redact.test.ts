@@ -100,6 +100,39 @@ describe("redactSecrets", () => {
     for (let i = 0; i < 20; i++) deep = { nested: deep };
     expect(() => redactSecrets(deep)).not.toThrow();
   });
+
+  // Not throwing is not the same as not leaking: past the depth ceiling the
+  // whole subtree used to come back verbatim, key named `token` and all.
+  it("does not hand back an unredacted subtree past the depth ceiling", () => {
+    for (const depth of [10, 12, 13, 20, 40]) {
+      // built as JSON, the way a provider message actually arrives
+      const nested = `${'{"nested":'.repeat(depth)}{"token":"deep-secret-value-1234"}${"}".repeat(depth)}`;
+      expect(flat(redactSecrets(JSON.parse(nested))), `depth ${depth}`).not.toContain("deep-secret-value-1234");
+    }
+  });
+
+  // The ACP wire form is a list of {name,value}. A name that does not look
+  // secret can still carry one: MB_CONNECTOR_UPSTREAM_HEADERS is a JSON blob
+  // holding a live bearer token. Only the name was consulted, so the value
+  // skipped the content pass that protects every other string in the tree.
+  it("scans the value of an env entry whose NAME does not look secret", () => {
+    const token = "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718";
+    const out = flat(
+      redactSecrets({
+        env: [
+          { name: "MB_COMMS_TOKEN", value: token },
+          { name: "MB_CONNECTOR_UPSTREAM_HEADERS", value: JSON.stringify({ authorization: `Bearer ${token}` }) },
+          { name: "ANTHROPIC_BASE_URL", value: "https://proxy.example/v1?auth=sk-ant-api03-Zq7RtP2mVn9XbL4kD1sGfH8w" },
+        ],
+      }),
+    );
+
+    expect(out).not.toContain(token);
+    expect(out).not.toContain("sk-ant-api03-Zq7RtP2mVn9XbL4kD1sGfH8w");
+    // the shape survives: names are kept, only values are masked
+    expect(out).toContain("MB_CONNECTOR_UPSTREAM_HEADERS");
+    expect(out).toContain("ANTHROPIC_BASE_URL");
+  });
 });
 
 import { redactSecretsInText } from "./redact.ts";
@@ -164,5 +197,34 @@ describe("redactSecretsInText", () => {
     const out = redactSecrets({ command: "curl -H 'Authorization: Bearer abcdefghijklmnop'", note: "fine" }) as Record<string, string>;
     expect(out.command).toContain("«redacted");
     expect(out.note).toBe("fine");
+  });
+
+  // This runs synchronously on the bus fold and again in appendMessage, so its
+  // cost is the harness's latency. A PEM opener with no closer used to restart
+  // a scan to end-of-string at every opener — quadratic, and an assistant
+  // reply is not length-capped. Linear cost keeps one reply from stalling
+  // every bot in the fleet.
+  it("stays linear on a reply full of unterminated PEM openers", () => {
+    const opener = "-----BEGIN A PRIVATE KEY-----\n";
+    const time = (input: string) => {
+      const started = performance.now();
+      redactSecretsInText(input);
+      return performance.now() - started;
+    };
+    time(opener.repeat(100)); // warm up, so JIT is not the thing being measured
+    const small = time(opener.repeat(6_400));
+    const large = time(opener.repeat(25_600));
+    // 4x the input: linear stays near 4x, quadratic goes to ~16x. The bound is
+    // loose because timing on a shared CI box is noisy; quadratic blew past it
+    // by an order of magnitude (59ms -> 1714ms measured before the fix).
+    expect(large).toBeLessThan(Math.max(small, 1) * 8 + 50);
+  });
+
+  it("still masks the body of a well-formed PEM block", () => {
+    const pem = "-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEAsecretkeymaterial\n-----END RSA PRIVATE KEY-----";
+    const out = redactSecretsInText(pem);
+    expect(out).not.toContain("MIIEowIBAAKCAQEAsecretkeymaterial");
+    expect(out).toContain("-----BEGIN RSA PRIVATE KEY-----");
+    expect(out).toContain("-----END RSA PRIVATE KEY-----");
   });
 });
