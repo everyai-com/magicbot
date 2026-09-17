@@ -205,6 +205,12 @@ describe("WebhookManager", () => {
   // globally, so a busy webhook evicted a quiet one's receipts and the quiet
   // one's provider retry ran the task a second time. Providers retry for hours
   // (GitHub) or days (Stripe), so the window is ordinary traffic, not abuse.
+  //
+  // The count cannot come down: 2,100 deliveries is what rises above the OLD
+  // global cap of 2,000, which is the regression being pinned. That is 2,100
+  // atomic saves through `receive`, so it is I/O-bound — under a second of
+  // logic, ~29s of fsync on a loaded disk. The explicit bound is for the disk,
+  // not for the code.
   it("does not forget one webhook's deliveries because another one is busy", () => {
     const h = harness();
     const quiet = create(h.manager);
@@ -235,5 +241,5 @@ describe("WebhookManager", () => {
     });
     expect(retry.duplicate, "the provider's retry ran the task a second time").toBe(true);
     expect(retry.runId).toBe(first.runId);
-  });
+  }, 120_000);
 });
